@@ -1,0 +1,39 @@
+EXPORTS
+	getOBJList
+	gobjAddObj
+	gobjCreateObj
+	gobjInit
+	gobjRegisterType
+	sendDispMsg
+	getBackgroundColor
+	gobjDestroyObj
+
+	setBackgroundColorVals
+	getCurrentEye
+	getStimTime
+	getStereoMode
+	getConsoleFP
+	getStimTicks
+	setStereoMode
+	getParamTable
+	getScreenInfo
+	getSwapCount
+
+	drawObj
+	redraw
+	kickAnimation
+	getFrameDuration
+
+	sendTclCommand
+	executeScripts
+
+	gobjSetMatrix
+	gobjUseMatrix
+
+	glistSetVisible
+
+	stimGetMatrix
+	stimPutMatrix
+	stimMultGrObjMatrix
+	
+	

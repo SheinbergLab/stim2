@@ -1,0 +1,592 @@
+/*
+ * NAME 
+ *    objgroup.c - object group function definitions
+ *
+ * DESCRIPTION
+ *    Functions to create, reset, and show object groups.
+ *
+ * AUTHOR
+ *  DLS
+ *
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+#include "stim2.h"
+
+static const int GListIncrement = 10;
+static const int GroupIncrement = 4;
+static const int FrameIncrement = 100;
+static const int OListIncrement = 10;
+
+static void destroyObjGroups(OBJ_GROUP_LIST *ogl);
+
+static void appendObjID(OBJ_GROUP *g, int id, int frame);
+
+/*********************************************************************/
+/*                      Global ObjGroup List                         */
+/*********************************************************************/
+
+OBJ_GROUP_LIST GroupList;		/* the global obj group list */
+OBJ_GROUP_LIST *GList = &GroupList;	/* pointer to obj group list */
+
+OBJ_GROUP_LIST OverlayList;		/* the global overlay list   */
+OBJ_GROUP_LIST *OvList = &OverlayList;  /* pointer to ovl group list */
+
+/*********************************************************************/
+/*                      ObjGroup Functions List                      */
+/*********************************************************************/
+
+
+void glistInit(OBJ_GROUP_LIST *ogl, int ngroups)
+{
+  int i;
+  setDynamicUpdate(0);
+  if (OGL_GROUPS(ogl)) {
+    destroyObjGroups(ogl);
+    free((void *) OGL_GROUPS(ogl));
+  }
+  OGL_MAXGROUPS(ogl) = ngroups;
+  OGL_NGROUPS(ogl) = ngroups;
+  OGL_GROUPS(ogl) = (OBJ_GROUP *) calloc(ngroups, sizeof(OBJ_GROUP));
+
+  for (i = 0; i < OGL_NGROUPS(ogl); i++) {
+    OBJ_GROUP *g;
+    g = OGL_GROUP(ogl, i);
+    OG_SWAPMODE(g) = SWAP_NORMAL;
+    OG_DYNAMIC(g) = NOT_DYNAMIC; 
+    OG_RIGHT_EYE(g) = OG_LEFT_EYE(g) = 1;
+    OG_CURFRAME(g) = 0;
+    OG_MAXFRAMES(g) = 1;
+    OG_FRAMES(g) = (OBJ_FRAME *) calloc(OG_MAXFRAMES(g), sizeof(OBJ_FRAME));
+    OG_NFRAMES(g) = 1;
+    OG_REPEAT_MODE(g) = G_NORMAL;
+  }
+
+  OGL_CURGROUP(ogl) = 0;
+  OGL_VISIBLE(ogl) = 0;
+  OGL_NEWLY_VISIBLE(ogl) = 0;
+  return;
+}
+
+void glistFree(OBJ_GROUP_LIST *ogl)
+{
+  if (OGL_GROUPS(ogl)) {
+	destroyObjGroups(ogl);
+	free((void *) OGL_GROUPS(ogl));
+  }
+  OGL_NGROUPS(ogl) = OGL_MAXGROUPS(ogl) = 0;
+}
+
+
+static void execOffFuncs(OBJ_GROUP *g) 
+{
+  GR_OBJ *o;
+  int i;
+  for (i = 0; i < OG_NOBJS(g); i++) {
+    o = OL_OBJ(OBJList, OG_OBJID(g, i));
+    if (o && GR_OFFFUNCP(o)) GR_OFFFUNC(o)(o);
+  }
+}
+
+void glistSetVisible(OBJ_GROUP_LIST *ogl, int status)
+{
+  OBJ_GROUP *g = OGL_GROUP(GList, OGL_CURGROUP(GList));
+  
+  /*
+   * Set the newly visible flag if the system went from
+   * not visible to visible OR if a group was set
+   * (as indicated by its start time being -1)
+   */
+  if (status) {
+    if (!OGL_VISIBLE(ogl) || (g && (OG_START(g) == -1))) {
+      OGL_NEWLY_VISIBLE(ogl) = 1;
+    }
+  }
+  else {
+    OGL_NEWLY_VISIBLE(ogl) = 0;
+    if (ogl == GList) NextFrameTime = -1;
+  }
+
+  if (status) OGL_VISIBLE(ogl) = 1;
+  else {
+    if (ogl == GList && OGL_VISIBLE(ogl) && g) execOffFuncs(g);
+    OGL_VISIBLE(ogl) = 0;
+  }
+}
+
+int glistSetCurGroup(OBJ_GROUP_LIST *ogl, int slot)
+{
+  OBJ_GROUP *g;
+  int old, i;
+  GR_OBJ *o;
+
+  if (slot >= OGL_NGROUPS(ogl)) return 0;
+  else {
+    old = OGL_CURGROUP(ogl);
+    OGL_CURGROUP(ogl) = slot;
+  }
+  g = OGL_GROUP(ogl, slot);
+
+  /* Only run the init command if:
+   *  1) The new group is different from the old group OR
+   *  2) The stimuli are not currently visible
+   */
+  if (old != slot || !OGL_VISIBLE(ogl)) {
+    if (ogl == GList) {		/* Only update these for the main group */
+      resetStimTime();		/*  and not the overlay group           */
+      NextFrameTime = -1;
+    }
+
+    if (OG_INITCMD(g) && OG_INITCMD(g)[0]) {
+      sendTclCommand(OG_INITCMD(g)); 
+    }
+
+    /* And call any object's reset function if specified */
+    for (i = 0; i < OG_NOBJS(g); i++)  {
+      o = OL_OBJ(OBJList, OG_OBJID(g, i));
+      gobjResetObj(o);
+    }
+  }
+  OG_START(g) = -1;		/* Haven't started yet */
+  OG_CURFRAME(g) = 0;
+  if (OGF_INITCMD(g, OG_CURFRAME(g)) && OGF_INITCMD(g, OG_CURFRAME(g))[0])
+    sendTclCommand(OGF_INITCMD(g, OG_CURFRAME(g)));
+
+  if (OG_DYNAMIC(g) == DYNAMIC_FRAME_BASED) 
+    setDynamicUpdate(1);
+
+  /*
+   * If the system is currently in dynamic update, then this stimulus
+   * will become newly visible
+   */
+  if (OL_DYNAMIC(OBJList)) OGL_NEWLY_VISIBLE(GList) = 1;
+  
+  return 1;
+}
+
+int glistNextGroupFrame(OBJ_GROUP_LIST *ogl, int slot)
+{
+  OBJ_GROUP *g;
+  if (slot >= OGL_NGROUPS(ogl)) return 0;
+  g = OGL_GROUP(ogl, slot);
+  
+  if (OG_NFRAMES(g) == 1) {
+    /* Even if there is only one frame, there still may be tcl-based changes */
+    if (OGF_INITCMD(g, OG_CURFRAME(g))) {
+      sendTclCommand(OGF_INITCMD(g, OG_CURFRAME(g)));
+      return 1;
+    }
+    return 0;
+  }
+  
+  switch (OG_REPEAT_MODE(g)) {
+  case G_SINGLE_FRAME:
+    return 0;
+  case G_NORMAL:
+    OG_CURFRAME(g) = (OG_CURFRAME(g)+1) % OG_NFRAMES(g);
+    if (OGF_INITCMD(g, OG_CURFRAME(g))) 
+      sendTclCommand(OGF_INITCMD(g, OG_CURFRAME(g)));
+    return 1;
+    break;
+  case G_ONESHOT:
+    if (OG_CURFRAME(g) < OG_NFRAMES(g)-1) {
+      OG_CURFRAME(g)++;
+      if (OGF_INITCMD(g, OG_CURFRAME(g))) 
+	sendTclCommand(OGF_INITCMD(g, OG_CURFRAME(g)));
+      return 1;
+    }
+    else {
+      stopAnimation();
+      return 0;
+    }
+  }
+  return 0;
+}
+
+int glistPostFrameCmd(OBJ_GROUP *g)
+{
+  if (!OGF_POSTCMD(g, OG_CURFRAME(g))) return 0;
+  sendTclCommand(OGF_POSTCMD(g, OG_CURFRAME(g)));
+  return 1;
+}
+
+int glistNextTimeFrame(OBJ_GROUP *g, int time)
+{
+  if (!g) return 0;
+  
+  /* No more frames to show */
+  if (OG_CURFRAME(g) == (OG_NFRAMES(g)-1)) return -1;
+  
+  if (time >= OGF_START(g, OG_CURFRAME(g)+1)) {
+    OG_CURFRAME(g)++;
+    if (OGF_INITCMD(g, OG_CURFRAME(g))) {
+      sendTclCommand(OGF_INITCMD(g, OG_CURFRAME(g)));
+    }
+    return 0;
+  }
+  else return (OGF_START(g, OG_CURFRAME(g)+1));
+}
+
+
+int glistOneShotActive(OBJ_GROUP_LIST *ogl, int slot)
+{
+  OBJ_GROUP *g;
+  if (slot >= OGL_NGROUPS(ogl)) return 0;
+  if (!OGL_VISIBLE(ogl)) return 0;
+  g = OGL_GROUP(ogl, slot);
+  if (OG_REPEAT_MODE(g) == G_ONESHOT && 
+	  OG_CURFRAME(g) < OG_NFRAMES(g)-1) return 1;
+  return 0;
+}
+
+int glistNFrames(OBJ_GROUP_LIST *ogl, int slot)
+{
+  OBJ_GROUP *g;
+  if (slot >= OGL_NGROUPS(ogl)) return 0;
+  g = OGL_GROUP(ogl, slot);
+  return OG_NFRAMES(g);
+}
+
+int glistSetRepeatMode(OBJ_GROUP_LIST *ogl, int slot, int mode)
+{
+  OBJ_GROUP *g;
+  if (slot >= OGL_NGROUPS(ogl)) return 0;
+  if (mode >= G_NREPEAT_MODES) return 0;
+
+  g = OGL_GROUP(ogl, slot);
+  OG_REPEAT_MODE(g) = mode;
+  return 1;
+}
+
+int glistSetEye(OBJ_GROUP_LIST *ogl, int slot, int left, int right)
+{
+  OBJ_GROUP *g;
+  if (slot >= OGL_NGROUPS(ogl)) return 0;
+  g = OGL_GROUP(ogl, slot);
+
+  if (left >= 0) OG_LEFT_EYE(g) = left;
+  if (right >= 0) OG_RIGHT_EYE(g) = right;
+  return 1;
+}
+
+int glistSetSwapMode(OBJ_GROUP_LIST *ogl, int slot, int mode)
+{
+  OBJ_GROUP *g;
+  if (slot >= OGL_NGROUPS(ogl)) return 0;
+  g = OGL_GROUP(ogl, slot);
+  OG_SWAPMODE(g) = mode;
+  return 1;
+}
+
+int glistSetGroupFrame(OBJ_GROUP_LIST *ogl, int slot, int frame)
+{
+  OBJ_GROUP *g;
+  int old, i;
+  GR_OBJ *o;
+
+  if (slot >= OGL_NGROUPS(ogl)) return 0;
+  else {
+    old = OGL_CURGROUP(ogl);
+    OGL_CURGROUP(ogl) = slot;
+  }
+  g = OGL_GROUP(ogl, slot);
+  if (frame >= OG_NFRAMES(g)) return 0;
+
+  /* Only run the init command if:
+   *  1) The new group is different from the old group OR
+   *  2) The stimuli are not currently visible
+   */
+  if (old != slot || !OGL_VISIBLE(ogl)) {
+    if (ogl == GList) {		/* Only update these for the main group */
+      resetStimTime();		/*  and not the overlay group           */
+      NextFrameTime = -1;
+    }
+
+    if (OG_INITCMD(g) && OG_INITCMD(g)[0]) {
+      sendTclCommand(OG_INITCMD(g)); 
+    }
+
+    /* And call any object's reset function if specified */
+    for (i = 0; i < OG_NOBJS(g); i++)  {
+      o = OL_OBJ(OBJList, OG_OBJID(g, i));
+      gobjResetObj(o);
+    }
+  }
+  OG_START(g) = -1;		/* Haven't started yet */
+  OG_CURFRAME(g) = frame;
+  if (OGF_INITCMD(g, OG_CURFRAME(g)) && OGF_INITCMD(g, OG_CURFRAME(g))[0])
+    sendTclCommand(OGF_INITCMD(g, OG_CURFRAME(g)));
+
+  if (OG_DYNAMIC(g) == DYNAMIC_FRAME_BASED) 
+    setDynamicUpdate(1);
+
+  /*
+   * If the system is currently in dynamic update, then this stimulus
+   * will become newly visible
+   */
+  if (OL_DYNAMIC(OBJList)) OGL_NEWLY_VISIBLE(GList) = 1;
+  
+  return 1;
+}
+
+int glistSetParams(OBJ_GROUP_LIST *ogl, char *paramstr, int slot)
+{
+  OBJ_GROUP *g;
+  if (slot >= OGL_NGROUPS(ogl)) return -1;
+  g = OGL_GROUP(ogl, slot);
+  strncpy(OG_PARAMS(g), paramstr, PARAM_SIZE-1);
+  return 1;
+}
+
+int glistSetDynamic(OBJ_GROUP_LIST *ogl, int status, int slot)
+{
+  OBJ_GROUP *g;
+  if (slot >= OGL_NGROUPS(ogl)) return -1;
+  g = OGL_GROUP(ogl, slot);
+  OG_DYNAMIC(g) = status;
+  return 1;
+}
+
+
+int glistSetInitCmd(OBJ_GROUP_LIST *ogl, char *cmdstr, int slot)
+{
+  OBJ_GROUP *g;
+  if (slot >= OGL_NGROUPS(ogl)) return -1;
+  g = OGL_GROUP(ogl, slot);
+  if (OG_INITCMD(g)) free((void *) (OG_INITCMD(g)));
+  OG_INITCMD(g) = (char *) calloc(strlen(cmdstr)+1, sizeof(char));
+  if (!OG_INITCMD(g)) return 0;
+  strcpy(OG_INITCMD(g), cmdstr);
+  return 1;
+}
+
+int glistSetFrameInitCmd(OBJ_GROUP_LIST *ogl, char *cmdstr, 
+			 int slot, int frame)
+{
+  OBJ_GROUP *g;
+  if (slot >= OGL_NGROUPS(ogl)) return -1;
+  g = OGL_GROUP(ogl, slot);
+  if (frame >= OG_NFRAMES(g)) return -2;
+
+  if (OGF_INITCMD(g,frame)) free((void *) (OGF_INITCMD(g,frame)));
+  OGF_INITCMD(g,frame) = (char *) calloc(strlen(cmdstr)+1, sizeof(char));
+  if (!OGF_INITCMD(g,frame)) return 0;
+  strcpy(OGF_INITCMD(g,frame), cmdstr);
+  return 1;
+}
+
+int glistSetPostFrameCmd(OBJ_GROUP_LIST *ogl, char *cmdstr, 
+			 int slot, int frame)
+{
+  OBJ_GROUP *g;
+  if (slot >= OGL_NGROUPS(ogl)) return -1;
+  g = OGL_GROUP(ogl, slot);
+  if (frame >= OG_NFRAMES(g)) return -2;
+
+  if (OGF_POSTCMD(g,frame)) free((void *) (OGF_POSTCMD(g,frame)));
+  OGF_POSTCMD(g,frame) = (char *) calloc(strlen(cmdstr)+1, sizeof(char));
+  if (!OGF_POSTCMD(g,frame)) return 0;
+  strcpy(OGF_POSTCMD(g,frame), cmdstr);
+  return 1;
+}
+
+int glistAddObject(OBJ_GROUP_LIST *ogl, char *name, int slot, int frame)
+{
+  int id;
+  OBJ_GROUP *g;
+
+  if (frame < 0) return -2;
+  if (slot < 0 || slot >= OGL_NGROUPS(ogl)) return -1;
+  if (!gobjFindObj(OBJList, name, &id)) return 0;
+  
+  g = OGL_GROUP(ogl, slot);
+  appendObjID(g, id, frame);
+  return 1;
+}
+
+int glistSetFrameTime(OBJ_GROUP_LIST *ogl, int slot, int frame, int time)
+{
+  OBJ_GROUP *g;
+  if (slot >= OGL_NGROUPS(ogl)) return -1;
+  g = OGL_GROUP(ogl, slot);
+  if (frame >= OG_NFRAMES(g)) return -2;
+
+  /* Could do some time checking here */
+
+  OGF_START(g,frame) = time;
+  return 1;
+}
+
+/*********************************************************************/
+/*                    Local Utility Functions                        */
+/*********************************************************************/
+
+static void destroyObjGroups(OBJ_GROUP_LIST *ogl)
+{
+  int i, j;
+  OBJ_GROUP *g;
+  for (i = 0; i < OGL_NGROUPS(ogl); i++) {
+    if ((g = OGL_GROUP(ogl, i))) {
+      if (OG_INITCMD(g)) free((void *) OG_INITCMD(g));
+      for (j = 0; j < OG_MAXFRAMES(g); j++) {
+	if (OGF_OBJIDLIST(g,j)) free((void *) OGF_OBJIDLIST(g,j));
+	if (OGF_INITCMD(g,j)) free((void *) OGF_INITCMD(g,j));
+	if (OGF_POSTCMD(g,j)) free((void *) OGF_POSTCMD(g,j));
+      }
+      if (OG_FRAMES(g)) free((void *) OG_FRAMES(g));
+      OG_MAXFRAMES(g) = 0;
+    }
+  }
+}
+
+
+static void appendObjID(OBJ_GROUP *g, int id, int frame)
+{
+  /* ensure that there's space for the specified frame */
+  if (!g) return;
+  
+  if (frame >= OG_MAXFRAMES(g)) {
+    int oldmax = OG_MAXFRAMES(g);
+    
+    if ((OG_MAXFRAMES(g) + FrameIncrement) > frame)
+      OG_MAXFRAMES(g) += FrameIncrement;
+    else
+      OG_MAXFRAMES(g) = frame+1;
+    OG_FRAMES(g) = 
+      (OBJ_FRAME *) realloc(OG_FRAMES(g), OG_MAXFRAMES(g)*sizeof(OBJ_FRAME));
+    
+    /* realloc DOES NOT initialize to zero, so we must do it explicitly! */
+    memset(OG_FRAME(g,oldmax), 0, sizeof(OBJ_FRAME)*(OG_MAXFRAMES(g)-oldmax));
+  }
+  if (frame >= OG_NFRAMES(g)) {
+    OG_NFRAMES(g) = frame+1;
+  }
+
+  /* ensure that there's space for the specified id in the frame */
+
+  if (!OGF_OBJIDLIST(g, frame)) {
+    OGF_MAXOBJS(g, frame) += GroupIncrement;
+    OGF_OBJIDLIST(g, frame) = 
+      (int *) calloc(OGF_MAXOBJS(g, frame), sizeof(int));
+  }
+  if (OGF_NOBJS(g, frame) >= OGF_MAXOBJS(g, frame)) {
+    OGF_MAXOBJS(g, frame) += GroupIncrement;
+    OGF_OBJIDLIST(g, frame) = 
+      (int *) realloc(OGF_OBJIDLIST(g, frame), 
+		      sizeof(int)*OGF_MAXOBJS(g, frame));
+  }
+  OGF_OBJID(g, OGF_NOBJS(g,frame), frame) = id;
+  OGF_NOBJS(g, frame)++;
+}
+
+
+/*********************************************************************/
+/*                      Global ObsSpec List                          */
+/*********************************************************************/
+
+static void destroyObsSpecs(OBS_SPEC_LIST *olist);
+static void destroyObsSpec(OBS_PERIOD_SPEC *ospec);
+
+OBS_SPEC_LIST ObsSpecList;		        /* the global obs spec list  */
+OBS_SPEC_LIST *OList = &ObsSpecList;    /* pointer to obj spec list  */
+
+/*********************************************************************/
+/*                      ObsSpec Functions List                       */
+/*********************************************************************/
+
+void olistInit(OBS_SPEC_LIST *olist, int ngroups)
+{
+  if (OSL_N(olist)) {
+	destroyObsSpecs(olist);
+	free((void *) OSL_SPECS(olist));
+  }
+  OSL_N(olist) = ngroups;
+  OSL_SPECS(olist) = (OBS_PERIOD_SPEC *) 
+	calloc(ngroups, sizeof(OBS_PERIOD_SPEC));
+  return;
+}
+
+void olistFree(OBS_SPEC_LIST *olist)
+{
+  if (OSL_N(olist)) {
+	destroyObsSpecs(olist);
+	free((void *) OSL_SPECS(olist));
+  }
+  OSL_N(olist) = 0;
+}
+
+OBS_PERIOD_SPEC *olistCreateSpec(OBS_SPEC_LIST *olist, int slot, int n)
+{
+  OBS_PERIOD_SPEC *ospec;
+  if (slot >= OSL_N(olist)) return(NULL);
+  
+  ospec = OSL_SPEC(olist, slot);
+  OP_N(ospec) = n;
+  OP_NCHOICES_LIST(ospec) = (int *) calloc(n, sizeof(int));
+  OP_NTIMES_LIST(ospec) = (int *) calloc(n, sizeof(int));
+  OP_SLOTS(ospec) = (int **) calloc(n, sizeof(int *));
+  OP_TIMES(ospec) = (int **) calloc(n, sizeof(int *));
+  return (ospec);
+}
+ 
+int olistFillSpecSlot(OBS_PERIOD_SPEC *ospec, int slot, int n, int *choices)
+{
+  int i;
+  if (slot >= OP_N(ospec)) return 0;
+  if (OP_SLOT(ospec,slot)) free((void *) OP_SLOT(ospec,slot));
+  OP_SLOT(ospec,slot) = (int *) calloc(n, sizeof(int));
+  OP_NCHOICES(ospec,slot) = n;
+  for (i = 0; i < n; i++) 
+	OP_SLOT_ELT(ospec, slot, i) = choices[i];
+  return 1;
+}
+
+int olistFillSpecTime(OBS_PERIOD_SPEC *ospec, int slot, int n, int *times)
+{
+  int i;
+  if (slot >= OP_N(ospec)) return 0;
+  if (OP_TIME(ospec,slot)) free((void *) OP_TIME(ospec,slot));
+  OP_TIME(ospec,slot) = (int *) calloc(n, sizeof(int));
+  OP_NTIMES(ospec,slot) = n;
+  for (i = 0; i < n; i++) 
+	OP_TIME_ELT(ospec, slot, i) = times[i];
+  return 1;
+}
+
+/*********************************************************************/
+/*                    Local Utility Functions                        */
+/*********************************************************************/
+
+static void destroyObsSpecs(OBS_SPEC_LIST *olist)
+{
+  int i;
+  OBS_PERIOD_SPEC *ospec;
+  for (i = 0; i < OSL_N(olist); i++) {
+	if ((ospec = OSL_SPEC(olist, i))) {
+	  destroyObsSpec(ospec);
+	}
+  }
+}
+
+static void destroyObsSpec(OBS_PERIOD_SPEC *ospec)
+{
+  int i;
+  int *slot;
+  for (i = 0; i < OP_N(ospec); i++) {
+	if ((slot = OP_SLOT(ospec, i))) {
+	  free((void *) slot);
+	}
+	if ((slot = OP_TIME(ospec, i))) {
+	  free((void *) slot);
+	}
+  }
+  free((void *) OP_SLOTS(ospec));
+  free((void *) OP_NCHOICES_LIST(ospec));
+
+  free((void *) OP_TIMES(ospec));
+  free((void *) OP_NTIMES_LIST(ospec));
+}

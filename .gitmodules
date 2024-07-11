@@ -1,0 +1,13 @@
+[submodule "lib/glfw"]
+	path = lib/glfw
+	url = https://github.com/glfw/glfw
+
+[submodule "lib/sockpp"]
+        path = lib/sockpp
+        url = https://github.com/fpagliughu/sockpp
+[submodule "deps/glfw"]
+	path = deps/glfw
+	url = https://github.com/glfw/glfw
+[submodule "deps/sockpp"]
+	path = deps/sockpp
+	url = https://github.com/fpagliughi/sockpp

@@ -1,0 +1,28 @@
+CC = cc
+ARCHFLAGS =
+CFLAGS = -g $(ARCHFLAGS) -I/usr/local/include -DUSE_INTERP_RESULT -DUSE_TCL_STUBS
+LDFLAGS = -T1 $(DEBUG)
+LIBS =
+
+all: sockapi.o stimctrl stimctrl.dylib
+
+sockapi.o:	sockapi.c sockapi.h
+	$(CC) $(CFLAGS) -c sockapi.c
+
+stimctrl:	stimctrl.c sockapi.o
+	$(CC) $(CFLAGS) $(ARCHFLAGS) -o stimctrl stimctrl.c sockapi.o -lreadline -ltermcap
+
+stimctrl.dylib:	tclstimctrl.c sockapi.o
+	$(CC) -c $(CFLAGS) -I/usr/local/include tclstimctrl.c
+	$(CC) -g -dynamiclib tclstimctrl.o sockapi.o -o stimctrl.dylib \
+	-L/usr/local/lib -ltclstub8.6 -lz
+
+install-stimctrl:
+	cp stimctrl /usr/local/bin
+
+install-stimctrl-package:
+	tclsh8.6 pkg.tcl
+	cp pkgIndex.tcl /usr/local/lib/stimctrl
+	cp stimctrl.dylib /usr/local/lib/stimctrl
+
+install: install-stimctrl install-stimctrl-package

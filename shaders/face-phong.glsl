@@ -1,0 +1,73 @@
+-- Vertex
+
+in vec3 vertex_position;
+in vec3 vertex_normal;
+in vec2 vertex_texcoord;
+
+out vec3 position;
+out vec3 normal;
+out vec2 texcoord;
+
+uniform mat4 projMat;
+uniform mat4 modelviewMat;
+uniform mat3 normalMat;
+
+void main(void)
+{
+  texcoord  = vertex_texcoord;
+  normal = normalize(normalMat*vertex_normal);
+  position = vec3(modelviewMat * vec4(vertex_position, 1.0));
+  gl_Position = projMat * modelviewMat * vec4(vertex_position, 1.0);
+}
+
+-- Fragment
+
+uniform float time;
+uniform vec2 resolution;
+
+uniform sampler2D tex0;
+
+in vec3 position;
+in vec3 normal;
+in vec2 texcoord;
+
+uniform vec4 lightPosition;
+uniform vec3 lightIntensity;
+
+uniform vec3 materialKa;      // Ambient reflectivity
+uniform vec3 materialKd;      // Diffuse reflectivity
+uniform vec3 materialKs;      // Specular reflectivity
+uniform float materialShininess;
+
+out vec4 fragcolor;
+
+void phongModel(vec3 pos, vec3 norm, out vec3 ambAndDiff, out vec3 spec) {
+    vec3 s = normalize(vec3(lightPosition) - pos);
+    vec3 v = normalize(-pos.xyz);
+    vec3 r = reflect( -s, norm );
+    vec3 ambient = lightIntensity * materialKa;
+    float sDotN = max( dot(s,norm), 0.0 );
+    vec3 diffuse = lightIntensity * materialKd * sDotN;
+    spec = vec3(0.0);
+    if( sDotN > 0.0 )
+        spec = lightIntensity * materialKs *
+               pow( max( dot(r,v), 0.0 ), materialShininess );
+    ambAndDiff = ambient + diffuse;
+}
+
+void main(void){
+     vec3 ambAndDiff, spec;
+     vec4 texColor = texture(tex0, vec2(texcoord.s, 1-texcoord.t));
+     phongModel(position, normal, ambAndDiff, spec);
+     fragcolor = vec4(ambAndDiff, 1.0) * texColor + vec4(spec, 1.0);
+}
+
+-- Uniforms
+
+lightPosition "0.0 4 8 1.0"
+lightIntensity "0.7  0.7  0.7"
+materialKa "0.9 0.9 0.9"
+materialKd "0.95 0.95 0.95"
+materialKs "0.0 0.0 0.0"
+materialShininess 80.0
+

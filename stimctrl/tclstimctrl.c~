@@ -1,0 +1,90 @@
+/*
+ * NAME
+ *   stimctrl.c
+ *
+ * DESCRIPTION
+ *   basic socket funcs for socket communication with stim program
+ * bound to Tcl functions
+ *
+ * AUTHOR
+ *   DLS, 8/99, 3/02
+ *
+ */
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <string.h>
+#include <tcl.h>
+
+#include "sockapi.h"
+
+int rmtSendCmd(ClientData clientData, Tcl_Interp *interp,
+		int argc, char *argv[])
+{
+  char *cmd;
+  char *result;
+  char *server;
+  int port = (int) clientData, cmdarg;
+  int i, len = 0;
+  
+  if (port != 0) {
+    if (argc < 3) {
+      sprintf(interp->result, "usage: %s host command", argv[0]);
+      return TCL_ERROR;
+    }
+  }
+  else {
+    if (argc < 4) {
+      sprintf(interp->result, "usage: %s host port command", argv[0]);
+      return TCL_ERROR;
+    }
+    port = atoi(argv[2]);
+    cmdarg = 3;
+  }  
+
+  server = argv[1];
+  
+  /* Loop through and figure out how long the command line is */
+  for (i = 2; i < argc; i++) {
+    len += (strlen(argv[i])+1);
+  }
+  cmd = (char *) calloc(len+1, sizeof(char));
+  for (i = 2; i < argc; i++) {
+    strcat(cmd, argv[i]);
+    strcat(cmd, " ");
+  }
+  
+  if (!rmt_init(server)) {
+    sprintf(interp->result, "stimctrl: error connecting to server %s", 
+	    server);
+    return TCL_ERROR;
+  }
+  
+  result = rmt_send(cmd);
+  Tcl_SetResult(interp, result, TCL_STATIC);
+  rmt_close();
+  free(cmd);
+
+  return TCL_OK;
+}
+
+int Stimctrl_Init(Tcl_Interp *interp)
+{
+#ifdef USE_TCL_STUBS
+  Tcl_InitStubs(interp, "8.5", 0);
+#else
+  Tcl_PkgRequire(interp, "Tcl", "8.5", 0);
+#endif
+  
+  if (Tcl_PkgProvide(interp, "stimctrl", "1.1") != TCL_OK) {
+    return TCL_ERROR;
+  }
+
+  Tcl_CreateCommand(interp, "rmt_send", rmtSendCmd,
+		    (ClientData) 4610, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "sock_send", rmtSendCmd,
+		    (ClientData) 0, (Tcl_CmdDeleteProc *) NULL);
+  return TCL_OK;
+}

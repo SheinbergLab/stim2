@@ -1,0 +1,32 @@
+#!/bin/bash
+
+LIBS=('lab' 'dlsh')
+ 
+for l in "${LIBS[@]}"
+do
+  echo install_name_tool -change @executable_path/../lib/lib${l}.dylib @executable_path/lib/lib${l}.dylib $1
+  install_name_tool -change @executable_path/../lib/lib${l}.dylib @executable_path/lib/lib${l}.dylib $1
+done
+
+LIBS=('glfw.3.3')
+for l in "${LIBS[@]}"
+do
+  echo install_name_tool -change @executable_path/../libs/lib${l}.dylib @executable_path/lib/lib${l}.dylib $1
+  install_name_tool -change @executable_path/../libs/lib${l}.dylib @executable_path/lib/lib${l}.dylib $1
+done
+
+LIBS=('lab' 'dlsh')
+ 
+for l in "${LIBS[@]}"
+do
+  echo install_name_tool -change @rpath/lib${l}.dylib @executable_path/lib/lib${l}.dylib $1
+  install_name_tool -change @rpath/lib${l}.dylib @executable_path/lib/lib${l}.dylib $1
+done
+
+install_name_tool -change @rpath/libglfw.3.dylib @executable_path/lib/libglfw.3.3.dylib $1
+install_name_tool -change @rpath/dlsh.dylib @executable_path/lib/libdlsh.dylib $1
+install_name_tool -change @rpath/liblab.dylib @executable_path/lib/liblab.dylib $1
+install_name_tool -change /usr/local/lib/libpdf.6.dylib @executable_path/lib/libpdf.6.0.5.dylib $1
+install_name_tool -change @rpath/libpdf.6.0.5.dylib @executable_path/lib/libpdf.6.0.5.dylib $1
+install_name_tool -change liblab.dylib @executable_path/lib/liblab.dylib $1
+install_name_tool -change dlsh.dylib @executable_path/lib/libdlsh.dylib $1

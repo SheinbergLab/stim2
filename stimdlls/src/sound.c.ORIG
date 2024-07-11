@@ -1,0 +1,351 @@
+/*
+ * NAME
+ *   sound.c
+ *
+ * DESCRIPTION
+ *  Extension to play sounds through the stimulation program
+ *  based on FMOD low level API (www.fmod.org)
+ * 
+ * DETAILS 
+ *  This extension uses the FMOD library to control sound playback
+ *
+ * AUTHOR
+ *    DLS / MAR 05 / MAY 06 / DEC 07 / JUN 10 / MAR 17
+ */
+
+
+#ifdef WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#undef WIN32_LEAN_AND_MEAN
+#endif
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <math.h>
+#include <tcl.h>
+#include <stim.h>
+
+#include <fmod.h>
+#include <fmod_errors.h>
+
+#ifndef SOUND_FALSE
+#define SOUND_FALSE 0
+#define SOUND_TRUE 1
+#endif
+
+static int SoundID = -1;	/* unique sound object id       */
+
+FMOD_SYSTEM      *FMODsystem = NULL;
+
+typedef struct _sound {
+  FMOD_SOUND *sound;
+  FMOD_CHANNEL     *channel;
+  int state;
+  int playing;
+} SOUND;
+
+
+/****************************************************************************\
+*
+* Function:     void FMODerror(void)
+*
+* Description:  Handles a FMOD error - displays an error message and exits
+*
+\****************************************************************************/
+
+int FMODerror(Tcl_Interp *interp, FMOD_RESULT result)
+{
+    Tcl_AppendResult(interp,  FMOD_ErrorString(result), NULL);
+    return TCL_ERROR;
+}
+
+static void soundDelete(GR_OBJ *gobj)
+{
+  SOUND *s = (SOUND *) GR_CLIENTDATA(gobj);
+  FMOD_Sound_Release(s->sound);
+  free((void *) s);
+}
+
+static void soundPlay(GR_OBJ *gobj)
+{
+  SOUND *s = (SOUND *) GR_CLIENTDATA(gobj);
+  if (s->state) {
+    if (s->playing) return;
+    else {
+      FMOD_Channel_SetPaused(s->channel, SOUND_FALSE);
+      s->playing = 1;
+    }
+  }
+  else if (s->playing) {
+    FMOD_Channel_SetPaused(s->channel, SOUND_TRUE);
+    s->playing = 0;
+  }
+}
+
+static void soundUpdate(GR_OBJ *gobj)
+{
+  SOUND *s = (SOUND *) GR_CLIENTDATA(gobj);
+}
+
+static void soundOff(GR_OBJ *gobj)
+{
+  SOUND *s = (SOUND *) GR_CLIENTDATA(gobj);
+  if (s->playing) {
+    FMOD_Channel_SetPaused(s->channel, SOUND_TRUE);
+    s->state = s->playing = 0;
+  }
+}
+
+static void soundReset(GR_OBJ *gobj)
+{
+  SOUND *s = (SOUND *) GR_CLIENTDATA(gobj);
+  FMOD_System_PlaySound(FMODsystem, 
+			s->sound,
+			0,
+			SOUND_TRUE, 
+			&s->channel);
+  s->playing = 0;
+}
+
+static int soundCreate(Tcl_Interp *interp, OBJ_LIST *objlist, 
+		       char *filename, FMOD_MODE mode)
+{
+  const char *name = "FMOD Sound";
+  GR_OBJ *obj;
+  SOUND *s;
+  FMOD_SOUND *sound;
+  FMOD_RESULT result;
+  
+  result = FMOD_System_CreateSound(FMODsystem, filename, mode, 0, &sound);
+  if (result != FMOD_OK) {
+    Tcl_AppendResult(interp,  FMOD_ErrorString(result), NULL);
+    return -1;
+  }
+
+  obj = gobjCreateObj();
+  if (!obj) {
+    Tcl_AppendResult(interp, "soundCreate: error creating gobj", NULL);
+    return -1;
+  }
+  
+  strcpy(GR_NAME(obj), name);
+  GR_OBJTYPE(obj) = SoundID;
+  
+  GR_ACTIONFUNCP(obj) = soundPlay;
+  GR_DELETEFUNCP(obj) = soundDelete;
+  GR_RESETFUNCP(obj) = soundReset;
+  GR_OFFFUNCP(obj) = soundOff;
+  GR_TIMERFUNCP(obj) = soundUpdate;
+
+  s = (SOUND *) calloc(1, sizeof(SOUND));
+  s->sound = sound;
+  s->playing = 0;	
+  s->state = 0;
+  result = FMOD_System_PlaySound(FMODsystem, 
+				 s->sound,
+				 0,
+				 SOUND_TRUE, 
+				 &s->channel);
+  
+  GR_CLIENTDATA(obj) = s;
+  
+  return(gobjAddObj(objlist, obj));
+}
+
+static int soundCmd(ClientData clientData, Tcl_Interp *interp,
+		    int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  int id;
+  FMOD_MODE mode = FMOD_DEFAULT;
+
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: sound file [fmod_mode]", NULL);
+    return TCL_ERROR;
+  }
+  
+  if (argc > 2) { 
+    if (Tcl_GetInt(interp, argv[2], &mode) != TCL_OK) return TCL_ERROR;
+  }
+
+  if ((id = soundCreate(interp, olist, argv[1], mode)) < 0) {
+    return(TCL_ERROR);
+  }
+
+  sprintf(interp->result, "%d", id);
+  return(TCL_OK);
+}
+
+static int soundSetStateCmd(ClientData clientData, Tcl_Interp *interp,
+			    int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  int id;
+  SOUND *s;
+  int state;
+
+  if (argc < 3) {
+    interp->result = "usage: soundSetState sound_obj {0|1}";
+    return TCL_ERROR;
+  }
+  
+  Tcl_GetInt(interp, argv[2], &state);
+
+  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+  if (id >= OL_NOBJS(olist)) {
+    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+    return TCL_ERROR;
+  }
+  
+  /* Make sure it's a sound object */
+  if (GR_OBJTYPE(OL_OBJ(olist,id)) != SoundID) {
+    Tcl_AppendResult(interp, argv[0], ": object not a sound", NULL);
+    return TCL_ERROR;
+  }
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+  s->state = state;
+
+
+  return TCL_OK;
+}
+
+static int soundPlayCmd(ClientData clientData, Tcl_Interp *interp,
+			    int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  int id;
+  SOUND *s;
+
+  if (argc < 2) {
+    interp->result = "usage: soundPlay sound_obj";
+    return TCL_ERROR;
+  }
+
+  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+  if (id >= OL_NOBJS(olist)) {
+    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+    return TCL_ERROR;
+  }
+  
+  /* Make sure it's a sound object */
+  if (GR_OBJTYPE(OL_OBJ(olist,id)) != SoundID) {
+    Tcl_AppendResult(interp, argv[0], ": object not a sound", NULL);
+    return TCL_ERROR;
+  }
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  FMOD_System_PlaySound(FMODsystem, 
+			s->sound,
+			0,
+			SOUND_FALSE, 
+			&s->channel);
+
+  sprintf(interp->result, "%d", id);
+  return TCL_OK;
+}
+
+static void soundClose(void *clientData)
+{
+  FMOD_RESULT result;
+  result = FMOD_System_Close(FMODsystem);
+  result = FMOD_System_Release(FMODsystem);
+}
+
+/****************************************************************/
+/*                       PACKAGE INIT                           */
+/****************************************************************/
+
+#ifdef _WIN32
+EXPORT(int,Sound_Init) _ANSI_ARGS_((Tcl_Interp *interp))
+#else
+int Sound_Init(Tcl_Interp *interp)
+#endif
+{
+  OBJ_LIST *OBJList = getOBJList();
+  FMOD_RESULT result;
+  unsigned int version;
+
+  if (
+#ifdef USE_TCL_STUBS
+      Tcl_InitStubs(interp, "8.5", 0)
+#else
+      Tcl_PkgRequire(interp, "Tcl", "8.5", 0)
+#endif
+      == NULL) {
+    return TCL_ERROR;
+  }
+  
+  if (SoundID >= 0)		/* Already been here */
+    return TCL_OK;
+
+  SoundID = gobjRegisterType();
+
+  result = FMOD_System_Create(&FMODsystem);
+  if (result != FMOD_OK) return FMODerror(interp, result);
+
+  result = FMOD_System_GetVersion(FMODsystem, &version);
+  if (result != FMOD_OK) return FMODerror(interp, result);
+
+  if (version < FMOD_VERSION) {
+    Tcl_AppendResult(interp, "old version of fmod.dll found", NULL);
+    return TCL_ERROR;
+  }
+
+  //  FMOD_System_SetOutput(FMODsystem, FMOD_OUTPUTTYPE_ASIO);
+  FMOD_System_SetOutput(FMODsystem, FMOD_OUTPUTTYPE_AUTODETECT);
+  result = FMOD_System_Init(FMODsystem, 32, FMOD_INIT_NORMAL, NULL);
+
+  if (result != FMOD_OK) {
+    Tcl_ResetResult(interp);
+    FMOD_System_SetOutput(FMODsystem, FMOD_OUTPUTTYPE_AUTODETECT);
+    result = FMOD_System_Init(FMODsystem, 32, FMOD_INIT_NORMAL, NULL);
+    if (result != FMOD_OK) {
+      return FMODerror(interp, result);
+    }
+  }
+
+  add_shutdown_func(soundClose, NULL);
+
+  /* Create a sound object */
+  Tcl_CreateCommand(interp, "sound", (Tcl_CmdProc *) soundCmd, 
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "soundSetState", (Tcl_CmdProc *) soundSetStateCmd, 
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "soundPlay", (Tcl_CmdProc *) soundPlayCmd, 
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+
+  Tcl_VarEval(interp, "namespace eval fmod {}", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(DEFAULT) 0x00000000", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(LOOP_OFF) 0x00000001", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(LOOP_NORMAL) 0x00000002", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(LOOP_BIDI) 0x00000004", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(2D) 0x00000008", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(3D) 0x00000010", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(HARDWARE) 0x00000020", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(SOFTWARE) 0x00000040", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(CREATESTREAM) 0x00000080", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(CREATESAMPLE) 0x00000100", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(OPENUSER) 0x00000400", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(OPENMEMORY) 0x00000800", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(OPENRAW) 0x00001000", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(OPENONLY) 0x00002000", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(ACCURATETIME) 0x00004000", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(MPEGSEARCH) 0x00008000", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(NONBLOCKING) 0x00010000", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(UNIQUE) 0x00020000", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(3D_HEADRELATIVE) 0x00040000", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(3D_WORLDRELATIVE) 0x00080000", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(3D_LOGROLLOFF) 0x00100000", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(3D_LINEARROLLOFF) 0x00200000", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(CDDA_FORCEASPI) 0x00400000", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(CDDA_JITTERCORRECT) 0x00800000", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(UNICODE) 0x01000000", NULL);
+  Tcl_VarEval(interp, "set ::fmod::mode(IGNORETAGS) 0x02000000", NULL);
+
+  return TCL_OK;
+}
+

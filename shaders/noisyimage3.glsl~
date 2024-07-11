@@ -1,0 +1,36 @@
+-- Vertex
+
+in vec3 vertex_position;
+in vec2 vertex_texcoord;
+
+out vec2 texcoord;
+
+uniform mat4 projMat;
+uniform mat4 modelviewMat;
+
+void main(void)
+{
+  texcoord  = vertex_texcoord;
+  gl_Position = projMat * modelviewMat * vec4(vertex_position, 1.0);
+}
+
+-- Fragment
+
+uniform float time;
+uniform vec2 resolution;
+
+uniform sampler2D tex0;
+uniform sampler2D tex1;
+
+in vec2 texcoord;
+out vec4 fragcolor;
+
+void main(void){
+    vec3 texColor0 = texture(tex0, vec2(texcoord.s, 1.0-texcoord.t)).rgb;
+    float texColor1 = texture(tex1, vec2(texcoord.s, 1.0-texcoord.t)).r;
+    fragcolor = vec4(texColor0, texColor1);
+}
+
+-- Uniforms
+
+
