@@ -738,7 +738,7 @@ int Text_Init(Tcl_Interp *interp)
   /*font = load_font(
     "/usr/fonts/font_repository/adobe/MyriadPro-Bold.otf", 15, dpi); */
   #ifndef APPLE_APPLICATION_FOLDER
-  font = load_font("/usr/local/share/stim2/fonts/NotoSans-Regular.ttf", 24, dpi);
+  font = load_font("/usr/local/stim2/fonts/NotoSans-Regular.ttf", 24, dpi);
   #else
   font = load_font("/Applications/stim2.app/Contents/Resources/fonts/NotoSans-Regular.ttf", 24, dpi);
   
