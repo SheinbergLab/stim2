@@ -16,12 +16,17 @@
 #include <filesystem>
 #endif
 
+#if 0
 // Sockpp support
 #include <sockpp/tcp_acceptor.h>
 #include <sockpp/udp_socket.h>
 #include <sockpp/version.h>
+#endif
+
 #ifndef _WIN32
+#include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <netdb.h>
 #endif
 
 #include "timer.h"      // for periodic timer thread
@@ -1123,13 +1128,9 @@ struct AppLog
     }
 };
 
-
 class Application
 {
   bool m_bDataLoaded;
-  
-  int tcpport;
-  int dsport;
   
   Tcl_Interp *interp;
 
@@ -1140,6 +1141,12 @@ class Application
   std::atomic<bool> m_bDone;
   Timer::timer_id timerID;
 
+  GLsync swap_sync;
+  
+  // for GPIO swap acknowledge
+  int output_pin;
+  
+public:
   // for client requests over tcp
   SharedQueue<client_request_t *> queue;
   SharedQueue<client_request_t *> reply_queue;
@@ -1148,14 +1155,11 @@ class Application
   SharedQueue<ds_client_request_t *> ds_queue;
   SharedQueue<ds_client_request_t *> ds_reply_queue;
   
-  GLsync swap_sync;
-  
-  // for GPIO swap acknowledge
-  int output_pin;
-  
-public:
   GLFWwindow* window;   /* main window pointer */
   GLFWcursor *hidden_cursor, *standard_cursor;
+
+  std::thread net_thread;
+  std::thread ds_net_thread;
   
   void updateDisplay(bool);
   void processImgui(void);
@@ -1177,19 +1181,23 @@ public:
   bool show_demo_window = false;
   bool show_console = false;
   bool show_log = true;
-    
-  static void
-  tcp_client_process(sockpp::tcp_socket sock,
-             SharedQueue<client_request_t *> *queue);
+
+  void start_tcp_server(void);
+  void start_dstcp_server(void);
 
   static void
-  ds_client_process(sockpp::tcp_socket sock,
+  tcp_client_process(int sockfd,
+             SharedQueue<client_request_t *> *queue);
+  static void
+  ds_client_process(int sockfd,
             SharedQueue<ds_client_request_t *> *queue);
   
   bool show_imgui = false;
   AppLog log;
   
   const char *title;
+  int tcpport = 4610;
+  int dsport = 4611;
 
   ShutdownCmds shutdown_cmds;
   
@@ -1197,12 +1205,7 @@ public:
   {
     m_bDone = false;
     done = false;
-    tcpport = 4610;
-    dsport = 4611;
     fullscreen = 0;
-
-    // Initializize sockpp libary and setup UDP port
-    sockpp::initialize();
   }
 
   ~Application()
@@ -1371,80 +1374,6 @@ public:
     appTimer.destroy(timerID);
   }
 
-  void
-  startTcpServer() {
-
-    //    std::cout << sockpp::SOCKPP_VERSION << '\n' << std::endl;
-
-
-    
-    auto acc = sockpp::tcp_acceptor();
-    acc.open((in_port_t) tcpport, 4, SO_REUSEADDR);
-
-    //cout << "Acceptor bound to address: " << acc.address() << std::endl;
-    //    std::cout << "Awaiting connections on tcpport " <<
-    //       tcpport << "..." << std::endl;
-
-    while (!m_bDone) {
-      sockpp::inet_address peer;
-
-      // Accept a new client connection
-      auto res = acc.accept(&peer);
-      //      std::cout << "Received a connection request from " <<
-      //         peer << std::endl;
-
-      if (!res) {
-	std::cerr << "Error accepting incoming connection: " 
-          << res.error_message() << std::endl;
-      }
-      else {
-	sockpp::tcp_socket sock = res.release();	
-	
-	int on = 1;
-	sock.set_option(IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
-	
-	// Create a thread and transfer the new stream to it.
-	std::thread thr(tcp_client_process, std::move(sock), &queue);
-	thr.detach();
-      }
-    }
-  }
-
-  void
-  startDsTcpServer() {
-
-    //    std::cout << sockpp::SOCKPP_VERSION << '\n' << std::endl;
-    auto acc = sockpp::tcp_acceptor();
-    acc.open((in_port_t) dsport, 4, SO_REUSEADDR);
-
-    //    std::cout << "Acceptor bound to address: " << acc.address() << std::endl;
-    //    std::cout << "Awaiting connections on tcpport " <<  dsport << "..." << std::endl;
-
-    while (!m_bDone) {
-      sockpp::inet_address peer;
-
-      // Accept a new client connection
-      auto res= acc.accept(&peer);
-      //      std::cout << "Received a connection request from " <<
-      //         peer << std::endl;
-
-      if (!res) {
-	std::cerr << "Error accepting incoming connection: " 
-		  << res.error_message() << std::endl;
-      }
-      else {
-	sockpp::tcp_socket sock = res.release();
-	
-	int on = 1;
-	sock.set_option(IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
-	
-	// Create a thread and transfer the new stream to it.
-	std::thread thr(ds_client_process, std::move(sock), &ds_queue);
-	thr.detach();
-      }
-    }
-  }
-  
   int Tcl_StimAppInit(Tcl_Interp *interp)
   {
 
@@ -1540,62 +1469,60 @@ public:
     int n = 0;
     int retcode;
     client_request_t *req;
-
+    
     wait_for_swap = false;
-
+    
     while (queue.size()) {
       n++;
       req = queue.front();
       queue.pop_front();
       const char *script = req->script.c_str();
-
+      
       if (req->wait_for_swap) {
-    wait_for_swap = true;
-
-    if (log_level) log.AddLog("[%.3f]: %s", glfwGetTime(), script);
+	wait_for_swap = true;
+	
+	if (log_level) log.AddLog("[%.3f]: %s", glfwGetTime(), script);
 #ifdef JETSON_NANO
-    GPIO::output(output_pin, GPIO::HIGH);
+	GPIO::output(output_pin, GPIO::HIGH);
 #endif
       }
-
+      
       retcode = Tcl_Eval(interp, script);
       const char *rcstr = Tcl_GetStringResult(interp);
       if (retcode == TCL_OK) {
-    if (!req->wait_for_swap) {
-      if (rcstr) {
-        req->rqueue->push_back(std::string(rcstr));
+	if (!req->wait_for_swap) {
+	  if (rcstr) {
+	    req->rqueue->push_back(std::string(rcstr));
+	  }
+	  else {
+	    req->rqueue->push_back("");
+	  }
+	}
+	else {
+	  // put result back into the request and queue for after swap
+	  req->script = std::string(rcstr);
+	  reply_queue.push_back(req);
+	}
       }
       else {
-        req->rqueue->push_back("");
+	if (!req->wait_for_swap) {
+	  if (rcstr) {
+	    req->rqueue->push_back("!TCL_ERROR "+std::string(rcstr));
+	    //      std::cout << "Error: " + std::string(rcstr) << std::endl;
+	    log.AddLog("[error]: %s\n", rcstr);
+	  }
+	  else {
+	    req->rqueue->push_back("Error:");
+	  }
+	}
+	else {
+	  // put result back into the request and queue for after swap
+	  req->script = std::string("!TCL_ERROR "+std::string(rcstr));
+	  reply_queue.push_back(req);
+	}
       }
     }
-    else {
-      // put result back into the request and queue for after swap
-      req->script = std::string(rcstr);
-      reply_queue.push_back(req);
-    }
-      }
-      else {
-    const char *rcstr = Tcl_GetStringResult(interp);
-    if (!req->wait_for_swap) {
-      if (rcstr) {
-        req->rqueue->push_back("!TCL_ERROR "+std::string(rcstr));
-        //      std::cout << "Error: " + std::string(rcstr) << std::endl;
-        log.AddLog("[error]: %s\n", rcstr);
-
-      }
-      else {
-        req->rqueue->push_back("Error:");
-      }
-    }
-    else {
-      // put result back into the request and queue for after swap
-      req->script = std::string("!TCL_ERROR "+std::string(rcstr));
-      reply_queue.push_back(req);
-    }
-      }
-    }
-
+    
     /* Do this here? */
     while (Tcl_DoOneEvent(TCL_DONT_WAIT)) ;
     
@@ -1737,37 +1664,145 @@ public:
 // Allow other functions to access
 Application app;
 
-void
-Application::tcp_client_process(sockpp::tcp_socket sock,
-                SharedQueue<client_request_t *> *queue)
+void Application::start_tcp_server(void)
 {
+  struct sockaddr_in address;
+  struct sockaddr client_address;
+  socklen_t client_address_len = sizeof(client_address);
+  int socket_fd;		// accept socket
+  int new_socket_fd;		// client socket
+  int on = 1;
   
+  //    std::cout << "opening server on port " << std::to_string(tcpport) << std::endl;
+  
+  /* Initialise IPv4 address. */
+  memset(&address, 0, sizeof(struct sockaddr_in));
+  address.sin_family = AF_INET;
+  address.sin_port = htons(tcpport);
+  address.sin_addr.s_addr = INADDR_ANY;
+  
+  
+  /* Create TCP socket. */
+  if ((socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+    perror("socket");
+    return;
+  }
+  
+  /* Allow this server to reuse the port immediately */
+  setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+  
+  /* Bind address to socket. */
+  if (bind(socket_fd, (const struct sockaddr *) &address,
+	   sizeof (struct sockaddr)) == -1) {
+    perror("bind");
+    return;
+  }
+  
+  /* Listen on socket. */
+  if (listen(socket_fd, 20) == -1) {
+    perror("listen");
+    return;
+  }
+  
+  while (1) {
+    /* Accept connection to client. */
+    new_socket_fd = accept(socket_fd, &client_address, &client_address_len);
+    if (new_socket_fd == -1) {
+      perror("accept");
+      continue;
+    }
+    
+    setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+    
+    // Create a thread and transfer the new stream to it.
+    std::thread thr(tcp_client_process, new_socket_fd, &queue);
+    thr.detach();
+  }
+}
+
+void Application::start_dstcp_server(void)
+{
+  struct sockaddr_in address;
+  struct sockaddr client_address;
+  socklen_t client_address_len = sizeof(client_address);
+  int socket_fd;		// accept socket
+  int new_socket_fd;		// client socket
+  int on = 1;
+  
+  //    std::cout << "opening server on port " << std::to_string(tcpport) << std::endl;
+  
+  /* Initialise IPv4 address. */
+  memset(&address, 0, sizeof(struct sockaddr_in));
+  address.sin_family = AF_INET;
+  address.sin_port = htons(dsport);
+  address.sin_addr.s_addr = INADDR_ANY;
+  
+  
+  /* Create TCP socket. */
+  if ((socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+    perror("socket");
+    return;
+  }
+  
+  /* Allow this server to reuse the port immediately */
+  setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+  
+  /* Bind address to socket. */
+  if (bind(socket_fd, (const struct sockaddr *) &address,
+	   sizeof (struct sockaddr)) == -1) {
+    perror("bind");
+    return;
+  }
+  
+  /* Listen on socket. */
+  if (listen(socket_fd, 20) == -1) {
+    perror("listen");
+    return;
+  }
+  
+  while (1) {
+    /* Accept connection to client. */
+    new_socket_fd = accept(socket_fd, &client_address, &client_address_len);
+    if (new_socket_fd == -1) {
+      perror("accept");
+      continue;
+    }
+    
+    setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+    
+    // Create a thread and transfer the new stream to it.
+    std::thread thr(ds_client_process, new_socket_fd, &ds_queue);
+    thr.detach();
+  }
+}
+
+void Application::tcp_client_process(int sockfd,
+				     SharedQueue<client_request_t *> *queue)
+{
+  // fix this...
   char buf[16384];
   double start;
+  int rval, wrval;
   
   // each client has its own request structure and reply queue
   SharedQueue<std::string> rqueue;
   client_request_t client_request;
   client_request.rqueue = &rqueue;
-
-  sockpp::result<size_t> res;
-
-  memset(buf, sizeof(buf), 0);
   
-  while ((res = sock.read(buf, sizeof(buf))) && res.value() > 0) {
-    
+  while ((rval = read(sockfd, buf, sizeof(buf))) > 0) {
+
     // Special prefix requesting swap acknowledge
     if (buf[0] == '!') {
       client_request.wait_for_swap = true;
-      client_request.script = std::string(&buf[1], res.value()-1);
-    }
-
-    else {
-      client_request.wait_for_swap = false;
-      client_request.script = std::string(buf, res.value());
+      client_request.script = std::string(&buf[1], rval-1);
     }
     
-     // std::cout << "TCL Request: " << std::string(buf, n) << std::endl;
+    else {
+      client_request.wait_for_swap = false;
+      client_request.script = std::string(buf, rval);
+    }
+    
+    //    std::cout << "TCL Request: " << std::string(buf, rval) << std::endl;
     
     queue->push_back(&client_request);
     
@@ -1780,26 +1815,23 @@ Application::tcp_client_process(sockpp::tcp_socket sock,
     std::string s(client_request.rqueue->front());
     client_request.rqueue->pop_front();
     
-    //      std::cout << "TCL Result: " << s << std::endl;
-    
+    //    std::cout << "TCL Result: " << s << std::endl;
+
     // Add a newline, and send the buffer including the null termination
     s = s+"\n";
-    sock.write_n(s.data(), s.size()+1);
-
+    wrval = write(sockfd, s.c_str(), s.size());
   }
-  
-  //    std::cout << "Connection closed from " << sock.peer_address() << std::endl;
+  // std::cout << "Connection closed from " << sock.peer_address() << std::endl;
+  close(sockfd);
 }
-  
+
 void
-Application::ds_client_process(sockpp::tcp_socket sock,
-                   SharedQueue<ds_client_request_t *> *queue)
+Application::ds_client_process(int sockfd,
+			       SharedQueue<ds_client_request_t *> *queue)
 {
-  
+  int rval;
   char buf[1024];
   double start;
-
-  sockpp::result<size_t> res;
   
   // each client has its own request structure and reply queue
   SharedQueue<std::string> rqueue;
@@ -1807,10 +1839,8 @@ Application::ds_client_process(sockpp::tcp_socket sock,
   
   std::string dpoint_str;  
 
-  memset(buf, sizeof(buf), 0);
-
-  while ((res = sock.read(buf, sizeof(buf))) && res.value() > 0) {
-    for (int i = 0; i < res.value(); i++) {
+  while ((rval = read(sockfd, buf, sizeof(buf))) > 0) {
+    for (int i = 0; i < rval; i++) {
       char c = buf[i];
       if (c == '\n') {
 
@@ -1833,6 +1863,7 @@ Application::ds_client_process(sockpp::tcp_socket sock,
     }
   }
   //    std::cout << "Connection closed from " << sock.peer_address() << std::endl;
+  close(sockfd);
 }
 
 
@@ -2547,8 +2578,8 @@ main(int argc, char *argv[]) {
   app.timer_interval = interval;
   app.startTimer();
   
-  std::thread net_thread(&Application::startTcpServer, &app);
-  std::thread dsnet_thread(&Application::startDsTcpServer, &app);
+  app.net_thread = std::thread(&Application::start_tcp_server, &app);
+  app.ds_net_thread = std::thread(&Application::start_dstcp_server, &app);
 
   redraw();
 
@@ -2579,8 +2610,8 @@ main(int argc, char *argv[]) {
   app.stopTimer();
 
   /* detach from TCP/IP threads */
-  net_thread.detach();
-  dsnet_thread.detach();
+  app.net_thread.detach();
+  app.ds_net_thread.detach();
 
   glfwTerminate();
   
