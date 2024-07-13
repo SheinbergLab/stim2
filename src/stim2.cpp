@@ -1752,6 +1752,8 @@ Application::tcp_client_process(sockpp::tcp_socket sock,
 
   sockpp::result<size_t> res;
 
+  memset(buf, sizeof(buf), 0);
+  
   while ((res = sock.read(buf, sizeof(buf))) && res.value() > 0) {
     
     // Special prefix requesting swap acknowledge
@@ -1804,7 +1806,9 @@ Application::ds_client_process(sockpp::tcp_socket sock,
   ds_client_request_t client_request;
   
   std::string dpoint_str;  
-  
+
+  memset(buf, sizeof(buf), 0);
+
   while ((res = sock.read(buf, sizeof(buf))) && res.value() > 0) {
     for (int i = 0; i < res.value(); i++) {
       char c = buf[i];
