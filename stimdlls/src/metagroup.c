@@ -152,17 +152,17 @@ static int metagroupCmd(ClientData clientData, Tcl_Interp *interp,
   int id;
   char *handle;
   if (argc < 1) {
-    interp->result = "usage: metagroup";
+    Tcl_AppendResult(interp, "usage: ", argv[0], NULL);
     return TCL_ERROR;
   }
   else handle = argv[1];
   
   if ((id = metagroupCreate(olist)) < 0) {
-    sprintf(interp->result, "error creating metagroup");
+    Tcl_AppendResult(interp, "error creating metagroup", TCL_STATIC);
     return(TCL_ERROR);
   }
-  
-  sprintf(interp->result,"%d", id);
+
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
   return(TCL_OK);
 }
 
@@ -175,7 +175,7 @@ static int metagroupAddCmd(ClientData clientData, Tcl_Interp *interp,
   int i, id, *objids;
 
   if (argc < 3) {
-    interp->result = "usage: metagroupAdd metagroup idlist";
+    Tcl_AppendResult(interp, "usage: ", argv[0], " metagroup idlist", NULL);
     return TCL_ERROR;
   }
 
@@ -225,7 +225,7 @@ static int metagroupClearCmd(ClientData clientData, Tcl_Interp *interp,
   int id;
 
   if (argc < 2) {
-    interp->result = "usage: metagroupClear metagroup";
+    Tcl_AppendResult(interp, "usage: ", argv[0], " metagroup", NULL);
     return TCL_ERROR;
   }
   
@@ -264,7 +264,7 @@ static int metagroupContentsCmd(ClientData clientData, Tcl_Interp *interp,
   char ibuf[16];
 
   if (argc < 2) {
-    interp->result = "usage: metagroupContents metagroup";
+    Tcl_AppendResult(interp, "usage: ", argv[0], " metagroup", NULL);
     return TCL_ERROR;
   }
 
@@ -306,9 +306,9 @@ int Metagroup_Init(Tcl_Interp *interp)
 
   if (
 #ifdef USE_TCL_STUBS
-      Tcl_InitStubs(interp, "8.5", 0)
+      Tcl_InitStubs(interp, "8.5-", 0)
 #else
-      Tcl_PkgRequire(interp, "Tcl", "8.5", 0)
+      Tcl_PkgRequire(interp, "Tcl", "8.5-", 0)
 #endif
       == NULL) {
     return TCL_ERROR;

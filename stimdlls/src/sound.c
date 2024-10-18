@@ -3,14 +3,13 @@
  *   sound.c
  *
  * DESCRIPTION
- *  Extension to play sounds through the stimulation program
- *  based on FMOD low level API (www.fmod.org)
+ *  Extension to play sounds through stim2 using miniaudio.h
  * 
  * DETAILS 
- *  This extension uses the FMOD library to control sound playback
+ *  This extension uses the miniaud.io header only C/C++ library for sound playback
  *
  * AUTHOR
- *    DLS / MAR 05 / MAY 06 / DEC 07 / JUN 10 / MAR 17
+ *    DLS / SEP 24
  */
 
 
@@ -29,12 +28,9 @@
 #include <tcl.h>
 #include <stim.h>
 
-#include <fmod.h>
-#include <fmod_errors.h>
+#include "miniaudio.h"		/* the entire library is in this header */
 
 static int SoundID = -1;	/* unique sound object id       */
-
-FMOD_SYSTEM      *FMODsystem = NULL;
 
 typedef struct _sound {
   FMOD_SOUND *sound;
@@ -268,9 +264,9 @@ int Sound_Init(Tcl_Interp *interp)
 
   if (
 #ifdef USE_TCL_STUBS
-      Tcl_InitStubs(interp, "8.5", 0)
+      Tcl_InitStubs(interp, "8.5-", 0)
 #else
-      Tcl_PkgRequire(interp, "Tcl", "8.5", 0)
+      Tcl_PkgRequire(interp, "Tcl", "8.5-", 0)
 #endif
       == NULL) {
     return TCL_ERROR;

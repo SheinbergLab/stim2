@@ -23,7 +23,14 @@
 #include <sockpp/version.h>
 #endif
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <Ws2tcpip.h>
+#include <Winsock2.h>
+#include <Ws2ipdef.h>
+#pragma comment(lib, "Ws2_32.lib")
+#include <direct.h>
+#include <io.h>
+#else
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <netdb.h>
@@ -51,11 +58,6 @@
 
 #include <signal.h>
 #include <tcl.h>
-
-#ifdef _WIN32
-#include <Winsock2.h>
-#include <direct.h>
-#endif /* _WIN32 */
 
 #include "stim2.h"
 #include "rawapi.h"
@@ -1437,7 +1439,7 @@ public:
     return Tcl_EvalFile(interp, filename);
   }
   
-  int setupTcl(char *name)
+  int setupTcl(char *name, int argc, char **argv)
   {
     int exitCode = 0;
     
@@ -1449,7 +1451,16 @@ public:
     if (!interp) {
       std::cerr << "Error initialializing tcl interpreter" << std::endl;
     }
-
+#ifdef __APPLE__
+    if (TclZipfs_Mount(interp, "/Applications/stim2.app/Contents/Resources/stim2.zip", "app", NULL) != TCL_OK) {
+#else
+    if (TclZipfs_Mount(interp, "/usr/local/share/stim2/stim2.zip", "app", NULL) != TCL_OK) {
+#endif
+      std::cerr << "stim2: error mounting zipfs" << std::endl;
+    }
+  
+    TclZipfs_AppHook(&argc, &argv);
+    
     /*
      * Invoke application-specific initialization.
      */
@@ -1689,7 +1700,7 @@ void Application::start_tcp_server(void)
   }
   
   /* Allow this server to reuse the port immediately */
-  setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+  setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, (char *) &on, sizeof(on));
   
   /* Bind address to socket. */
   if (bind(socket_fd, (const struct sockaddr *) &address,
@@ -1712,7 +1723,7 @@ void Application::start_tcp_server(void)
       continue;
     }
     
-    setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+    setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, (char *) &on, sizeof(on));
     
     // Create a thread and transfer the new stream to it.
     std::thread thr(tcp_client_process, new_socket_fd, &queue);
@@ -1745,7 +1756,7 @@ void Application::start_dstcp_server(void)
   }
   
   /* Allow this server to reuse the port immediately */
-  setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+  setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, (char *) &on, sizeof(on));
   
   /* Bind address to socket. */
   if (bind(socket_fd, (const struct sockaddr *) &address,
@@ -1768,7 +1779,7 @@ void Application::start_dstcp_server(void)
       continue;
     }
     
-    setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+    setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, (char *) &on, sizeof(on));
     
     // Create a thread and transfer the new stream to it.
     std::thread thr(ds_client_process, new_socket_fd, &ds_queue);
@@ -2436,6 +2447,7 @@ main(int argc, char *argv[]) {
 #ifdef _WIN32
   glfwWindowHint (GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint (GLFW_CONTEXT_VERSION_MINOR, 2);
+  glfwWindowHint (GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
   glfwWindowHint (GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 #else
 
@@ -2552,7 +2564,7 @@ main(int argc, char *argv[]) {
     Reshape(&app, winWidth, winHeight);
   }
 
-  app.setupTcl(argv[0]);
+  app.setupTcl(argv[0], argc, argv);
 
 #ifdef __APPLE__
   const char *cfg_path = "/Applications/stim2.app/Contents/Resources/stim2.cfg";

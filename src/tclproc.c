@@ -1978,7 +1978,8 @@ static int olistAddSpecCmd(ClientData clientData, Tcl_Interp *interp,
   int i, j, slot;
   OBS_SPEC_LIST *olist = (OBS_SPEC_LIST *) clientData;
   OBS_PERIOD_SPEC *ospec;
-  int ntimes = 0, listArgc, sublistArgc;
+  Tcl_Size listArgc, sublistArgc;
+  Tcl_Size ntimes = 0;
   char **listArgv, **sublistArgv;
   int *choices, *times;
   
@@ -2124,7 +2125,7 @@ static int expGetSetCmd(ClientData clientData, Tcl_Interp *interp,
   if (Tcl_StringMatch(argv[0], "*_dump")) {
     int i;
     char *keys, **listArgv;
-    int listArgc;
+    Tcl_Size listArgc;
     Tcl_Channel outChannel = Tcl_GetStdChannel(TCL_STDOUT);
 
     /* Optional first argument is the name of an open file descriptor */

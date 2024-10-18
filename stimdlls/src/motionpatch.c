@@ -139,13 +139,16 @@ void motionpatchDraw(GR_OBJ *g)
 
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  glEnable(GL_PROGRAM_POINT_SIZE);
 
+  if (s->pointSize) {
+    glEnable(GL_PROGRAM_POINT_SIZE);
+    memcpy(s->pointSize->val, &s->pointsize, sizeof(float));
+  }
 
-  memcpy(s->pointSize->val, &s->pointsize, sizeof(float));
-
-  /* so shader knows how to deal with the sampler mask */
-  memcpy(s->samplerMaskMode->val, &s->samplermaskmode, sizeof(int));
+  if (s->samplerMaskMode) {
+    /* so shader knows how to deal with the sampler mask */
+    memcpy(s->samplerMaskMode->val, &s->samplermaskmode, sizeof(int));
+  }
     
   glUseProgram(sp->program);
   update_uniforms(&s->uniformTable);
@@ -538,7 +541,7 @@ static int motionpatchCmd(ClientData clientData, Tcl_Interp *interp,
   int verbose = 1;
   
   if (argc < 3) {
-    interp->result = "usage: motionpatch n speed lifetime";
+    Tcl_AppendResult(interp, "usage: ", argv[0], " n speed lifetime", NULL);
     return TCL_ERROR;
   }
   else handle = argv[1];
@@ -548,11 +551,11 @@ static int motionpatchCmd(ClientData clientData, Tcl_Interp *interp,
 
   if ((id = motionpatchCreate(olist, MotionpatchShaderProg,
 			      n, speed, lifetime)) < 0) {
-    sprintf(interp->result, "error creating motionpatch");
+    Tcl_SetResult(interp, "error creating motionpatch", TCL_STATIC);
     return(TCL_ERROR);
   }
-  
-  sprintf(interp->result,"%d", id);
+
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
   return(TCL_OK);
 }
 
@@ -613,7 +616,9 @@ static int motionpatchSpeedCmd(ClientData clientData, Tcl_Interp *interp,
   double speed;
   
   if (argc < 3) {
-    interp->result = "usage: motionpatch_speed motionpatch speed";
+    Tcl_AppendResult(interp,
+		     "usage: ", argv[0],
+		     " motionpatch_speed motionpatch speed", NULL);
     return TCL_ERROR;
   }
 
@@ -649,7 +654,8 @@ static int motionpatchUseNoiseDirectionCmd(ClientData clientData, Tcl_Interp *in
   double rate = 0.0;
   
   if (argc < 4) {
-    interp->result = "usage: motionpatch_useNoiseDirection motionpatch use period [rate]";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch useNoise period [rate]", NULL);
     return TCL_ERROR;
   }
 
@@ -689,7 +695,8 @@ static int motionpatchSetSeedCmd(ClientData clientData, Tcl_Interp *interp,
   int seed;
   
   if (argc < 4) {
-    interp->result = "usage: motionpatch_setSeed motionpatch context_id seed";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch context_id seed", NULL);
     return TCL_ERROR;
   }
 
@@ -731,7 +738,8 @@ static int motionpatchSetNoiseZCmd(ClientData clientData, Tcl_Interp *interp,
   double noise_z;
   
   if (argc < 3) {
-    interp->result = "usage: motionpatch_setNoiseZ motionpatch noise_z";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch noise_z", NULL);
     return TCL_ERROR;
   }
 
@@ -763,7 +771,8 @@ static int motionpatchNoiseUpdateZCmd(ClientData clientData, Tcl_Interp *interp,
   int do_update;
   
   if (argc < 3) {
-    interp->result = "usage: motionpatch_noiseUpdateZ motionpatch update_by_stimtim";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch update_by_stimtime", NULL);
     return TCL_ERROR;
   }
 
@@ -796,7 +805,8 @@ static int motionpatchDirectionCmd(ClientData clientData, Tcl_Interp *interp,
   double direction;
   
   if (argc < 3) {
-    interp->result = "usage: motionpatch_direction motionpatch direction";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch direction", NULL);
     return TCL_ERROR;
   }
 
@@ -830,7 +840,8 @@ static int motionpatchCoherenceCmd(ClientData clientData, Tcl_Interp *interp,
   double coherence;
   
   if (argc < 3) {
-    interp->result = "usage: motionpatch_coherence motionpatch coherence";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch coherence", NULL);
     return TCL_ERROR;
   }
 
@@ -869,7 +880,8 @@ static int motionpatchPointsizeCmd(ClientData clientData, Tcl_Interp *interp,
   double pointsize;
   
   if (argc < 3) {
-    interp->result = "usage: motionpatch_pointsize motionpatch pointsize";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch pointsize", NULL);
     return TCL_ERROR;
   }
 
@@ -903,7 +915,8 @@ static int motionpatchMaskTypeCmd(ClientData clientData, Tcl_Interp *interp,
   int type;
   
   if (argc < 3) {
-    interp->result = "usage: motionpatch_masktype motionpatch type";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch type", NULL);
     return TCL_ERROR;
   }
 
@@ -940,7 +953,8 @@ static int motionpatchSamplerMaskModeCmd(ClientData clientData, Tcl_Interp *inte
   int mode;
   
   if (argc < 3) {
-    interp->result = "usage: motionpatch_samplermaskmode motionpatch mode";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch mode", NULL);
     return TCL_ERROR;
   }
 
@@ -977,7 +991,8 @@ static int motionpatchMaskRadiusCmd(ClientData clientData, Tcl_Interp *interp,
   double radius;
   
   if (argc < 3) {
-    interp->result = "usage: motionpatch_maskradius motionpatch radius";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch radius", NULL);
     return TCL_ERROR;
   }
 
@@ -1011,7 +1026,8 @@ static int motionpatchColorCmd(ClientData clientData, Tcl_Interp *interp,
   int id;
 
   if (argc < 5) {
-    interp->result = "usage: motionpatch_color motionpatch r g b ?a?";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch r g b ?a?", NULL);
     return TCL_ERROR;
   }
 
@@ -1102,7 +1118,7 @@ int motionpatchShaderCreate(Tcl_Interp *interp)
     " vec3 color;"
     " if (samplerMaskMode == 0) { alpha = uColor1.a; color = uColor1.rgb; }"
     " else if (samplerMaskMode == 1) { alpha = texAlpha; color = uColor1.rgb; }"
-    " else if (samplerMaskMode == 2) { alpha = 1-texAlpha; color = uColor1.rgb; }"
+    " else if (samplerMaskMode == 2) { alpha = 1.0-texAlpha; color = uColor1.rgb; }"
     " else if (samplerMaskMode == 3) { if (texAlpha < 0.5) { alpha = uColor1.a; color = uColor1.rgb; }"
     "                                  else { alpha = uColor2.a; color = uColor2.rgb;} }"
     " frag_color = vec4 (color, alpha);"
@@ -1139,9 +1155,9 @@ int Motionpatch_Init(Tcl_Interp *interp)
 
   if (
 #ifdef USE_TCL_STUBS
-      Tcl_InitStubs(interp, "8.5", 0)
+      Tcl_InitStubs(interp, "8.5-", 0)
 #else
-      Tcl_PkgRequire(interp, "Tcl", "8.5", 0)
+      Tcl_PkgRequire(interp, "Tcl", "8.5-", 0)
 #endif
       == NULL) {
     return TCL_ERROR;

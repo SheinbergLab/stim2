@@ -606,7 +606,7 @@ static void spineUpdate(GR_OBJ *m)
 
   spAnimationState_update(s->state, delta * s->timeScale);
   spAnimationState_apply(s->state, s->skeleton);
-  spSkeleton_updateWorldTransform(s->skeleton);
+  spSkeleton_updateWorldTransform(s->skeleton, SP_PHYSICS_UPDATE);
 }
 
 
@@ -615,7 +615,7 @@ static void spineReset(GR_OBJ *m)
   SpineObject *s = (SpineObject *) GR_CLIENTDATA(m);
   s->do_reset = 1;
   //  spSkeleton_setToSetupPose(s->skeleton);
-  //  spSkeleton_updateWorldTransform(s->skeleton);
+  //  spSkeleton_updateWorldTransform(s->skeleton, SP_PHYSICS_UPDATE);
 }
 
 static void spineOn(GR_OBJ *m) 
@@ -650,7 +650,7 @@ int spineCopy(OBJ_LIST *objlist, SpineObject *source)
   spAnimationState_update(copy->state, 0.0);
   spAnimationState_apply(copy->state, copy->skeleton);
 
-  spSkeleton_updateWorldTransform(copy->skeleton);
+  spSkeleton_updateWorldTransform(copy->skeleton, SP_PHYSICS_UPDATE);
   
   copy_uniform_table(&source->program->uniformTable, &copy->uniformTable);
   copy_attrib_table(&source->program->attribTable, &copy->attribTable);
@@ -784,7 +784,7 @@ int spineCreate(OBJ_LIST *objlist, char *skelfile, char *atlasfile)
   spAnimationState_update(spineobj->state, 0.0);
   spAnimationState_apply(spineobj->state, spineobj->skeleton);
 
-  spSkeleton_updateWorldTransform(skeleton);
+  spSkeleton_updateWorldTransform(skeleton, SP_PHYSICS_UPDATE);
   spSkeleton_setSkin(skeleton, 0);
 
   spineobj->scale = 0.01;	/* fix this */
@@ -831,16 +831,17 @@ static int spCreateCmd(ClientData clientData, Tcl_Interp *interp,
   int id;
 
   if (argc < 3) {
-    interp->result = "usage: sp::create skeleton_file atlas_file";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " skeleton_file atlas_file", NULL);
     return TCL_ERROR;
   }
 
   if ((id = spineCreate(olist, argv[1], argv[2])) < 0) {
-    sprintf(interp->result,"error loading spine animation");
+    Tcl_SetResult(interp, "error loading spine animation", TCL_STATIC);
     return(TCL_ERROR);
   }
-  
-  sprintf(interp->result,"%d", id);
+
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
   return(TCL_OK);
 }
 
@@ -853,7 +854,8 @@ static int spCopyCmd(ClientData clientData, Tcl_Interp *interp,
   int id;
 
   if (argc < 2) {
-    interp->result = "usage: sp::copy spine_object";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " spine_obj", NULL);
     return TCL_ERROR;
   }
   
@@ -871,11 +873,11 @@ static int spCopyCmd(ClientData clientData, Tcl_Interp *interp,
   s = (SpineObject *) GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if ((id = spineCopy(olist, s)) < 0) {
-    sprintf(interp->result,"error copying spine object");
+    Tcl_SetResult(interp, "error copying spine object", TCL_STATIC);
     return(TCL_ERROR);
   }
   
-  sprintf(interp->result,"%d", id);
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
   return(TCL_OK);
 }
 
@@ -887,8 +889,8 @@ static int spGetBoundsCmd(ClientData clientData, Tcl_Interp *interp,
   int id;
 
   if (argc < 2) {
-    interp->result = 
-      "usage: sp::getBounds spine_object";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " spine_obj", NULL);
     return TCL_ERROR;
   }
   
@@ -905,9 +907,12 @@ static int spGetBoundsCmd(ClientData clientData, Tcl_Interp *interp,
   }
   s = (SpineObject *) GR_CLIENTDATA(OL_OBJ(olist,id));
 
-  sprintf(interp->result, "%f %f %f %f", 
-	  s->bounds->minX, s->bounds->minY, 
-	  s->bounds->maxX, s->bounds->maxY);
+  Tcl_Obj *listPtr = Tcl_NewListObj(0, NULL);
+  Tcl_ListObjAppendElement(interp, listPtr, Tcl_NewDoubleObj(s->bounds->minX));
+  Tcl_ListObjAppendElement(interp, listPtr, Tcl_NewDoubleObj(s->bounds->minY));
+  Tcl_ListObjAppendElement(interp, listPtr, Tcl_NewDoubleObj(s->bounds->maxX));
+  Tcl_ListObjAppendElement(interp, listPtr, Tcl_NewDoubleObj(s->bounds->maxY));
+  Tcl_SetObjResult(interp, listPtr);
   return(TCL_OK);
 }
 
@@ -927,8 +932,8 @@ static int spSetAddAnimationByNameCmd(ClientData clientData, Tcl_Interp *interp,
 
   if (setAnimation) {
     if (argc < 3) {
-      interp->result = 
-	"usage: sp::setAnimationByName spine_object anim track ?loop?";
+      Tcl_AppendResult(interp, "usage: ", argv[0],
+		       " spine_obj anim track ?loop?", NULL);
       return TCL_ERROR;
     }
     
@@ -936,7 +941,7 @@ static int spSetAddAnimationByNameCmd(ClientData clientData, Tcl_Interp *interp,
       if (Tcl_GetInt(interp, argv[3], &track) != TCL_OK)
 	return TCL_ERROR;
     }
-
+    
     if (argc > 4) {
       if (Tcl_GetInt(interp, argv[4], &loop) != TCL_OK)
 	return TCL_ERROR;
@@ -944,8 +949,8 @@ static int spSetAddAnimationByNameCmd(ClientData clientData, Tcl_Interp *interp,
   } 
   else {
     if (argc < 3) {
-      interp->result = 
-	"usage: sp::addAnimationByName spine_object anim ?track? ?loop? ?delay?";
+      Tcl_AppendResult(interp, "usage: ", argv[0],
+		       " spine_obj anim ?track? ?loop? ?delay?", NULL);
       return TCL_ERROR;
     }
     
@@ -953,18 +958,18 @@ static int spSetAddAnimationByNameCmd(ClientData clientData, Tcl_Interp *interp,
       if (Tcl_GetInt(interp, argv[3], &track) != TCL_OK)
 	return TCL_ERROR;
     }
-
+    
     if (argc > 4) {
       if (Tcl_GetInt(interp, argv[4], &loop) != TCL_OK)
 	return TCL_ERROR;
     }
-
+    
     if (argc > 5) {
       if (Tcl_GetDouble(interp, argv[5], &delay) != TCL_OK)
 	return TCL_ERROR;
     }
   }
-
+  
   if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
   if (id >= OL_NOBJS(olist)) {
     Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
@@ -977,9 +982,10 @@ static int spSetAddAnimationByNameCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
   s = (SpineObject *) GR_CLIENTDATA(OL_OBJ(olist,id));
-
+  
   if (!spSkeletonData_findAnimation(s->skeletonData, argv[2])) {
-    Tcl_AppendResult(interp, argv[0], ": animation \"", argv[2], "\" not found", NULL);
+    Tcl_AppendResult(interp, argv[0], ": animation \"",
+		     argv[2], "\" not found", NULL);
     return TCL_ERROR;
   }
 
@@ -991,12 +997,12 @@ static int spSetAddAnimationByNameCmd(ClientData clientData, Tcl_Interp *interp,
     result =  spAnimationState_addAnimationByName(s->state, 
 						  track, argv[2], loop, delay);
   }
-
+  
   /* Update to in preparation for first draw */
   // spSkeleton_update(s->skeleton, 0);
   spAnimationState_update(s->state, 0);
   spAnimationState_apply(s->state, s->skeleton);
-  spSkeleton_updateWorldTransform(s->skeleton);
+  spSkeleton_updateWorldTransform(s->skeleton, SP_PHYSICS_UPDATE);
   
   return(TCL_OK);
 }
@@ -1154,9 +1160,9 @@ int Spine_Init(Tcl_Interp * interp)
 
   if (
 #ifdef USE_TCL_STUBS
-      Tcl_InitStubs(interp, "8.5", 0)
+      Tcl_InitStubs(interp, "8.5-", 0)
 #else
-      Tcl_PkgRequire(interp, "Tcl", "8.5", 0)
+      Tcl_PkgRequire(interp, "Tcl", "8.5-", 0)
 #endif
       == NULL) {
     return TCL_ERROR;

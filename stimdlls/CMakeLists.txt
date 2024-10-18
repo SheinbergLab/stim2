@@ -7,7 +7,7 @@ set(CMAKE_BUILD_TYPE Release)
 
 option(STIM2_USE_GLES "use GLES" OFF)
 
-add_definitions(-DUSE_INTERP_RESULT -DUSE_TCL_STUBS)
+add_definitions(-DUSE_TCL_STUBS)
 
 if (STIM2_USE_GLES)
 add_definitions(-DSTIM2_USE_GLES)
@@ -116,14 +116,14 @@ endif()
 #add_library(sound SHARED src/sound.c ${GLAD})
 
 ###############################
-# Box2Dstim
-###############################
-add_library(Box2Dstim SHARED src/Box2Dstim.cpp ${GLAD})
-
-###############################
 # spine
 ###############################
  add_library(spine SHARED src/spine.c src/shaderutils.c src/bstrlib.c src/glsw.c src/lodepng.c ${GLAD})
+
+###############################
+# Box2D
+###############################
+add_library(box2d SHARED src/box2d.c ${GLAD})
 
 ###############################
 # creature
@@ -146,7 +146,7 @@ if(WIN32)
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
 	set(DLSH dlsh64.lib)
 	set(LAB lablib64.lib)
-	set(TCLLIB tclstub86.lib)
+	set(TCLLIB tclstub.lib)
 	set(CMAKE_EXE_MODULE_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /NODEFAULTLIB:libcmt /NODEFAULTLIB:MSCVRT /def:${DEF_FILE}")
 	set(APP_LIB stim2.lib)
 	set(SPINE_LIB spine-c.lib)
@@ -160,7 +160,7 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 8)
 elseif(CMAKE_SIZEOF_VOID_P EQUAL 4)
 	set(DLSH dlsh.lib)
 	set(LAB lablib.lib)
-	set(TCLLIB tclstub86.lib)
+	set(TCLLIB tclstub.lib)
 	set(CMAKE_EXE_MODULE_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /NODEFAULTLIB:libcmt /NODEFAULTLIB:MSCVRT /def:${DEF_FILE}")
 	set(APP_LIB "${CMAKE_CURRENT_SOURCE_DIR}/../build_win32/stim2.lib")
 	set(SPINE_LIB spine-c.lib)
@@ -170,7 +170,7 @@ elseif(CMAKE_SIZEOF_VOID_P EQUAL 4)
 endif()
 elseif(APPLE)
 	set(MAIN_APP "${CMAKE_CURRENT_SOURCE_DIR}/../build_macos/stim2")
-	set(TCLLIB tclstub8.6)
+	set(TCLLIB tclstub)
 	set(FMOD_LIB fmod)
 ### See if can use: -undefined dynamic_lookup
 #	set(BUNDLE_LOAD "-bundle_loader ${MAIN_APP}")
@@ -183,28 +183,29 @@ elseif(APPLE)
 	find_library(FREETYPE NAMES "libfreetype.a")
 	find_library(PNG NAMES "libpng16.a")
 	
-	foreach (module polygon metagroup shader mesh motionpatch Box2Dstim bink spine text)
+	foreach (module polygon metagroup shader mesh motionpatch box2d bink spine text)
 	 set_target_properties(${module} PROPERTIES PREFIX "")
 #	 set_target_properties(${module} PROPERTIES SUFFIX .bundle)
  	endforeach()
 
 else()
-	#	foreach (module polygon metagroup shader mesh motionpatch newtonstim Box2Dstim bink spine creature)
-	foreach (module polygon metagroup shader mesh motionpatch text)
+	#	foreach (module polygon metagroup shader mesh motionpatch newtonstim box2d bink spine creature)
+	foreach (module polygon metagroup shader mesh motionpatch text box2d)
 	 set_target_properties(${module} PROPERTIES PREFIX "")
  	endforeach()
 
 	set(SPINE_LIB spine-c)
 	set(NEWTON_LIB Newton)
-	set(BOX2D_LIB box2d)
+	find_library(BOX2D_LIB NAMES "libbox2d.a")
+#	set(BOX2D_LIB box2d)
 #	set(BINK_LIB Bink2x64)	
-	set(BINK_LIB ${CMAKE_CURRENT_SOURCE_DIR}/../deps/bink/lib/linux/bink2lnx64.a)
+	set(BINK_LIB ${CMAKE_CURRENT_SOURCE_DIR}/../deps/bink/lib/linux/bink2lnxarm64.a)
 	find_library(LIBDL dl)
 	find_library(LIBPTHREAD pthread)
 	find_library(LIBOPENAL openal)
 	set(FMOD_LIB fmod)
 	set(LAB lab)
-	set(TCLLIB tclstub8.6)
+	set(TCLLIB tclstub)
 endif()
 
 foreach (module polygon metagroup shader mesh )
@@ -231,9 +232,9 @@ elseif(LINUX)
 endif()
 
 if (WIN32)
-target_link_libraries(Box2Dstim ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${BOX2D_LIB} ${APP_LIB} "-def:${BOX2D_DEF_FILE}")
+target_link_libraries(box2d ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${BOX2D_LIB} ${APP_LIB} "-def:${BOX2D_DEF_FILE}")
 else()
-target_link_libraries(Box2Dstim ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${BOX2D_LIB} ${APP_LIB})
+target_link_libraries(box2d ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${BOX2D_LIB} ${APP_LIB})
 endif()
 
 target_link_libraries(spine ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${SPINE_LIB} ${APP_LIB})

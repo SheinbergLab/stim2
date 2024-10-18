@@ -130,7 +130,7 @@ int add_defaults_to_table(Tcl_Interp *interp, Tcl_HashTable *dtable,
   char sname[256];
   const char *u;
   char *pch;
-  int argc;
+  Tcl_Size argc;
   char **argv;
   Tcl_HashEntry *entryPtr;
   int newentry;
@@ -154,7 +154,7 @@ int add_defaults_to_table(Tcl_Interp *interp, Tcl_HashTable *dtable,
   pch = (char *) strtok((char *) u, "\n");
   while (pch != NULL) {
     if (pch[0] != '#') {
-      if (Tcl_SplitList(interp, pch, &argc, &argv) == TCL_OK) {
+      if (Tcl_SplitList(interp, pch, &argc, (const char ***) &argv) == TCL_OK) {
 	if (argc == 2) {
 	  entryPtr = Tcl_CreateHashEntry(dtable, argv[0], &newentry);
 	  Tcl_SetHashValue(entryPtr, argv[1]);
@@ -376,14 +376,14 @@ int build_prog_from_file(SHADER_PROG *sp, char *shadername, int verbose)
   sprintf(sname, "%s.Vertex", shadername);
   v = glswGetShader(sname);
   if (!v) {
-    fprintf(stdout, glswGetError());
+    fprintf(stdout, "%s", glswGetError());
     goto error;
   }
 
   sprintf(sname, "%s.Fragment", shadername);
   f = glswGetShader(sname);
   if (!f) {
-    fprintf(stdout, glswGetError());
+    fprintf(stdout, "%s", glswGetError());
     goto error;
   }
   

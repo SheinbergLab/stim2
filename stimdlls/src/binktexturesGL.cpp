@@ -612,7 +612,7 @@ static S32 Shader_BuildOurShaders( BINKSHADERSGL * shaders )
 {
 
 #if defined(TARGET_GL_CORE) 
-  #define SHADER_HEADER "#define mediump\n"
+  #define SHADER_HEADER "precision mediump float;\n"
 #elif defined(TARGET_GL_ES)
   #define SHADER_HEADER
 #endif

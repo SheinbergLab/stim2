@@ -514,7 +514,7 @@ static int textcolorCmd(ClientData clientData, Tcl_Interp *interp,
   int id;
 
   if (argc < 5) {
-    interp->result = "usage: textcolor text r g b ?a?";
+    Tcl_AppendResult(interp, "usage: ", argv[0], " text r g b ?a?", NULL);
     return TCL_ERROR;
   }
 
@@ -633,19 +633,14 @@ static int textCmd(ClientData clientData, Tcl_Interp *interp,
   int id;
   char *string = "text";
   
-  if (argc < 1) {
-    interp->result = "usage: text [string]";
-    return TCL_ERROR;
-  }
-
   if (argc > 1) string = argv[1];
   
   if ((id = textCreate(olist, TextShaderProg, string)) < 0) {
-    sprintf(interp->result,"error creating text");
+    Tcl_SetResult(interp, "error creating text", TCL_STATIC);
     return(TCL_ERROR);
   }
   
-  sprintf(interp->result,"%d", id);
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
   return(TCL_OK);
 }
 
@@ -723,9 +718,9 @@ int Text_Init(Tcl_Interp *interp)
   
   if (
 #ifdef USE_TCL_STUBS
-      Tcl_InitStubs(interp, "8.5", 0)
+      Tcl_InitStubs(interp, "8.5-", 0)
 #else
-      Tcl_PkgRequire(interp, "Tcl", "8.5", 0)
+      Tcl_PkgRequire(interp, "Tcl", "8.5-", 0)
 #endif
       == NULL) {
     return TCL_ERROR;

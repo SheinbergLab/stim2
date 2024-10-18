@@ -238,7 +238,8 @@ static int videoCmd(ClientData clientData, Tcl_Interp *interp,
   int play_audio = 1;
 
   if (argc < 2) {
-    interp->result = "usage: video binkfile ?play_audio? ?rate?";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " binkfile ?play_audio? ?rate?", NULL);
     return TCL_ERROR;
   }
 
@@ -253,11 +254,12 @@ static int videoCmd(ClientData clientData, Tcl_Interp *interp,
   }
 
   if ((id = videoCreate(olist, argv[1], rate, play_audio)) < 0) {
-    sprintf(interp->result,"error loading bink video");
+    Tcl_SetResult(interp, "error loading bink video", TCL_STATIC);
     return(TCL_ERROR);
   }
-  
-  sprintf(interp->result,"%d", id);
+
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
+
   return(TCL_OK);
 }
 
@@ -270,8 +272,8 @@ static int videoSetRepeatModeCmd(ClientData clientData, Tcl_Interp *interp,
   int id;
   
   if (argc < 3) {
-    interp->result = 
-      "usage: video_setRepeatMode bink_object NORMAL|ONESHOT";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " bink_object NORMAL|ONESHOT", NULL);
     return TCL_ERROR;
   }
   
@@ -308,8 +310,8 @@ static int videoSetCoordsCmd(ClientData clientData, Tcl_Interp *interp,
   double x0, y0, x1, y1;
   
   if (argc != 2 && argc < 5) {
-    interp->result = 
-      "usage: video_setCoords bink_object x0 y0 x1 y1";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " bink_object x0 y0 x1 y1", NULL);
     return TCL_ERROR;
   }
   
@@ -327,11 +329,14 @@ static int videoSetCoordsCmd(ClientData clientData, Tcl_Interp *interp,
   b = (BINK_VIDEO *) GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (argc == 2) {
-    sprintf(interp->result, "%.3f %3f %3f %3f",
-	    b->x0, b->y0, b->x1, b->y1);
+    Tcl_Obj *listPtr = Tcl_NewListObj(0, NULL);
+    Tcl_ListObjAppendElement(interp, listPtr, Tcl_NewDoubleObj(b->x0));
+    Tcl_ListObjAppendElement(interp, listPtr, Tcl_NewDoubleObj(b->y0));
+    Tcl_ListObjAppendElement(interp, listPtr, Tcl_NewDoubleObj(b->x1));
+    Tcl_ListObjAppendElement(interp, listPtr, Tcl_NewDoubleObj(b->y1));
+    Tcl_SetObjResult(interp, listPtr);
     return TCL_OK;
   }
-
 
   if (Tcl_GetDouble(interp, argv[2], &x0) != TCL_OK) return TCL_ERROR;
   if (Tcl_GetDouble(interp, argv[3], &y0) != TCL_OK) return TCL_ERROR;
@@ -357,8 +362,8 @@ static int videoSetGrayscaleCmd(ClientData clientData, Tcl_Interp *interp,
   int grayscale;
   
   if (argc != 3) {
-    interp->result = 
-      "usage: video_setGrayscale bink_object grayscale";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " bink_object grayscale", NULL);
     return TCL_ERROR;
   }
   
@@ -392,7 +397,8 @@ static int videoPauseCmd(ClientData clientData, Tcl_Interp *interp,
   int pause;
   
   if (argc < 3) {
-    interp->result = "usage: video_pause video_object 0|1";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " bink_object 0|1", NULL);
     return TCL_ERROR;
   }
   
@@ -425,7 +431,8 @@ static int videoSetFrameLimitsCmd(ClientData clientData, Tcl_Interp *interp,
   int start, stop;
   
   if (argc < 4) {
-    interp->result = "usage: video_setFrameLimits video_object start stop";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " bink_object start stop", NULL);
     return TCL_ERROR;
   }
   
@@ -462,7 +469,8 @@ static int videoTimerScriptCmd(ClientData clientData, Tcl_Interp *interp,
   int id;
   
   if (argc < 3) {
-    interp->result = "usage: video_timerScript video_object script";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " bink_object script", NULL);
     return TCL_ERROR;
   }
   
@@ -494,8 +502,8 @@ static int videoGetInfoCmd(ClientData clientData, Tcl_Interp *interp,
   int id;
 
   if (argc < 2) {
-    interp->result = 
-      "usage: video_getinfo bink_object";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " bink_object", NULL);
     return TCL_ERROR;
   }
   
@@ -513,12 +521,14 @@ static int videoGetInfoCmd(ClientData clientData, Tcl_Interp *interp,
   b = (BINK_VIDEO *) GR_CLIENTDATA(OL_OBJ(olist,id));
   BinkGetSummary(b->bink, &summary);
 
-  sprintf(interp->result, "%d %d %f %f %f %f %.0f %d", 
+  char resultstr[256];
+  sprintf(resultstr, "%d %d %f %f %f %f %.0f %d", 
 	  summary.Width, summary.Height,
 	  b->x0, b->y0, b->x1, b->y1,
 	  1000.*((float) (summary.TotalFrames) /
 		 ((float) (summary.FrameRate)/summary.FrameRateDiv)),
 	  b->cur_frame);
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(resultstr, -1));
   return(TCL_OK);
 }
 
@@ -530,8 +540,7 @@ static int videoFileInfoCmd(ClientData clientData, Tcl_Interp *interp,
   BINKSUMMARY summary;  
 
   if (argc < 2) {
-    interp->result = 
-      "usage: video_fileInfo filename";
+    Tcl_AppendResult(interp, "usage: ", argv[0], " filename", NULL);
     return TCL_ERROR;
   }
 
@@ -543,12 +552,19 @@ static int videoFileInfoCmd(ClientData clientData, Tcl_Interp *interp,
   }
   BinkGetSummary(bink, &summary);
   BinkClose(bink);
+  
+  Tcl_Obj *listPtr = Tcl_NewListObj(0, NULL);
+  Tcl_ListObjAppendElement(interp, listPtr, Tcl_NewIntObj(summary.Width));
+  Tcl_ListObjAppendElement(interp, listPtr, Tcl_NewIntObj(summary.Height));
+  Tcl_ListObjAppendElement(interp, listPtr,
+			   Tcl_NewDoubleObj((summary.FileFrameRate/
+					     (float) summary.FileFrameRateDiv)));
+  Tcl_ListObjAppendElement(interp, listPtr,
+			   Tcl_NewDoubleObj(1000.*((float) (summary.TotalFrames) /
+						   ((float) (summary.FileFrameRate)/
+						    summary.FileFrameRateDiv))));
+  Tcl_SetObjResult(interp, listPtr);
 
-  sprintf(interp->result, "%d %d %.3f %.0f", 
-	  summary.Width, summary.Height,
-	  summary.FileFrameRate / (float) summary.FileFrameRateDiv,
-	  1000.*((float) (summary.TotalFrames) /
-	   ((float) (summary.FileFrameRate)/summary.FileFrameRateDiv)));
   return(TCL_OK);
 }
 
@@ -564,8 +580,7 @@ static int videoGetSummaryCmd(ClientData clientData, Tcl_Interp *interp,
   char buf[64];
 
   if (argc < 2) {
-    interp->result = 
-      "usage: video_getSummary bink_object";
+    Tcl_AppendResult(interp, "usage: ", argv[0], " bink_object", NULL);
     return TCL_ERROR;
   }
   
@@ -672,9 +687,9 @@ int Bink_Init(Tcl_Interp *interp)
 
   if (
 #ifdef USE_TCL_STUBS
-      Tcl_InitStubs(interp, "8.5", 0)
+      Tcl_InitStubs(interp, "8.5-", 0)
 #else
-      Tcl_PkgRequire(interp, "Tcl", "8.5", 0)
+      Tcl_PkgRequire(interp, "Tcl", "8.5-", 0)
 #endif
       == NULL) {
     return TCL_ERROR;

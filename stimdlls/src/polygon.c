@@ -303,16 +303,16 @@ static int polygonCmd(ClientData clientData, Tcl_Interp *interp,
   OBJ_LIST *olist = (OBJ_LIST *) clientData;
   int id;
   if (argc < 1) {
-    interp->result = "usage: polygon";
+    Tcl_AppendResult(interp, "usage:", argv[0], NULL);
     return TCL_ERROR;
   }
 
   if ((id = polygonCreate(olist, PolygonShaderProg)) < 0) {
-    sprintf(interp->result,"error creating polygon");
+    Tcl_SetResult(interp, "error creating polygon", TCL_STATIC);
     return(TCL_ERROR);
   }
   
-  sprintf(interp->result,"%d", id);
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
   return(TCL_OK);
 }
 
@@ -326,7 +326,7 @@ static int polycircCmd(ClientData clientData, Tcl_Interp *interp,
   int id, circ;
 
   if (argc < 3) {
-    interp->result = "usage: polycirc polygon 0|1";
+    Tcl_AppendResult(interp, "usage:", argv[0], " polygon 0|1", NULL);
     return TCL_ERROR;
   }
 
@@ -512,7 +512,8 @@ static int polyvertsCmd(ClientData clientData, Tcl_Interp *interp,
   int nverts;
 
   if (argc < 4) {
-    interp->result = "usage: polyverts polygon xlist ylist [zlist]";
+    Tcl_AppendResult(interp, "usage:", argv[0],
+		     "polygon xlist ylist [zlist]", NULL);
     return TCL_ERROR;
   }
 
@@ -569,7 +570,7 @@ static int polytexcoordsCmd(ClientData clientData, Tcl_Interp *interp,
   int nverts;
 
   if (argc < 4) {
-    interp->result = "usage: polytexcoords polygon xlist ylist";
+    Tcl_AppendResult(interp, "usage: ", argv[0], " polygon xlist ylist", NULL);
     return TCL_ERROR;
   }
 
@@ -615,7 +616,7 @@ static int polycolorCmd(ClientData clientData, Tcl_Interp *interp,
   int id;
 
   if (argc < 5) {
-    interp->result = "usage: polycolor polygon r g b ?a?";
+    Tcl_AppendResult(interp, "usage: ", argv[0], " polygon r g b ?a?", NULL);
     return TCL_ERROR;
   }
 
@@ -663,7 +664,7 @@ static int polycolorindexCmd(ClientData clientData, Tcl_Interp *interp,
   int id;
 
   if (argc < 3) {
-    interp->result = "usage: polycolorIndex polygon index";
+    Tcl_AppendResult(interp, "usage: ", argv[0], " polygon index", NULL);
     return TCL_ERROR;
   }
 
@@ -696,7 +697,8 @@ static int polyfillCmd(ClientData clientData, Tcl_Interp *interp,
   double linewidth;
   
   if (argc < 3) {
-    interp->result = "usage: polyfill polygon fill? linewidth";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " polygon fill? linewidth", NULL);
     return TCL_ERROR;
   }
 
@@ -734,7 +736,8 @@ static int polytypeCmd(ClientData clientData, Tcl_Interp *interp,
   double size;
   
   if (argc < 3) {
-    interp->result = "usage: polytype polygon type";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " polygon type", NULL);
     return TCL_ERROR;
   }
 
@@ -807,7 +810,8 @@ static int polyangleCmd(ClientData clientData, Tcl_Interp *interp,
   int angle, id;
   
   if (argc < 3) {
-    interp->result = "usage: polyangle polygon angle";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " polygon angle", NULL);
     return TCL_ERROR;
   }
 
@@ -840,7 +844,8 @@ static int polypointsizeCmd(ClientData clientData, Tcl_Interp *interp,
   double size;
   
   if (argc < 3) {
-    interp->result = "usage: polypointsize polygon pointsize";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " polygon pointsize", NULL);
     return TCL_ERROR;
   }
 
@@ -873,7 +878,8 @@ static int polyaaCmd(ClientData clientData, Tcl_Interp *interp,
   int id, aa;
   
   if (argc < 3) {
-    interp->result = "usage: polyaa polygon aa?";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " polygon aa", NULL);
     return TCL_ERROR;
   }
 
@@ -976,9 +982,9 @@ int Polygon_Init(Tcl_Interp *interp)
   
   if (
 #ifdef USE_TCL_STUBS
-      Tcl_InitStubs(interp, "8.5", 0)
+      Tcl_InitStubs(interp, "8.5-", 0)
 #else
-      Tcl_PkgRequire(interp, "Tcl", "8.5", 0)
+      Tcl_PkgRequire(interp, "Tcl", "8.5-", 0)
 #endif
       == NULL) {
     return TCL_ERROR;

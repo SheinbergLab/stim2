@@ -713,8 +713,8 @@ static int meshObjCmd(ClientData clientData, Tcl_Interp *interp,
 
   /* now copy default uniform values from shader program */
   set_default_uniforms(interp, GR_CLIENTDATA(OL_OBJ(olist,id)));
-  
-  sprintf(interp->result,"%d", id);
+
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
   return(TCL_OK);
 }
 
@@ -1650,9 +1650,9 @@ int Mesh_Init(Tcl_Interp *interp)
 
   if (
 #ifdef USE_TCL_STUBS
-      Tcl_InitStubs(interp, "8.5", 0)
+      Tcl_InitStubs(interp, "8.5-", 0)
 #else
-      Tcl_PkgRequire(interp, "Tcl", "8.5", 0)
+      Tcl_PkgRequire(interp, "Tcl", "8.5-", 0)
 #endif
       == NULL) {
     return TCL_ERROR;

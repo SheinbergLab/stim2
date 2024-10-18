@@ -50,7 +50,7 @@
 
 #define MAX_IMAGES 8192		/* each collection can contain  */
 
-extern struct _imagelist;
+struct _imagelist;
 
 typedef struct _imagedata {
   int id;			/* handle for this image data  */
@@ -185,7 +185,8 @@ int imageLoadCmd(ClientData clientData, Tcl_Interp *interp,
   int grayscale = 0;
 
   if (argc < 2) {
-    interp->result = "usage: imgload filename [width height] [filter]";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " filename [width height] [filter]", NULL);
     return TCL_ERROR;
   }
 
@@ -210,24 +211,24 @@ int imageLoadCmd(ClientData clientData, Tcl_Interp *interp,
 		      contrast, format, grayscale, listid)) < 0) {
     char buf[128];
     if (strlen(argv[1]) < 128) 
-      sprintf(interp->result,"%s: unable to load image \"%s\"", 
-	      argv[0], argv[1]);
+      Tcl_AppendResult(interp, argv[0],
+		       ": unable to load image \"", argv[1], "\"", NULL);
     else {
       strncpy(buf, argv[1], 100);
       buf[100] = '\0';		/* null terminate... */
-      sprintf(interp->result,"%s: unable to load image \"%s...\"", 
-	      argv[0], buf);
+      Tcl_AppendResult(interp, argv[0],
+		       ": unable to load image \"", buf, "...\"", NULL);
     }
     return(TCL_ERROR);
   }
 
-  sprintf(interp->result,"%d", id);
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
 
   return(TCL_OK);
 }
 
 int imageSetFilterType(ClientData cdata, Tcl_Interp * interp, 
-		       int objc, Tcl_Obj * CONST objv[])
+		       int objc, Tcl_Obj * const objv[])
 {
   if (objc < 2) {
     Tcl_WrongNumArgs(interp, 1, objv, "filter");
@@ -257,7 +258,7 @@ int imageTextureIDCmd(ClientData  clientData, Tcl_Interp *interp,
   int imageid;
 
   if (argc < 2) {
-    interp->result = "usage: imgTextureID imageid";
+    Tcl_AppendResult(interp, "usage: ", argv[0], " imageid", NULL);
     return TCL_ERROR;
   }
   
@@ -267,7 +268,7 @@ int imageTextureIDCmd(ClientData  clientData, Tcl_Interp *interp,
     return(TCL_ERROR);
   }
 
-  sprintf(interp->result,"%d", imagelist->texids[imageid]);
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(imagelist->texids[imageid]));
   return(TCL_OK);
 }
 
@@ -497,7 +498,8 @@ int imageCreateCmd(ClientData clientData, Tcl_Interp *interp,
   int nlayers = 0;
   
   if (argc < 4) {
-    interp->result = "usage: imgcreate dynlist width height [filter format]";
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " dynlist width height [filter format]", NULL);
     return TCL_ERROR;
   }
 
@@ -520,22 +522,24 @@ int imageCreateCmd(ClientData clientData, Tcl_Interp *interp,
 
   if ((id = imageCreate(dl, w, h, nlayers,
 			filter, contrast, format, listid)) < 0) {
-    sprintf(interp->result,"%s: unable to create image from dynlist \"%s\"", 
-	    argv[0], argv[1]);
+    Tcl_AppendResult(interp, argv[0],
+		     ": unable to create image from dynlist \"", argv[1],
+		     "\"", NULL);
     return(TCL_ERROR);
   }
 
-  sprintf(interp->result,"%d", id);
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
 
   return(TCL_OK);
 }
 
 
 int imageCreateFromStringCmd(ClientData cdata, Tcl_Interp * interp, 
-				    int objc, Tcl_Obj * CONST objv[])
+				    int objc, Tcl_Obj * const objv[])
 {
   unsigned char *data;
-  int id, length;
+  int id;
+  Tcl_Size length;
   float contrast = 1.0;
   DYN_LIST *dl;
   int w = 0, h = 0, filter = GL_NEAREST, format = -1;
@@ -548,22 +552,22 @@ int imageCreateFromStringCmd(ClientData cdata, Tcl_Interp * interp,
   
   data = (unsigned char *) Tcl_GetByteArrayFromObj(objv[1], &length);
   if (!data) {
-    sprintf(interp->result,"imgfromstring: invalid data");
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": invalid data");
     return(TCL_ERROR);
   }
-
+  
   if (Tcl_GetIntFromObj(interp, objv[2], &w) != TCL_OK) return TCL_ERROR;
   if (Tcl_GetIntFromObj(interp, objv[3], &h) != TCL_OK) return TCL_ERROR;
 
   if (objc > 4) {
-    char *filtername = Tcl_GetStringFromObj(interp, objv[4]);
+    char *filtername = Tcl_GetString(objv[4]);
     if (!strcmp(filtername, "NEAREST") || !strcmp(filtername, "nearest")) 
       filter = GL_NEAREST;
     else if (!strcmp(filtername, "LINEAR") || !strcmp(filtername, "linear")) 
       filter = GL_LINEAR;
   }
   if (objc > 5) {
-    char *formatname = Tcl_GetStringFromObj(interp, objv[5]);
+    char *formatname = Tcl_GetString(objv[5]);
     if (!strcmp(formatname, "ALPHA") || !strcmp(formatname, "alpha")) 
       format = GL_ALPHA;
   }
@@ -578,15 +582,18 @@ int imageCreateFromStringCmd(ClientData cdata, Tcl_Interp * interp,
   
   if ((id = imageCreate(dl, w, h, nlayers,
 			filter, contrast, format, 0)) < 0) {
-    sprintf(interp->result,"%s: unable to create image from dynlist \"%s\"", 
-	    Tcl_GetStringFromObj(interp, objv[0]), 
-	    Tcl_GetStringFromObj(interp, objv[1]));
+    Tcl_AppendResult(interp, 
+		     Tcl_GetString(objv[0]),
+		     ": unable to create image from dynlist \"",
+		     Tcl_GetString(objv[1]), "\"", NULL); 
+
     dfuFreeDynList(dl);
     return(TCL_ERROR);
   }
 
   dfuFreeDynList(dl);
-  sprintf(interp->result,"%d", id);
+
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
   return(TCL_OK);
 }
 
