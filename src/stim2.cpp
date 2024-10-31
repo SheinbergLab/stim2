@@ -16,13 +16,6 @@
 #include <filesystem>
 #endif
 
-#if 0
-// Sockpp support
-#include <sockpp/tcp_acceptor.h>
-#include <sockpp/udp_socket.h>
-#include <sockpp/version.h>
-#endif
-
 #ifdef _WIN32
 #include <Ws2tcpip.h>
 #include <Winsock2.h>
@@ -1390,11 +1383,11 @@ public:
     
     addTclCommands(interp);
 
-    Tcl_VarEval(interp, "set auto_path \"", curdir,
-        "/../lib $auto_path\"", NULL);
-
-    Tcl_VarEval(interp, "package require dlsh; dl_noOp", NULL);
-    Tcl_VarEval(interp, "package require dgserver", NULL);
+    Tcl_VarEval(interp, "set dlshroot [file join [zipfs root] dlsh]", NULL);
+    Tcl_VarEval(interp, "zipfs mount /usr/local/dlsh/dlsh.zip $dlshroot", NULL);
+    Tcl_VarEval(interp, "set auto_path [linsert $auto_path [set auto_path 0] $dlshroot/lib]", NULL);
+    Tcl_VarEval(interp, "package require dlsh", NULL);
+    Tcl_VarEval(interp, "package require qpcs", NULL);
 #ifdef _WIN32
     Tcl_VarEval(interp, "set env(PATH) \"stimdlls;"
         "[file dir [info nameofexecutable]]/stimdlls;$env(PATH)\"",
@@ -1452,15 +1445,13 @@ public:
       std::cerr << "Error initialializing tcl interpreter" << std::endl;
     }
 #ifdef __APPLE__
-    if (TclZipfs_Mount(interp, "/Applications/stim2.app/Contents/Resources/stim2.zip", "app", NULL) != TCL_OK) {
-#else
-    if (TclZipfs_Mount(interp, "/usr/local/share/stim2/stim2.zip", "app", NULL) != TCL_OK) {
+    //    if (TclZipfs_Mount(interp, "/Applications/stim2.app/Contents/Resources/stim2.zip", "app", NULL) != TCL_OK) {
+    //      std::cerr << "stim2: error mounting zipfs" << std::endl;
+    //    }
 #endif
-      std::cerr << "stim2: error mounting zipfs" << std::endl;
-    }
   
     TclZipfs_AppHook(&argc, &argv);
-    
+
     /*
      * Invoke application-specific initialization.
      */
