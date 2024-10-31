@@ -31,7 +31,6 @@ else()
 	add_definitions(-DLINUX)
 	include_directories(${APP_DIR} /usr/local/include)
 	link_directories(/usr/local/lib)
-	set(TCL_INCLUDE_DIR /usr/include/tcl8.6)
 	set(LIBDL dl)
 	set(FREETYPE freetype)
 	
@@ -113,7 +112,7 @@ endif()
 # sound
 ###############################
 #include_directories(/usr/local/include/fmod)
-#add_library(sound SHARED src/sound.c ${GLAD})
+add_library(sound SHARED src/sound.c ${GLAD})
 
 ###############################
 # spine
@@ -216,7 +215,7 @@ target_link_libraries(motionpatch ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPE
 
 target_link_libraries(text ${DLSH}  ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${LIBMATH} ${APP_LIB} ${FREETYPE} ${PNG} ${ZLIB})
 
-#target_link_libraries(sound ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${LIBMATH} ${APP_LIB} ${FMOD_LIB})
+target_link_libraries(sound ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${LIBMATH} ${APP_LIB})
 
 if(APPLE)
 target_link_libraries(bink ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} "-framework CoreAudio" ${BINK_LIB} ${LIBDL} ${LIBPTHREAD})
