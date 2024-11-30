@@ -2451,6 +2451,7 @@ main(int argc, char *argv[]) {
   glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+  glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);  
 #endif
 
   glfwWindowHint (GLFW_REFRESH_RATE, refresh);
