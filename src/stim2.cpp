@@ -1359,8 +1359,8 @@ public:
                   NextFrameTime = -1;
                   kickAnimation();
                 }
-                tqueue.push_back(StimTime);
-                glfwPostEmptyEvent();
+		tqueue.push_back(StimTime);
+		glfwPostEmptyEvent();
                   });
   }
 
@@ -1822,6 +1822,9 @@ void Application::tcp_client_process(int sockfd,
     // Add a newline, and send the buffer including the null termination
     s = s+"\n";
     wrval = write(sockfd, s.c_str(), s.size());
+    if (wrval < 0) {		// couldn't send to client
+      break;
+    }
   }
   // std::cout << "Connection closed from " << sock.peer_address() << std::endl;
   close(sockfd);
@@ -2390,7 +2393,7 @@ main(int argc, char *argv[]) {
   int width = 640, height = 480;
   int xpos = 30, ypos = 30;
   float refresh = 60;
-  int interval = 2;
+  int interval = 1;
   const char *startup_file = NULL;
   bool updated_display = false;
 
@@ -2581,7 +2584,7 @@ main(int argc, char *argv[]) {
 
   app.timer_interval = interval;
   app.startTimer();
-  
+
   app.net_thread = std::thread(&Application::start_tcp_server, &app);
   app.ds_net_thread = std::thread(&Application::start_dstcp_server, &app);
 
@@ -2589,6 +2592,7 @@ main(int argc, char *argv[]) {
 
   while (!glfwWindowShouldClose(app.window)) {
     glfwWaitEvents();
+
     app.processTclCommands();
     app.processDSCommands();
     app.processTimerFuncs();
