@@ -295,7 +295,7 @@ static int metagroupContentsCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 #ifdef _WIN32
-EXPORT(int,Metagroup_Init) _ANSI_ARGS_((Tcl_Interp *interp))
+EXPORT(int,Metagroup_Init) (Tcl_Interp *interp)
 #else
 int Metagroup_Init(Tcl_Interp *interp)
 #endif

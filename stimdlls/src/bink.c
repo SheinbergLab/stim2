@@ -671,7 +671,7 @@ static int videoGetSummaryCmd(ClientData clientData, Tcl_Interp *interp,
 
 
 #ifdef _WIN32
-EXPORT(int,Bink_Init) _ANSI_ARGS_((Tcl_Interp *interp))
+EXPORT(int,Bink_Init) (Tcl_Interp *interp)
 #else
 #ifdef __cplusplus
 extern "C" {
