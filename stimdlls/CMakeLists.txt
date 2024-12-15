@@ -44,7 +44,6 @@ set(GLAD "${CMAKE_CURRENT_SOURCE_DIR}/../src/glad.c")
 
 if(WIN32)
 set(PRMUTIL "${CMAKE_CURRENT_SOURCE_DIR}/../src/prmutil.c")
-set(NEWTON_DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/src/newtonstim.def")
 set(BOX2D_DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/src/Box2Dstim.def")
 endif()
 
@@ -63,12 +62,14 @@ endif()
 ###############################
  add_library(shader SHARED src/shader.c src/shaderimage.c src/shaderutils.c src/bstrlib.c src/glsw.c src/targa.c src/lodepng.c ${GLAD})
 
+if (NOT WIN32)
 ###############################
 # text
 ###############################
 include_directories(/usr/include/freetype2)
  add_library(text SHARED src/text.c src/shaderimage.c src/shaderutils.c src/bstrlib.c src/glsw.c src/targa.c src/lodepng.c ${GLAD})
- 
+endif()
+
 ###############################
 # mesh
 ###############################
@@ -96,15 +97,6 @@ elseif(WIN32)
   add_library(bink SHARED src/bink.c src/shaderutils.c src/bstrlib.c src/glsw.c src/binktexturesGL.cpp ${GLAD} ${PRMUTIL})
 else()
 	add_library(bink SHARED src/bink.c src/shaderutils.c src/bstrlib.c src/glsw.c src/binktexturesGL.cpp ${GLAD} ${PRMUTIL})
-endif()
-
-###############################
-# newtonstim
-###############################
-if (WIN32)
-add_library(newtonstim SHARED src/newtonstim.cpp ${GLAD})
-elseif(LINUX)
-# add_library(newtonstim SHARED src/newtonstim.cpp ${GLAD})
 endif()
 
 
@@ -143,29 +135,16 @@ set(GLFW glfw3)
 
 if(WIN32)
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-	set(DLSH dlsh64.lib)
-	set(LAB lablib64.lib)
+	set(DLSH libdlsh.lib)
 	set(TCLLIB tclstub.lib)
 	set(CMAKE_EXE_MODULE_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /NODEFAULTLIB:libcmt /NODEFAULTLIB:MSCVRT /def:${DEF_FILE}")
 	set(APP_LIB stim2.lib)
 	set(SPINE_LIB spine-c.lib)
-	set(NEWTON_LIB newton3_x64.lib)
 	set(BINK_LIB bink2w64.lib)
 	set(BOX2D_LIB box2d.lib)
-	set(ZLIB zdll.lib)
 	set(FREETYPE freetype.lib)
 	set(FMOD_LIB fmod_vc.lib)
 	set(PNG libpng16.lib)
-elseif(CMAKE_SIZEOF_VOID_P EQUAL 4)
-	set(DLSH dlsh.lib)
-	set(LAB lablib.lib)
-	set(TCLLIB tclstub.lib)
-	set(CMAKE_EXE_MODULE_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /NODEFAULTLIB:libcmt /NODEFAULTLIB:MSCVRT /def:${DEF_FILE}")
-	set(APP_LIB "${CMAKE_CURRENT_SOURCE_DIR}/../build_win32/stim2.lib")
-	set(SPINE_LIB spine-c.lib)
-	set(NEWTON_LIB newton3_x86.lib)
-	set(BINK_LIB bink2w32.lib)
-	set(BOX2D_LIB box2d_x86.lib)
 endif()
 elseif(APPLE)
 	set(MAIN_APP "${CMAKE_CURRENT_SOURCE_DIR}/../build_macos/stim2")
@@ -187,6 +166,20 @@ elseif(APPLE)
 #	 set_target_properties(${module} PROPERTIES SUFFIX .bundle)
  	endforeach()
 
+elseif(WIN32)
+	foreach (module polygon metagroup shader mesh motionpatch box2d)
+	 set_target_properties(${module} PROPERTIES PREFIX "")	  
+ 	endforeach()
+
+	set(SPINE_LIB spine-c)
+	set(BOX2D_LIB box2d)
+	set(BINK_LIB ${CMAKE_CURRENT_SOURCE_DIR}/../deps/bink/lib/windows/bink2w64.lib)
+	find_library(LIBDL dl)
+	find_library(LIBPTHREAD pthread)
+	find_library(LIBOPENAL openal)
+	set(FMOD_LIB fmod)
+	set(LAB lab)
+	set(TCLLIB tclstub)
 else()
 	#	foreach (module polygon metagroup shader mesh motionpatch newtonstim box2d bink spine creature)
 	foreach (module polygon metagroup shader mesh motionpatch text box2d)
@@ -213,7 +206,9 @@ endforeach()
 
 target_link_libraries(motionpatch ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${LIBMATH} ${APP_LIB})
 
+if(NOT WIN32)
 target_link_libraries(text ${DLSH}  ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${LIBMATH} ${APP_LIB} ${FREETYPE} ${PNG} ${ZLIB})
+endif()
 
 #target_link_libraries(sound ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${LIBMATH} ${APP_LIB})
 
@@ -223,11 +218,6 @@ elseif(WIN32)
   target_link_libraries(bink ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${BINK_LIB} ${APP_LIB})
 else()
 	target_link_libraries(bink ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${BINK_LIB} ${LIBOPENAL} ${LIBDL} ${LIBPTHREAD})
-endif()
-if (WIN32)
-target_link_libraries(newtonstim ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${NEWTON_LIB} ${APP_LIB} "-def:${NEWTON_DEF_FILE}")
-elseif(LINUX)
-# target_link_libraries(newtonstim ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${NEWTON_LIB} ${APP_LIB})
 endif()
 
 if (WIN32)
