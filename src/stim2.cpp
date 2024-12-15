@@ -1449,8 +1449,12 @@ public:
     //      std::cerr << "stim2: error mounting zipfs" << std::endl;
     //    }
 #endif
-  
+
+#ifndef _MSC_VER
     TclZipfs_AppHook(&argc, &argv);
+#else
+    TclZipfs_AppHook(&argc, (wchar_t ***) &argv);
+#endif    
 
     /*
      * Invoke application-specific initialization.
@@ -1791,8 +1795,11 @@ void Application::tcp_client_process(int sockfd,
   client_request_t client_request;
   client_request.rqueue = &rqueue;
   
+#ifndef _MSC_VER
   while ((rval = read(sockfd, buf, sizeof(buf))) > 0) {
-
+#else
+    while ((rval = recv(sockfd, buf, sizeof(buf), 0)) > 0) {
+#endif
     // Special prefix requesting swap acknowledge
     if (buf[0] == '!') {
       client_request.wait_for_swap = true;
@@ -1821,13 +1828,21 @@ void Application::tcp_client_process(int sockfd,
 
     // Add a newline, and send the buffer including the null termination
     s = s+"\n";
+#ifndef _MSC_VER
     wrval = write(sockfd, s.c_str(), s.size());
+#else
+    wrval = send(sockfd, s.c_str(), s.size(), 0);
+#endif
     if (wrval < 0) {		// couldn't send to client
       break;
     }
   }
   // std::cout << "Connection closed from " << sock.peer_address() << std::endl;
-  close(sockfd);
+#ifndef _MSC_VER
+    close(sockfd);
+#else
+    closesocket(sockfd);
+#endif
 }
 
 void
@@ -1844,7 +1859,11 @@ Application::ds_client_process(int sockfd,
   
   std::string dpoint_str;  
 
+#ifndef _MSC_VER
   while ((rval = read(sockfd, buf, sizeof(buf))) > 0) {
+#else
+    while ((rval = recv(sockfd, buf, sizeof(buf), 0)) > 0) {
+#endif
     for (int i = 0; i < rval; i++) {
       char c = buf[i];
       if (c == '\n') {
@@ -1868,7 +1887,11 @@ Application::ds_client_process(int sockfd,
     }
   }
   //    std::cout << "Connection closed from " << sock.peer_address() << std::endl;
-  close(sockfd);
+#ifndef _MSC_VER
+    close(sockfd);
+#else
+    closesocket(sockfd);
+#endif
 }
 
 
@@ -2585,6 +2608,15 @@ main(int argc, char *argv[]) {
   app.timer_interval = interval;
   app.startTimer();
 
+#ifdef _MSC_VER
+    WSADATA wsaData;
+    int iResult = WSAStartup(MAKEWORD(2,2), &wsaData);
+    if (iResult != 0) {
+        printf("WSAStartup failed with error: %d\n", iResult);
+        return -1;
+    }
+#endif
+  
   app.net_thread = std::thread(&Application::start_tcp_server, &app);
   app.ds_net_thread = std::thread(&Application::start_dstcp_server, &app);
 
@@ -2621,6 +2653,10 @@ main(int argc, char *argv[]) {
   app.net_thread.detach();
   app.ds_net_thread.detach();
 
+#ifdef _MSC_VER
+    WSACleanup();
+#endif
+  
   glfwTerminate();
   
   return 0;
