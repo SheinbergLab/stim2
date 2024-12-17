@@ -973,7 +973,7 @@ int polygonShaderCreate(Tcl_Interp *interp)
 }
 
 #ifdef _WIN32
-EXPORT(int, Polygon_Init) _ANSI_ARGS_((Tcl_Interp *interp))
+EXPORT(int, Polygon_Init) (Tcl_Interp *interp)
 #else
 int Polygon_Init(Tcl_Interp *interp)
 #endif

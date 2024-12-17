@@ -1146,7 +1146,7 @@ int motionpatchShaderCreate(Tcl_Interp *interp)
 
 
 #ifdef WIN32
-EXPORT(int,Motionpatch_Init) _ANSI_ARGS_((Tcl_Interp *interp))
+EXPORT(int,Motionpatch_Init) (Tcl_Interp *interp)
 #else
 int Motionpatch_Init(Tcl_Interp *interp)
 #endif

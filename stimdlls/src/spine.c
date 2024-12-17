@@ -1151,7 +1151,7 @@ int spineShaderCreate(Tcl_Interp *interp, SPINE_INFO *spineInfo)
 
 
 #ifdef _WIN32
-EXPORT(int,Spine_Init) _ANSI_ARGS_((Tcl_Interp *interp))
+EXPORT(int,Spine_Init) (Tcl_Interp *interp)
 #else
 int Spine_Init(Tcl_Interp * interp)
 #endif

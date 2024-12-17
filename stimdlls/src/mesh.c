@@ -1641,7 +1641,7 @@ static int add_defaults_to_table(Tcl_Interp *interp, Tcl_HashTable *dtable,
 /********************************************************************/
 
 #ifdef _WIN32
-EXPORT(int,Mesh_Init) _ANSI_ARGS_((Tcl_Interp *interp))
+EXPORT(int,Mesh_Init) (Tcl_Interp *interp)
 #else
 int Mesh_Init(Tcl_Interp *interp)
 #endif

@@ -1633,6 +1633,9 @@ static int matrix4CreateTranslationAngleCmd(ClientData clientData,
   float *vals;
   double x, y, angle;
 
+#ifdef _MSC_VER
+#define M_PI 3.14159265358979323846
+#endif
   const float DEG2RAD = M_PI/180.;
   
   static float matrix[16], vec3[3];
@@ -1900,7 +1903,7 @@ static int matrix4QuaternionFromAngleAxisCmd(ClientData clientData,
 
 
 #ifdef _WIN32
-EXPORT(int,Box_Init) _ANSI_ARGS_((Tcl_Interp *interp))
+EXPORT(int,Box_Init) (Tcl_Interp *interp)
 #else
 #ifdef __cplusplus
 extern "C" {

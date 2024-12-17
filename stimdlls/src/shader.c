@@ -965,7 +965,7 @@ static int shaderObjSetUniformCmd(ClientData clientData, Tcl_Interp *interp,
 /*                  PACKAGE INITIALIZATION CODE                     */
 /********************************************************************/
 #ifdef _WIN32
-EXPORT(int,Shader_Init) _ANSI_ARGS_((Tcl_Interp *interp))
+EXPORT(int,Shader_Init) (Tcl_Interp *interp)
 #else
 int Shader_Init(Tcl_Interp *interp)
 #endif
