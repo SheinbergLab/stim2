@@ -1383,11 +1383,23 @@ public:
     
     addTclCommands(interp);
 
-    Tcl_VarEval(interp, "set dlshroot [file join [zipfs root] dlsh]", NULL);
-    Tcl_VarEval(interp, "zipfs mount /usr/local/dlsh/dlsh.zip $dlshroot", NULL);
-    Tcl_VarEval(interp, "set auto_path [linsert $auto_path [set auto_path 0] $dlshroot/lib]", NULL);
-    Tcl_VarEval(interp, "package require dlsh", NULL);
-    Tcl_VarEval(interp, "package require qpcs", NULL);
+    Tcl_VarEval(interp, 
+        "proc load_local_packages {} {\n"
+        " global auto_path\n"
+        " set f [file dirname [info nameofexecutable]]\n"
+        " if [file exists [file join $f dlsh.zip]] { set dlshzip [file join $f dlsh.zip] } {"
+#ifdef _WIN32
+        "   set dlshzip c:/usr/local/dlsh/dlsh.zip }\n"
+#else
+        "   set dlshzip /usr/local/dlsh/dlsh.zip }\n"
+#endif
+        " set dlshroot [file join [zipfs root] dlsh]\n"
+        " zipfs unmount $dlshroot\n"
+        " zipfs mount $dlshzip $dlshroot\n"
+        " set auto_path [linsert $auto_path [set auto_path 0] $dlshroot/lib]\n"
+        "package require dlsh; package require qpcs }\n"
+        "load_local_packages",
+        NULL);
 #ifdef _WIN32
     Tcl_VarEval(interp, "set env(PATH) \"stimdlls;"
         "[file dir [info nameofexecutable]]/stimdlls;$env(PATH)\"",
