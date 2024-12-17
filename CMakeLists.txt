@@ -37,7 +37,7 @@ endif()
 
 if(WIN32)
 	include_directories(c:/usr/local/include ${IMGUI_DIR} ${IMGUI_DIR}/backends)
-	link_directories(c:/usr/local/lib ${PYTHON_LIB_DIR})
+	link_directories(c:/usr/local/lib/$ENV{VSCMD_ARG_TGT_ARCH} ${PYTHON_LIB_DIR})
 	add_definitions(-DNOMINMAX -D_WIN32)
 elseif(APPLE)
 	include_directories(/usr/local/include ${IMGUI_DIR} ${IMGUI_DIR}/backends)
