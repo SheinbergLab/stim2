@@ -1155,6 +1155,7 @@ public:
 
   std::thread net_thread;
   std::thread ds_net_thread;
+  std::thread msg_thread;
   
   void updateDisplay(bool);
   void processImgui(void);
@@ -1177,8 +1178,9 @@ public:
   bool show_console = false;
   bool show_log = true;
 
-  void start_tcp_server(void);
-  void start_dstcp_server(void);
+  void start_tcp_server(void);	   // crlf oriented commands
+  void start_dstcp_server(void);   // data point receiver
+  void start_msg_server(void); // frame oriented with size prefix
 
   static void
   tcp_client_process(int sockfd,
@@ -1186,6 +1188,9 @@ public:
   static void
   ds_client_process(int sockfd,
             SharedQueue<ds_client_request_t *> *queue);
+  static void
+  message_client_process(int sockfd,
+			 SharedQueue<client_request_t *> *queue);
   
   bool show_imgui = false;
   AppLog log;
@@ -1193,6 +1198,7 @@ public:
   const char *title;
   int tcpport = 4610;
   int dsport = 4611;
+  int messageport = 4612;
 
   ShutdownCmds shutdown_cmds;
   
@@ -1495,6 +1501,8 @@ public:
       req = queue.front();
       queue.pop_front();
       const char *script = req->script.c_str();
+
+      // std::cout << "processing tcl request: " << req->script << std::endl;
       
       if (req->wait_for_swap) {
 	wait_for_swap = true;
@@ -1504,8 +1512,9 @@ public:
 	GPIO::output(output_pin, GPIO::HIGH);
 #endif
       }
-      
+
       retcode = Tcl_Eval(interp, script);
+
       const char *rcstr = Tcl_GetStringResult(interp);
       if (retcode == TCL_OK) {
 	if (!req->wait_for_swap) {
@@ -1540,7 +1549,7 @@ public:
 	}
       }
     }
-    
+
     /* Do this here? */
     while (Tcl_DoOneEvent(TCL_DONT_WAIT)) ;
     
@@ -1738,6 +1747,62 @@ void Application::start_tcp_server(void)
   }
 }
 
+void Application::start_msg_server(void)
+{
+  struct sockaddr_in address;
+  struct sockaddr client_address;
+  socklen_t client_address_len = sizeof(client_address);
+  int socket_fd;		// accept socket
+  int new_socket_fd;		// client socket
+  int on = 1;
+  
+  //    std::cout << "opening server on port " << std::to_string(tcpport) << std::endl;
+  
+  /* Initialise IPv4 address. */
+  memset(&address, 0, sizeof(struct sockaddr_in));
+  address.sin_family = AF_INET;
+  address.sin_port = htons(messageport);
+  address.sin_addr.s_addr = INADDR_ANY;
+  
+  
+  /* Create TCP socket. */
+  if ((socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+    perror("socket");
+    return;
+  }
+  
+  /* Allow this server to reuse the port immediately */
+  setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, (char *) &on, sizeof(on));
+  
+  /* Bind address to socket. */
+  if (bind(socket_fd, (const struct sockaddr *) &address,
+	   sizeof (struct sockaddr)) == -1) {
+    perror("bind");
+    return;
+  }
+  
+  /* Listen on socket. */
+  if (listen(socket_fd, 20) == -1) {
+    perror("listen");
+    return;
+  }
+  
+  while (1) {
+    /* Accept connection to client. */
+    new_socket_fd = accept(socket_fd, &client_address, &client_address_len);
+    if (new_socket_fd == -1) {
+      perror("accept");
+      continue;
+    }
+    
+    setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, (char *) &on, sizeof(on));
+    
+    // Create a thread and transfer the new stream to it.
+    std::thread thr(message_client_process, new_socket_fd, &queue);
+    thr.detach();
+  }
+}
+
 void Application::start_dstcp_server(void)
 {
   struct sockaddr_in address;
@@ -1794,69 +1859,162 @@ void Application::start_dstcp_server(void)
   }
 }
 
-void Application::tcp_client_process(int sockfd,
-				     SharedQueue<client_request_t *> *queue)
+/*
+ * tcp_client_process is CR/LF oriented
+ *  incoming messages are terminated by newlines and responses append these
+ */
+void
+Application::tcp_client_process(int sockfd,
+				SharedQueue<client_request_t *> *queue)
 {
-  // fix this...
-  char buf[16384];
-  double start;
-  int rval, wrval;
+  int rval;
+  int wrval;
+  char buf[1024];
   
   // each client has its own request structure and reply queue
   SharedQueue<std::string> rqueue;
   client_request_t client_request;
   client_request.rqueue = &rqueue;
   
+  std::string script;  
+  
+  while ((rval = recv(sockfd, buf, sizeof(buf), 0)) > 0) {
+    for (int i = 0; i < rval; i++) {
+      char c = buf[i];
+      if (c == '\n') {
+	
+	if (script.length() > 0) {
+	  if (script[0] == '!') {
+	    client_request.wait_for_swap = true;
+	    client_request.script = script.substr(1);
+	  }
+	  else {
+	    client_request.wait_for_swap = false;
+	    client_request.script = std::string(script);
+	  }
+	  /* push request onto queue for main thread to retrieve */
+	  queue->push_back(&client_request);
+	  
+	  /* get lock and wake up main thread to process */
+	  glfwPostEmptyEvent();
+	  
+	  /* rqueue will be available after command has been processed */
+	  std::string s(client_request.rqueue->front());
+	  client_request.rqueue->pop_front();
+	  
+	  //	  std::cout << "TCL Result: " << s << std::endl;
+	  
+	  // Add a newline, and send the buffer including the null termination
+	  s = s+"\n";
 #ifndef _MSC_VER
-  while ((rval = read(sockfd, buf, sizeof(buf))) > 0) {
+	  wrval = write(sockfd, s.c_str(), s.size());
 #else
-    while ((rval = recv(sockfd, buf, sizeof(buf), 0)) > 0) {
+	  wrval = send(sockfd, s.c_str(), s.size(), 0);
 #endif
-    // Special prefix requesting swap acknowledge
-    if (buf[0] == '!') {
-      client_request.wait_for_swap = true;
-      client_request.script = std::string(&buf[1], rval-1);
-    }
-    
-    else {
-      client_request.wait_for_swap = false;
-      client_request.script = std::string(buf, rval);
-    }
-    
-    //    std::cout << "TCL Request: " << std::string(buf, rval) << std::endl;
-    
-    queue->push_back(&client_request);
-    
-    //      queue->push_back(std::string(buf, n));
-    
-    /* get lock and wake up main thread to process */
-    glfwPostEmptyEvent();
-    
-    /* rqueue will be available after command has been processed */
-    std::string s(client_request.rqueue->front());
-    client_request.rqueue->pop_front();
-    
-    //    std::cout << "TCL Result: " << s << std::endl;
-
-    // Add a newline, and send the buffer including the null termination
-    s = s+"\n";
-#ifndef _MSC_VER
-    wrval = write(sockfd, s.c_str(), s.size());
-#else
-    wrval = send(sockfd, s.c_str(), s.size(), 0);
-#endif
-    if (wrval < 0) {		// couldn't send to client
-      break;
+	  if (wrval < 0) {		// couldn't send to client
+	    break;
+	  }
+	  
+	}
+	script = "";
+      }
+      else {
+	script += c;
+      }
     }
   }
-  // std::cout << "Connection closed from " << sock.peer_address() << std::endl;
+  //    std::cout << "Connection closed from " << sock.peer_address() << std::endl;
 #ifndef _MSC_VER
-    close(sockfd);
+  close(sockfd);
 #else
-    closesocket(sockfd);
+  closesocket(sockfd);
 #endif
 }
+  
+static  void sendMessage(int socket, const std::string& message) {
+  uint32_t msgSize = htonl(message.size()); // Convert size to network byte order
+  send(socket, &msgSize, sizeof(msgSize), 0);
+  send(socket, message.c_str(), message.size(), 0);
+}
 
+static std::pair<char*, size_t> receiveMessage(int socket) {
+    uint32_t msgSize;
+    // Receive the size of the message
+    ssize_t bytesReceived = recv(socket, &msgSize, sizeof(msgSize), 0);
+    if (bytesReceived <= 0) return {nullptr, 0}; // Connection closed or error
+
+    msgSize = ntohl(msgSize); // Convert size from network byte order to host byte order
+
+    // Allocate buffer for the message
+    char* buffer = new char[msgSize];
+    size_t totalBytesReceived = 0;
+    while (totalBytesReceived < msgSize) {
+        bytesReceived = recv(socket, buffer + totalBytesReceived, msgSize - totalBytesReceived, 0);
+        if (bytesReceived <= 0) {
+            delete[] buffer;
+            return {nullptr, 0}; // Connection closed or error
+        }
+        totalBytesReceived += bytesReceived;
+    }
+
+    return {buffer, msgSize};
+}
+
+/*
+ * message_client_process is frame oriented with 32 size following by bytes
+ *  response is similarly organized
+ */
+void
+Application::message_client_process(int sockfd,
+				    SharedQueue<client_request_t *> *queue)
+{
+  int rval;
+  int wrval;
+  
+  // each client has its own request structure and reply queue
+  SharedQueue<std::string> rqueue;
+  client_request_t client_request;
+  client_request.rqueue = &rqueue;
+  
+  std::string script;  
+
+  while (true) {
+    auto [buffer, msgSize] = receiveMessage(sockfd);
+    if (buffer == nullptr) break;
+    if (msgSize) {
+      if (buffer[0] == '!') {
+	client_request.wait_for_swap = true;
+	client_request.script = std::string(buffer+1, msgSize-1);
+      }
+      else {
+	client_request.wait_for_swap = false;
+	client_request.script = std::string(buffer, msgSize);
+      }
+      
+      /* push request onto queue for main thread to retrieve */
+      queue->push_back(&client_request);
+      
+      /* get lock and wake up main thread to process */
+      glfwPostEmptyEvent();
+      
+      /* rqueue will be available after command has been processed */
+      std::string s(client_request.rqueue->front());
+      client_request.rqueue->pop_front();
+	  
+      // Send a response back to the client
+      sendMessage(sockfd, s);
+      
+      delete[] buffer;
+    }
+  }
+#ifndef _MSC_VER
+  close(sockfd);
+#else
+  closesocket(sockfd);
+#endif
+}    
+
+  
 void
 Application::ds_client_process(int sockfd,
 			       SharedQueue<ds_client_request_t *> *queue)
@@ -2631,6 +2789,7 @@ main(int argc, char *argv[]) {
   
   app.net_thread = std::thread(&Application::start_tcp_server, &app);
   app.ds_net_thread = std::thread(&Application::start_dstcp_server, &app);
+  app.msg_thread = std::thread(&Application::start_msg_server, &app);
 
   redraw();
 
@@ -2664,6 +2823,7 @@ main(int argc, char *argv[]) {
   /* detach from TCP/IP threads */
   app.net_thread.detach();
   app.ds_net_thread.detach();
+  app.msg_thread.detach();
 
 #ifdef _MSC_VER
     WSACleanup();
