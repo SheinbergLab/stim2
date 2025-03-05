@@ -5,9 +5,8 @@
 
 
 #ifdef WIN32
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#undef WIN32_LEAN_AND_MEAN
+#define __arm__
 #endif
 
 #include <assert.h>
@@ -671,7 +670,7 @@ static int videoGetSummaryCmd(ClientData clientData, Tcl_Interp *interp,
 
 
 #ifdef _WIN32
-EXPORT(int,Bink_Init) (Tcl_Interp *interp)
+EXPORT(int, Bink_Init) (Tcl_Interp *interp)
 #else
 #ifdef __cplusplus
 extern "C" {
@@ -701,7 +700,9 @@ int Bink_Init(Tcl_Interp *interp)
   else return TCL_OK;
 
 #ifdef _WIN32
+#ifndef __arm__
   BinkSoundUseDirectSound( 0 );
+#endif
 #else
   extern void init_coreaudio( void );
   //  init_coreaudio();
