@@ -1,3 +1,7 @@
+#ifdef _WIN32
+#define __arm__
+#endif
+
 #include "bink.h"
 
 #ifdef __RADMAC__
