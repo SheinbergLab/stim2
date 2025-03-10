@@ -43,7 +43,7 @@ jobs:
 
       - name: Install GLFW static lib into the build environment.
         run: |
-          git clone clone https://github.com/glfw/glfw.git
+          git clone https://github.com/glfw/glfw.git
           cd glfw/
           git checkout 3.4
           cmake -B build-full-static -D GLFW_BUILD_WAYLAND=ON -D GLFW_BUILD_X11=ON
