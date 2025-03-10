@@ -1,0 +1,37 @@
+# This Dockerfile was helpful for testing packaged stim2.
+# Docker gives a clean environment, meaning the steps below must account for all dependencies.
+# Docker also gives us a local environment that's easy to iterate on.
+# Getting this working was the basis for the automated CI builds, over in .github/workflows/.
+#
+# This assumes we already have a .deb package containing stim2 and TCL 9.
+# You can make this locally using scripts/docker/Dockerfile-package.
+# Or, you can get a package from a GitHub release:
+#
+#   TODO: update links
+#   wget https://github.com/benjamin-heasly/dserv/releases/download/0.0.31/dserv-Linux-amd64-0.0.31.deb
+#   mv dserv-Linux-amd64-0.0.31.deb dserv-test.deb
+#
+# To run install the package in a fresh Docker image:
+#
+#   docker build . --no-cache -f scripts/docker/Dockerfile-run -t stim2-run:local
+#
+# To test the installed stim2:
+#
+#   docker run --rm -ti stim2-run:local ls -alth /usr/local/bin
+#   docker run -u $UID -e DISPLAY -v $HOME/.Xauthority:/.Xauthoruty -e XAUTHORITY=/.Xauthority -v /tmp/.X11-unix:/tmp/.X11-unix --rm -ti stim2-run:local stim2 --help
+#   docker run -u $UID -e DISPLAY -v $HOME/.Xauthority:/.Xauthoruty -e XAUTHORITY=/.Xauthority -v /tmp/.X11-unix:/tmp/.X11-unix --rm -ti stim2-run:local timeout --signal SIGINT 2 stim2
+
+
+# Start with a fresh Ubuntu environment.
+FROM ubuntu:22.04
+
+# Install the .deb package from scripts/docker/Dockerfile-package.
+# Using apt to install it means we'll also install runtime dependencies declared in the dpkg/control file.
+WORKDIR /opt
+ADD stim2-test.deb .
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt update \
+    && apt install --no-install-recommends --yes ca-certificates /opt/stim2-test.deb \
+    && apt-get clean \
+    && apt-get autoremove \
+    && rm -rf /var/lib/apt/lists/*

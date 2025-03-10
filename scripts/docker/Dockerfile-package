@@ -1,0 +1,74 @@
+# This Dockerfile was helpful for building and packaging stim2 and TCL 9.
+# Docker gives a clean environment, meaning the steps below must account for all dependencies.
+# Docker also gives us a local environment that's easy to iterate on.
+# Getting this working was the basis for the automated CI builds, over in .github/workflows/.
+#
+# To run this docker build and produce a Docker image, cd to the stim2 repo root and:
+#
+#   docker build . -f scripts/docker/Dockerfile-package -t stim2-package:local
+#
+# To grab the generated .deb package out of a container from this image:
+#
+#   docker run --rm -ti -v $PWD:$PWD stim2-package:local cp /work/stim2-test.deb $PWD
+#
+# To test package installation and running programs, see scripts/docker/Dockerfile-run.
+
+# Start with a fresh Ubuntu environment.
+FROM ubuntu:22.04
+
+# Runtime?
+# Depends: zlib1g, libx11-6, libxinerama1
+
+# Install build tools, tlc 9 dependencies, glfw dependencies, and stim2 dependencies.
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt update \
+    && apt install --no-install-recommends --yes git wget ca-certificates build-essential cmake pkg-config cmake-data \
+    zlib1g-dev \
+    libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev libwayland-dev libxkbcommon-dev \
+    libglew-dev libglm-dev \
+    && apt-get clean \
+    && apt-get autoremove \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install TLC 9 into the build environment, and to a packaging dir.
+WORKDIR /work
+RUN git clone --depth=1 --branch core-9-0-1-rc https://github.com/tcltk/tcl.git \
+  && cd tcl/unix/ \
+  && ./configure --prefix=/work/package/usr/local/ \
+  && make \
+  && make install \
+  && ./configure \
+  && make \
+  && make install
+
+# Install GLFW static lib into the build environment.
+WORKDIR /work
+RUN git clone https://github.com/glfw/glfw.git \
+  && cd glfw/ \
+  && git checkout 3.4 \
+  && cmake -B build-full-static -D GLFW_BUILD_WAYLAND=ON -D GLFW_BUILD_X11=ON \
+  && cmake --build build-full-static --parallel \
+  && cmake --install build-full-static
+
+# Install our dlsh TCL utils and thier dependencies into the packaging dir.
+WORKDIR /work/package/usr/local/dlsh
+RUN wget https://github.com/benjamin-heasly/dlsh/releases/download/initial/dlsh.zip
+
+# Build stim2 itself and install to the packaging dir.
+ADD . /work/stim2/
+WORKDIR /work/stim2/
+RUN cmake -DCMAKE_INSTALL_PREFIX=/work/package/usr/local -B build \
+  && cmake --build build --parallel \
+  && cmake --install build
+
+# Add metadata and scripts for the .deb package.
+WORKDIR /work/package/DEBIAN
+RUN cp /work/stim2/dpkg/control . \
+  && echo "Version: 0.0.test" >> ./control \
+  && echo "Architecture: $(dpkg --print-architecture)" >> ./control \
+  && cp /work/stim2/dpkg/postinst . \
+  && chmod +x ./postinst
+
+# Build the .deb package.
+WORKDIR /work
+RUN dpkg-deb --build /work/package stim2-test.deb

@@ -1,0 +1,4 @@
+Package: stim2
+Description: Multiplatform OpenGL presentation program
+Maintainer: Sheinberg Lab
+Depends: zlib1g, libc6, libdecor-0-0, libegl1, libglx0, libopengl0, libwayland-client0, libwayland-cursor0, libwayland-egl1, libx11-6, libx11-xcb1, libxcursor1, libxext6, libxi6, libxinerama1, libxkbcommon0, libxrandr2, libxrender1, mesa-utils, libgl1-mesa-dri, libegl1-mesa
