@@ -47,7 +47,7 @@ jobs:
           cd glfw/
           git checkout 3.4
           cmake -B build-full-static -D GLFW_BUILD_WAYLAND=ON -D GLFW_BUILD_X11=ON
-          cmake cmake --build build-full-static
+          cmake --build build-full-static --parallel
           sudo cmake --install build-full-static
 
       # TODO: obtain dlsh from SheinbergLab with a version, not from benjamin-heasly with "initial"
@@ -63,7 +63,7 @@ jobs:
       - name: Install dserv into the packaging dir.
         run: |
           cmake -DCMAKE_INSTALL_PREFIX=/tmp/package/usr/local/ -B build
-          cmake --build build
+          cmake --build build --parallel
           cmake --install build
 
       - name: Add metadata and scripts for the .deb package.
