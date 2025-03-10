@@ -16,6 +16,9 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
+    permissions:
+        contents: write
+
     steps:
 
       - name: Install build tools, tlc 9 dependencies, glfw dependencies, and stim2 dependencies.
