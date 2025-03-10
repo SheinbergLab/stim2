@@ -7,9 +7,8 @@
 # You can make this locally using scripts/docker/Dockerfile-package.
 # Or, you can get a package from a GitHub release:
 #
-#   TODO: update links
-#   wget https://github.com/benjamin-heasly/dserv/releases/download/0.0.31/dserv-Linux-amd64-0.0.31.deb
-#   mv dserv-Linux-amd64-0.0.31.deb dserv-test.deb
+#   wget https://github.com/benjamin-heasly/stim2/releases/download/0.0.4/stim2-Linux-amd64-0.0.4.deb
+#   mv stim2-Linux-amd64-0.0.4.deb stim2-test.deb
 #
 # To run install the package in a fresh Docker image:
 #
