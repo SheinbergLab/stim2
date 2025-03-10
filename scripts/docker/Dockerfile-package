@@ -16,9 +16,6 @@
 # Start with a fresh Ubuntu environment.
 FROM ubuntu:22.04
 
-# Runtime?
-# Depends: zlib1g, libx11-6, libxinerama1
-
 # Install build tools, tlc 9 dependencies, glfw dependencies, and stim2 dependencies.
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt update \

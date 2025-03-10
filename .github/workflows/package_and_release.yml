@@ -1,0 +1,112 @@
+name: Package and Release
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+
+  release:
+
+    strategy:
+      matrix:
+        # Build on not-the-latest to keep dependency versions modest.
+        os: [ubuntu-22.04, ubuntu-22.04-arm]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+
+      - name: Install build tools, tlc 9 dependencies, glfw dependencies, and stim2 dependencies.
+        run: |
+          sudo apt update
+          sudo apt install -y wget ca-certificates build-essential cmake pkg-config cmake-data
+          sudo apt install -y zlib1g-dev
+          sudo apt install -y libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev libwayland-dev libxkbcommon-dev
+          sudo apt install -y libglew-dev libglm-dev
+
+      - name: Install TCL 9 to the build environment.
+        run: |
+          git clone --depth=1 --branch core-9-0-1-rc https://github.com/tcltk/tcl.git
+          cd tcl/unix/
+          ./configure
+          make
+          sudo make install
+
+      - name: Install TCL 9 into the packaging dir.
+        run: |
+          cd tcl/unix/
+          ./configure --prefix=/tmp/package/usr/local/
+          make
+          make install
+
+      - name: Install GLFW static lib into the build environment.
+        run: |
+          git clone clone https://github.com/glfw/glfw.git
+          cd glfw/
+          git checkout 3.4
+          cmake -B build-full-static -D GLFW_BUILD_WAYLAND=ON -D GLFW_BUILD_X11=ON
+          cmake cmake --build build-full-static --parallel
+          sudo cmake --install build-full-static
+
+      # TODO: obtain dlsh from SheinbergLab with a version, not from benjamin-heasly with "initial"
+      - name: Install our dlsh TCL utils and thier dependencies into the packaging dir.
+        run: |
+          mkdir -p /tmp/package/usr/local/dlsh
+          cd /tmp/package/usr/local/dlsh
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/initial/dlsh.zip
+
+      - name: Check out our dserv code for the current tag.
+        uses: actions/checkout@v4
+
+      - name: Install dserv into the packaging dir.
+        run: |
+          cmake -DCMAKE_INSTALL_PREFIX=/tmp/package/usr/local/ -B build
+          cmake --build build --parallel
+          cmake --install build
+
+      - name: Add metadata and scripts for the .deb package.
+        run: |
+          mkdir -p /tmp/package/DEBIAN
+          cp dpkg/control /tmp/package/DEBIAN/
+          echo "Version: ${{ github.ref_name }}" >> /tmp/package/DEBIAN/control
+          echo "Architecture: $(dpkg --print-architecture)" >> /tmp/package/DEBIAN/control
+          cp dpkg/postinst /tmp/package/DEBIAN/
+          chmod +x /tmp/package/DEBIAN/postinst
+
+      - name: Build the .deb package including stim2 and TCL 9.
+        run: |
+          dpkg-deb --build /tmp/package stim2-${{ runner.os }}-$(dpkg --print-architecture)-${{ github.ref_name }}.deb
+
+      - name: Create a GitHub release for the current tag and package.
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: ./*.deb
+          body: stim2 version ${{ github.ref_name }}
+          generateReleaseNotes: true
+          allowUpdates: true
+
+  check:
+
+    needs: release
+
+    strategy:
+      matrix:
+        # Check on latest to confirm compatibility.
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+
+      - name: Install the package we just released.
+        run: |
+          wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/stim2-${{ runner.os }}-$(dpkg --print-architecture)-${{ github.ref_name }}.deb
+          sudo apt install --yes ./stim2-${{ runner.os }}-$(dpkg --print-architecture)-${{ github.ref_name }}.deb
+
+      - name: Sanity check the installed package.
+        run: |
+          ls -alth /usr/local/bin
+          which stim2
+          stim2 --help
