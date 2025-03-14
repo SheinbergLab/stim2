@@ -41,13 +41,6 @@ jobs:
           make
           sudo make install
 
-      - name: Install TCL 9 into the packaging dir.
-        run: |
-          cd deps/tcl/unix/
-          ./configure --prefix=/tmp/package/usr/local/
-          make
-          make install
-
       - name: Install GLFW static lib into the build environment.
         run: |
           cd deps/glfw/
@@ -55,25 +48,12 @@ jobs:
           cmake --build build-full-static --parallel
           sudo cmake --install build-full-static
 
-      # TODO: package with CPack, not ad-hoc scripting.
-      - name: Install dserv into the packaging dir.
+
+      - name: Build stim2 itself and package it for release.
         run: |
-          cmake -DCMAKE_INSTALL_PREFIX=/tmp/package/usr/local/ -B build
+          RUN cmake -D PROJECT_VERSION=${{ github.ref_name }} -B build
           cmake --build build --parallel
-          cmake --install build
-
-      - name: Add metadata and scripts for the .deb package.
-        run: |
-          mkdir -p /tmp/package/DEBIAN
-          cp dpkg/control /tmp/package/DEBIAN/
-          echo "Version: ${{ github.ref_name }}" >> /tmp/package/DEBIAN/control
-          echo "Architecture: $(dpkg --print-architecture)" >> /tmp/package/DEBIAN/control
-          cp dpkg/postinst /tmp/package/DEBIAN/
-          chmod +x /tmp/package/DEBIAN/postinst
-
-      - name: Build the .deb package including stim2 and TCL 9.
-        run: |
-          dpkg-deb --build /tmp/package stim2-${{ runner.os }}-$(dpkg --print-architecture)-${{ github.ref_name }}.deb
+          cpack -G DEB --config build/CPackConfig.cmake
 
       - name: Create a GitHub release for the current tag and package.
         uses: ncipollo/release-action@v1
@@ -98,8 +78,8 @@ jobs:
 
       - name: Install the package we just released.
         run: |
-          wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/stim2-${{ runner.os }}-$(dpkg --print-architecture)-${{ github.ref_name }}.deb
-          sudo apt install --yes ./stim2-${{ runner.os }}-$(dpkg --print-architecture)-${{ github.ref_name }}.deb
+          wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/stim2_${{ runner.os }}_$(dpkg --print-architecture).deb
+          sudo apt install --yes ./stim2_${{ runner.os }}_$(dpkg --print-architecture).deb
 
       # TODO: obtain dlsh from SheinbergLab with a version, not from benjamin-heasly with "initial"
       - name: Install our dlsh TCL utils and thier dependencies into the packaging dir.

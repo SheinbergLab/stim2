@@ -9,19 +9,17 @@
 #
 # To grab the generated .deb package out of a container from this image:
 #
-#   docker run --rm -ti -v $PWD:$PWD stim2-package:local cp /work/stim2-test.deb $PWD
+#   docker run --rm -ti -v $PWD:$PWD stim2-package:local cp /work/stim2/stim2_0.0.0_amd64.deb $PWD
 #
 # To test package installation and running programs, see scripts/docker/Dockerfile-run.
 
 # Start with a fresh Ubuntu environment.
 FROM ubuntu:22.04
 
-# TODO: use CPack to make the package.
-
 # Install build tools, tlc 9 dependencies, glfw dependencies, and stim2 dependencies.
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt update \
-    && apt install --no-install-recommends --yes wget ca-certificates build-essential cmake pkg-config cmake-data \
+    && apt install --no-install-recommends --yes ca-certificates build-essential cmake pkg-config cmake-data \
     zlib1g-dev \
     libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev libwayland-dev libxkbcommon-dev \
     libglew-dev libglm-dev \
@@ -32,12 +30,9 @@ RUN export DEBIAN_FRONTEND=noninteractive \
 # Get this repo and submodules.
 ADD . /work/stim2/
 
-# Install TLC 9 into the build environment, and to a packaging dir.
+# Install TLC 9 into the build environment.
 WORKDIR /work/stim2/deps/tcl/unix/
-RUN ./configure --prefix=/work/package/usr/local/ \
-  && make \
-  && make install \
-  && ./configure \
+RUN ./configure \
   && make \
   && make install
 
@@ -47,25 +42,8 @@ RUN cmake -B build-full-static -D GLFW_BUILD_WAYLAND=ON -D GLFW_BUILD_X11=ON \
   && cmake --build build-full-static --parallel \
   && cmake --install build-full-static
 
-# Install our dlsh TCL utils and thier dependencies into the packaging dir.
-WORKDIR /work/package/usr/local/dlsh
-RUN wget https://github.com/benjamin-heasly/dlsh/releases/download/initial/dlsh.zip
-
-# Build stim2 itself and install to the packaging dir.
-ADD . /work/stim2/
+# Build stim2 itself and package it for release.
 WORKDIR /work/stim2/
-RUN cmake -DCMAKE_INSTALL_PREFIX=/work/package/usr/local -B build \
+RUN cmake -D PROJECT_VERSION=0.0.0 -B build \
   && cmake --build build --parallel \
-  && cmake --install build
-
-# Add metadata and scripts for the .deb package.
-WORKDIR /work/package/DEBIAN
-RUN cp /work/stim2/dpkg/control . \
-  && echo "Version: 0.0.test" >> ./control \
-  && echo "Architecture: $(dpkg --print-architecture)" >> ./control \
-  && cp /work/stim2/dpkg/postinst . \
-  && chmod +x ./postinst
-
-# Build the .deb package.
-WORKDIR /work
-RUN dpkg-deb --build /work/package stim2-test.deb
+  && cpack -G DEB --config build/CPackConfig.cmake

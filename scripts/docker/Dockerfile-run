@@ -8,7 +8,7 @@
 # Or, you can get a package from a GitHub release:
 #
 #   wget https://github.com/benjamin-heasly/stim2/releases/download/0.0.4/stim2-Linux-amd64-0.0.4.deb
-#   mv stim2-Linux-amd64-0.0.4.deb stim2-test.deb
+#   mv stim2-Linux-amd64-0.0.4.deb stim2_0.0.0_amd64.deb
 #
 # To run install the package in a fresh Docker image:
 #
@@ -17,6 +17,7 @@
 # To test the installed stim2:
 #
 #   docker run --rm -ti stim2-run:local ls -alth /usr/local/bin
+#   docker run --rm -ti stim2-run:local ls -alth /usr/local/lib
 #   docker run -u $UID -e DISPLAY -v $HOME/.Xauthority:/.Xauthoruty -e XAUTHORITY=/.Xauthority -v /tmp/.X11-unix:/tmp/.X11-unix --rm -ti stim2-run:local stim2 --help
 #   docker run -u $UID -e DISPLAY -v $HOME/.Xauthority:/.Xauthoruty -e XAUTHORITY=/.Xauthority -v /tmp/.X11-unix:/tmp/.X11-unix --rm -ti stim2-run:local timeout --signal SIGINT 2 stim2
 
@@ -27,10 +28,14 @@ FROM ubuntu:22.04
 # Install the .deb package from scripts/docker/Dockerfile-package.
 # Using apt to install it means we'll also install runtime dependencies declared in the dpkg/control file.
 WORKDIR /opt
-ADD stim2-test.deb .
+ADD stim2_0.0.0_amd64.deb .
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt update \
-    && apt install --no-install-recommends --yes ca-certificates /opt/stim2-test.deb \
+    && apt install --no-install-recommends --yes ca-certificates wget /opt/stim2_0.0.0_amd64.deb \
     && apt-get clean \
     && apt-get autoremove \
     && rm -rf /var/lib/apt/lists/*
+
+# Install our dlsh TCL utils and thier dependencies.
+WORKDIR /usr/local/dlsh
+RUN wget https://github.com/benjamin-heasly/dlsh/releases/download/initial/dlsh.zip
