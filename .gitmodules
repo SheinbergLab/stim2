@@ -11,3 +11,6 @@
 [submodule "deps/sockpp"]
 	path = deps/sockpp
 	url = https://github.com/fpagliughi/sockpp
+[submodule "tcl"]
+	path = deps/tcl
+	url = https://github.com/tcltk/tcl.git

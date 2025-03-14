@@ -1,0 +1,49 @@
+# This Dockerfile was helpful for building and packaging stim2 and TCL 9.
+# Docker gives a clean environment, meaning the steps below must account for all dependencies.
+# Docker also gives us a local environment that's easy to iterate on.
+# Getting this working was the basis for the automated CI builds, over in .github/workflows/.
+#
+# To run this docker build and produce a Docker image, cd to the stim2 repo root and:
+#
+#   docker build . -f scripts/docker/Dockerfile-package -t stim2-package:local
+#
+# To grab the generated .deb package out of a container from this image:
+#
+#   docker run --rm -ti -v $PWD:$PWD stim2-package:local cp /work/stim2/stim2_0.0.0_amd64.deb $PWD
+#
+# To test package installation and running programs, see scripts/docker/Dockerfile-run.
+
+# Start with a fresh Ubuntu environment.
+FROM ubuntu:22.04
+
+# Install build tools, tlc 9 dependencies, glfw dependencies, and stim2 dependencies.
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt update \
+    && apt install --no-install-recommends --yes ca-certificates build-essential cmake pkg-config cmake-data \
+    zlib1g-dev \
+    libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev libwayland-dev libxkbcommon-dev \
+    libglew-dev libglm-dev \
+    && apt-get clean \
+    && apt-get autoremove \
+    && rm -rf /var/lib/apt/lists/*
+
+# Get this repo and submodules.
+ADD . /work/stim2/
+
+# Install TLC 9 into the build environment.
+WORKDIR /work/stim2/deps/tcl/unix/
+RUN ./configure \
+  && make \
+  && make install
+
+# Install GLFW static lib into the build environment.
+WORKDIR /work/stim2/deps/glfw/
+RUN cmake -B build-full-static -D GLFW_BUILD_WAYLAND=ON -D GLFW_BUILD_X11=ON \
+  && cmake --build build-full-static --parallel \
+  && cmake --install build-full-static
+
+# Build stim2 itself and package it for release.
+WORKDIR /work/stim2/
+RUN cmake -D PROJECT_VERSION=0.0.0 -B build \
+  && cmake --build build --parallel \
+  && cpack -G DEB --config build/CPackConfig.cmake

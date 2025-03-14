@@ -1,0 +1,95 @@
+name: Package and Release
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+
+  release:
+
+    strategy:
+      matrix:
+        # Build on not-the-latest to keep dependency versions modest.
+        os: [ubuntu-22.04, ubuntu-22.04-arm]
+
+    runs-on: ${{ matrix.os }}
+
+    permissions:
+        contents: write
+
+    steps:
+
+      - name: Install build tools, tlc 9 dependencies, glfw dependencies, and stim2 dependencies.
+        run: |
+          sudo apt update
+          sudo apt install -y ca-certificates build-essential cmake pkg-config cmake-data
+          sudo apt install -y zlib1g-dev
+          sudo apt install -y libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev libwayland-dev libxkbcommon-dev
+          sudo apt install -y libglew-dev libglm-dev
+
+      - name: Check out our dserv code for the current tag.
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install TCL 9 to the build environment.
+        run: |
+          cd deps/tcl/unix/
+          ./configure
+          make
+          sudo make install
+
+      - name: Install GLFW static lib into the build environment.
+        run: |
+          cd deps/glfw/
+          cmake -B build-full-static -D GLFW_BUILD_WAYLAND=ON -D GLFW_BUILD_X11=ON
+          cmake --build build-full-static --parallel
+          sudo cmake --install build-full-static
+
+
+      - name: Build stim2 itself and package it for release.
+        run: |
+          cmake -D PROJECT_VERSION=${{ github.ref_name }} -B build
+          cmake --build build --parallel
+          cpack -G DEB --config build/CPackConfig.cmake
+
+      - name: Create a GitHub release for the current tag and package.
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: ./*.deb
+          body: stim2 version ${{ github.ref_name }}
+          generateReleaseNotes: true
+          allowUpdates: true
+
+  check:
+
+    needs: release
+
+    strategy:
+      matrix:
+        # Check on latest to confirm compatibility.
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+
+      - name: Install the package we just released.
+        run: |
+          wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/stim2_${{ github.ref_name }}_$(dpkg --print-architecture).deb
+          sudo apt install --yes ./stim2_${{ github.ref_name }}_$(dpkg --print-architecture).deb
+
+      # TODO: obtain dlsh from SheinbergLab with a version, not from benjamin-heasly with "initial"
+      - name: Install our dlsh TCL utils and thier dependencies into the packaging dir.
+        run: |
+          mkdir -p /tmp/package/usr/local/dlsh
+          cd /tmp/package/usr/local/dlsh
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/initial/dlsh.zip
+
+      - name: Sanity check the installed package.
+        run: |
+          ls -alth /usr/local/bin
+          which stim2
+          stim2 --help
