@@ -51,7 +51,7 @@ jobs:
 
       - name: Build stim2 itself and package it for release.
         run: |
-          RUN cmake -D PROJECT_VERSION=${{ github.ref_name }} -B build
+          cmake -D PROJECT_VERSION=${{ github.ref_name }} -B build
           cmake --build build --parallel
           cpack -G DEB --config build/CPackConfig.cmake
 

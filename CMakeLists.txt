@@ -23,6 +23,12 @@ if (EMBED_PYTHON)
 endif()
 
 option(STIM2_USE_GLES "use GLES" OFF)
+if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
+        message(STATUS "${CMAKE_SYSTEM_NAME} and ${CMAKE_SYSTEM_PROCESSOR}: assuming Raspberry Pi, setting STIM2_USE_GLES.")
+        set(STIM2_USE_GLES ON)
+    endif()
+endif()
 
 if (EMBED_PYTHON)
     add_subdirectory(pybind11 REQUIRED)
