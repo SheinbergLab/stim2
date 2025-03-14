@@ -78,8 +78,8 @@ jobs:
 
       - name: Install the package we just released.
         run: |
-          wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/stim2_${{ runner.os }}_$(dpkg --print-architecture).deb
-          sudo apt install --yes ./stim2_${{ runner.os }}_$(dpkg --print-architecture).deb
+          wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/stim2_${{ github.ref_name }}_$(dpkg --print-architecture).deb
+          sudo apt install --yes ./stim2_${{ github.ref_name }}_$(dpkg --print-architecture).deb
 
       # TODO: obtain dlsh from SheinbergLab with a version, not from benjamin-heasly with "initial"
       - name: Install our dlsh TCL utils and thier dependencies into the packaging dir.
