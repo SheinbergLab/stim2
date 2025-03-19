@@ -1366,7 +1366,7 @@ public:
                   kickAnimation();
                 }
 		tqueue.push_back(StimTime);
-		glfwPostEmptyEvent();
+		//	glfwPostEmptyEvent();
                   });
   }
 
@@ -2586,7 +2586,7 @@ main(int argc, char *argv[]) {
   int width = 640, height = 480;
   int xpos = 30, ypos = 30;
   float refresh = 60;
-  int interval = 1;
+  int interval = 2;
   const char *startup_file = NULL;
   bool updated_display = false;
 
@@ -2794,7 +2794,7 @@ main(int argc, char *argv[]) {
   redraw();
 
   while (!glfwWindowShouldClose(app.window)) {
-    glfwWaitEvents();
+    glfwWaitEventsTimeout(app.timer_interval*0.001);
 
     app.processTclCommands();
     app.processDSCommands();
