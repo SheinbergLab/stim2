@@ -801,7 +801,7 @@ int kickAnimation(void)
 {
   int retval = animEventPending;
   if (!animEventPending) {
-    glfwPostEmptyEvent();
+    //    glfwPostEmptyEvent();
     animEventPending = 1;
   }
   return retval;
@@ -811,7 +811,7 @@ int startAnimation(void)
 {
   int old = OL_DYNAMIC(OBJList);
   OL_DYNAMIC(OBJList) = 1;
-  glfwPostEmptyEvent();
+  //  glfwPostEmptyEvent();
   return(old);
 }
 
@@ -1649,7 +1649,7 @@ public:
     setBackgroundColor();
     updateDisplay(log_events);
     did_update = 1;
-    glfwPostEmptyEvent();
+    //    glfwPostEmptyEvent();
     break;
       case UPDATE_DISPLAY:
     updateDisplay(log_events);
@@ -1665,7 +1665,7 @@ public:
     PIX_PER_DEG_Y = (ScreenHeight/2)/HALF_SCREEN_DEG_Y;
     updateDisplay(log_events);
     did_update = 1;
-    glfwPostEmptyEvent();
+    //    glfwPostEmptyEvent();
     break;
       case SHOW_CURSOR:
     showCursor();
@@ -1896,7 +1896,7 @@ Application::tcp_client_process(int sockfd,
 	  queue->push_back(&client_request);
 	  
 	  /* get lock and wake up main thread to process */
-	  glfwPostEmptyEvent();
+	  //	  glfwPostEmptyEvent();
 	  
 	  /* rqueue will be available after command has been processed */
 	  std::string s(client_request.rqueue->front());
@@ -1995,7 +1995,7 @@ Application::message_client_process(int sockfd,
       queue->push_back(&client_request);
       
       /* get lock and wake up main thread to process */
-      glfwPostEmptyEvent();
+      //      glfwPostEmptyEvent();
       
       /* rqueue will be available after command has been processed */
       std::string s(client_request.rqueue->front());
@@ -2047,7 +2047,7 @@ Application::ds_client_process(int sockfd,
 	  queue->push_back(&client_request);
 	  
 	  /* get lock and wake up main thread to process */
-	  glfwPostEmptyEvent();
+	  //	  glfwPostEmptyEvent();
 	}
 	dpoint_str = "";
       }
