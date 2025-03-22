@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <math.h>
 
 #include "open-simplex-noise.h"
@@ -238,8 +239,8 @@ void motionpatchUpdate(GR_OBJ *g)
   for (i = 0; i < s->num_dots; i++) {
     if (s->dots[i].lifetime >= 0 &&
 	s->dots[i].frames >= s->dots[i].lifetime) {
-      s->dots[i].pos[0] = frand()-0.5;
-      s->dots[i].pos[1] = frand()-0.5;
+      s->dots[i].pos[0] = ((float) random()/RAND_MAX) - 0.5;
+      s->dots[i].pos[1] = ((float) random()/RAND_MAX) - 0.5;
       s->dots[i].frames = 0;
 
       if (s->set_direction_by_noise) {
@@ -261,7 +262,7 @@ void motionpatchUpdate(GR_OBJ *g)
       }
       /* If this dot is incoherent, randomize motion direction */
       else {
-	float angle = frand()*2*PI;
+	float angle = ((float) random()/RAND_MAX) *2*PI;
 	s->dots[i].speed[0] = cos(angle)*s->speed;
 	s->dots[i].speed[1] = sin(angle)*s->speed;
       }
@@ -286,7 +287,7 @@ void motionpatchUpdate(GR_OBJ *g)
 	/* If this dot is incoherent, randomize motion direction */
 	/**** It's possible to not update this on every frame ****/
 	else {
-	  float angle = frand()*2*PI;
+	  float angle = ((float) random()/RAND_MAX)*2*PI;
 	  s->dots[i].speed[0] = cos(angle)*s->speed;
 	  s->dots[i].speed[1] = sin(angle)*s->speed;
 	}
@@ -349,8 +350,8 @@ static int setPositions(MOTIONPATCH *s)
 {
   int i;
   for (i = 0; i < s->num_dots; i++) {
-    s->dots[i].pos[0] = frand()-0.5;
-    s->dots[i].pos[1] = frand()-0.5;
+    s->dots[i].pos[0] = ((float) random()/RAND_MAX)-0.5;
+    s->dots[i].pos[1] = ((float) random()/RAND_MAX)-0.5;
     s->dots[i].pos[2] = 0;
   }
   return TCL_OK;
@@ -368,7 +369,7 @@ static int setSpeeds(MOTIONPATCH *s, float vx, float vy)
       s->dots[i].speed[2] = 0;
     }
     else {
-      angle = frand()*2*PI;
+      angle = ((float) random()/RAND_MAX) *2*PI;
       s->dots[i].speed[0] = cos(angle)*s->speed;
       s->dots[i].speed[1] = sin(angle)*s->speed;
     }
@@ -392,9 +393,9 @@ static int setCoherences(MOTIONPATCH *s, float coherence)
   int i;
   float angle;
   for (i = 0; i < s->num_dots; i++) {
-    s->dots[i].coherent = (frand() < coherence);
+    s->dots[i].coherent = (((float) random()/RAND_MAX) < coherence);
     if (!s->dots[i].coherent) {
-      angle = frand()*2*PI;
+      angle = ((float) random()/RAND_MAX)*2*PI;
       s->dots[i].speed[0] = cos(angle)*s->speed;
       s->dots[i].speed[1] = sin(angle)*s->speed;
     }
@@ -1169,6 +1170,8 @@ int Motionpatch_Init(Tcl_Interp *interp)
 
   motionpatchShaderCreate(interp);
 
+  srand(time(NULL));
+  
   Tcl_CreateCommand(interp, "motionpatch", (Tcl_CmdProc *) motionpatchCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "motionpatch_speed",
