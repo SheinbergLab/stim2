@@ -190,8 +190,17 @@ else()
 	set(NEWTON_LIB Newton)
 	find_library(BOX2D_LIB NAMES "libbox2d.a")
 #	set(BOX2D_LIB box2d)
-#	set(BINK_LIB Bink2x64)	
+#	set(BINK_LIB Bink2x64)
+
+if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
 	set(BINK_LIB ${CMAKE_CURRENT_SOURCE_DIR}/../deps/bink/lib/linux/bink2lnxarm64.a)
+    else()
+	set(BINK_LIB ${CMAKE_CURRENT_SOURCE_DIR}/../deps/bink/lib/linux/bink2lnx64.a)
+    endif()
+    
+endif()
+
 	find_library(LIBDL dl)
 	find_library(LIBPTHREAD pthread)
 	find_library(LIBOPENAL openal)
