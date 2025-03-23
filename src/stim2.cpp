@@ -63,6 +63,8 @@ using namespace pybind11::literals;
 
 static int MainWin = 0;
 
+static void do_wakeup(void);
+
 static int MessageLoop(void);
 static void drawGroup(OBJ_GROUP *g);
 static void execTimerFuncs(OBJ_GROUP *g);
@@ -801,7 +803,7 @@ int kickAnimation(void)
 {
   int retval = animEventPending;
   if (!animEventPending) {
-    //    glfwPostEmptyEvent();
+    do_wakeup();
     animEventPending = 1;
   }
   return retval;
@@ -811,7 +813,7 @@ int startAnimation(void)
 {
   int old = OL_DYNAMIC(OBJList);
   OL_DYNAMIC(OBJList) = 1;
-  //  glfwPostEmptyEvent();
+  do_wakeup();
   return(old);
 }
 
@@ -1129,8 +1131,12 @@ class Application
   
   Tcl_Interp *interp;
 
+  // wake up queue
+  SharedQueue<int> wake_queue;
+  
   Timer appTimer;
   SharedQueue<int> tqueue;
+
   GLuint vao;           // gotta have at least one!  ARGH
   std::atomic<bool> done;
   std::atomic<bool> m_bDone;
@@ -1142,6 +1148,17 @@ class Application
   int output_pin;
   
 public:
+  void wakeup(void) { wake_queue.push_back(0); }
+
+  void wait_for_wakeup(void) {
+    int req = wake_queue.front();
+    wake_queue.pop_front();
+    while (wake_queue.size()) {
+      wake_queue.pop_front();
+    }
+  }
+
+  
   // for client requests over tcp
   SharedQueue<client_request_t *> queue;
   SharedQueue<client_request_t *> reply_queue;
@@ -1366,7 +1383,7 @@ public:
                   kickAnimation();
                 }
 		tqueue.push_back(StimTime);
-		//	glfwPostEmptyEvent();
+		do_wakeup();
                   });
   }
 
@@ -1649,7 +1666,7 @@ public:
     setBackgroundColor();
     updateDisplay(log_events);
     did_update = 1;
-    //    glfwPostEmptyEvent();
+    do_wakeup();
     break;
       case UPDATE_DISPLAY:
     updateDisplay(log_events);
@@ -1665,7 +1682,7 @@ public:
     PIX_PER_DEG_Y = (ScreenHeight/2)/HALF_SCREEN_DEG_Y;
     updateDisplay(log_events);
     did_update = 1;
-    //    glfwPostEmptyEvent();
+    do_wakeup();
     break;
       case SHOW_CURSOR:
     showCursor();
@@ -1690,6 +1707,11 @@ public:
 
 // Allow other functions to access
 Application app;
+
+static void do_wakeup(void)
+{
+  app.wakeup();
+}
 
 void Application::start_tcp_server(void)
 {
@@ -1896,7 +1918,7 @@ Application::tcp_client_process(int sockfd,
 	  queue->push_back(&client_request);
 	  
 	  /* get lock and wake up main thread to process */
-	  //	  glfwPostEmptyEvent();
+	  do_wakeup();
 	  
 	  /* rqueue will be available after command has been processed */
 	  std::string s(client_request.rqueue->front());
@@ -1995,7 +2017,7 @@ Application::message_client_process(int sockfd,
       queue->push_back(&client_request);
       
       /* get lock and wake up main thread to process */
-      //      glfwPostEmptyEvent();
+      do_wakeup();
       
       /* rqueue will be available after command has been processed */
       std::string s(client_request.rqueue->front());
@@ -2047,7 +2069,7 @@ Application::ds_client_process(int sockfd,
 	  queue->push_back(&client_request);
 	  
 	  /* get lock and wake up main thread to process */
-	  //	  glfwPostEmptyEvent();
+	  do_wakeup();
 	}
 	dpoint_str = "";
       }
@@ -2794,8 +2816,10 @@ main(int argc, char *argv[]) {
   redraw();
 
   while (!glfwWindowShouldClose(app.window)) {
-    glfwWaitEventsTimeout(app.timer_interval*0.001);
+    app.wait_for_wakeup();
 
+    glfwPollEvents();
+    
     app.processTclCommands();
     app.processDSCommands();
     app.processTimerFuncs();
