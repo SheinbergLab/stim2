@@ -71,7 +71,7 @@ if(APPLE)
         ${IMGUI_DIR}/imgui_tables.cpp ${IMGUI_DIR}/imgui_widgets.cpp
         ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp )
 
-    add_custom_command(TARGET stim2 vPOST_BUILD COMMAND
+    add_custom_command(TARGET stim2 POST_BUILD COMMAND
         dylibbundler -of -b -x $<TARGET_FILE:stim2> -d ./stim2.app/Contents/MacOS/lib -p @executable_path/lib -i /usr/local/lib)
 
     add_custom_command(TARGET stim2 POST_BUILD COMMAND
