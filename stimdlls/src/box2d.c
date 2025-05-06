@@ -549,7 +549,8 @@ static int Box2DCreateBoxCmd(ClientData clientData, Tcl_Interp *interp,
   int enableHits = false;
   
   if (argc < 8) {
-    Tcl_AppendResult(interp, "usage: ", argv[0], " world name type x y w h [angle]", NULL);
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " world name type x y w h [angle]", NULL);
     return TCL_ERROR;
   }
 
@@ -602,8 +603,7 @@ static int Box2DCreateBoxCmd(ClientData clientData, Tcl_Interp *interp,
   b2Polygon box = b2MakeBox(width/2., height/2.);
   b2ShapeDef shapeDef = b2DefaultShapeDef();
   shapeDef.density = 1.0f;
-  shapeDef.friction = 0.3f;
-
+  
   shapeDef.enableContactEvents = enableContact;
   shapeDef.enableHitEvents = enableHits;
     
@@ -687,7 +687,6 @@ static int Box2DCreateCircleCmd(ClientData clientData, Tcl_Interp *interp,
   
   b2ShapeDef shapeDef = b2DefaultShapeDef();
   shapeDef.density = 1.0f;
-  shapeDef.friction = 0.3f;
 
   shapeDef.enableContactEvents = enableContact;
   shapeDef.enableHitEvents = enableHits;
@@ -999,6 +998,35 @@ static int Box2DSetRestitutionCmd(ClientData clientData, Tcl_Interp *interp,
   int nshapes = b2Body_GetShapes(body, shapes, MAX_SHAPES_PER_BODY);
   for (int i = 0; i < nshapes; i++) {
     b2Shape_SetRestitution(shapes[i], restitution);
+  }
+  return(TCL_OK);
+}
+
+static int Box2DSetFrictionCmd(ClientData clientData, Tcl_Interp *interp,
+			       int objc, Tcl_Obj * const objv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *)clientData;
+  BOX2D_WORLD *bw;
+  b2BodyId body;
+  b2ShapeId shapes[MAX_SHAPES_PER_BODY];
+  double friction;
+  
+  if (objc < 4) {
+    Tcl_AppendResult(interp, "usage: ", Tcl_GetString(objv[0]),
+		     " world body friction", NULL);
+    return TCL_ERROR;
+  }
+  
+  if (!(bw = find_Box2D(interp, olist, Tcl_GetString(objv[1]))))
+    return TCL_ERROR;
+  if (find_body(bw, Tcl_GetString(objv[2]), &body) != TCL_OK)
+    return TCL_ERROR;
+  if (Tcl_GetDoubleFromObj(interp, objv[3], &friction) != TCL_OK)
+    return TCL_ERROR;
+  
+  int nshapes = b2Body_GetShapes(body, shapes, MAX_SHAPES_PER_BODY);
+  for (int i = 0; i < nshapes; i++) {
+    b2Shape_SetFriction(shapes[i], friction);
   }
   return(TCL_OK);
 }
@@ -1985,6 +2013,9 @@ int Box_Init(Tcl_Interp *interp)
   /* Body and Shape Getters/Setters */
   Tcl_CreateObjCommand(interp, "Box2D_setRestitution", 
 		       (Tcl_ObjCmdProc *) Box2DSetRestitutionCmd,
+		       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "Box2D_setFrictionn", 
+		       (Tcl_ObjCmdProc *) Box2DSetFrictionCmd,
 		       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   
   /* Revolute Joints */
