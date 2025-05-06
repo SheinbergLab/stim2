@@ -16,6 +16,7 @@ typedef struct _uniform_info {
   char *name;
   GLenum type;
   int location;
+  GLint size;
   void *val;			
 } UNIFORM_INFO;
 

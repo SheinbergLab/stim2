@@ -15,7 +15,7 @@
 
 #include "glsw.h"
 
-char shaderPath[MAX_PATH];	/* where to find shaders */
+char shaderPath[MAX_PATH];  /* where to find shaders */
 
 char *GL_type_to_string (GLenum type) {
   switch (type) {
@@ -38,6 +38,20 @@ char *GL_type_to_string (GLenum type) {
   return "other";
 }
 
+static char* get_uniform_basename(const char* uniformName) {
+  char* baseName = strdup(uniformName); 
+  if (!baseName) return NULL;
+  
+  // Find opening bracket if it exists
+  char* bracketPos = strchr(baseName, '[');
+  if (bracketPos) {
+    // Terminate the string at the bracket position
+    *bracketPos = '\0';
+  }
+  
+  return baseName;
+}
+
 int add_uniforms_to_table(Tcl_HashTable *utable, SHADER_PROG *sp)
 {
   int verbose = 0;
@@ -56,25 +70,26 @@ int add_uniforms_to_table(Tcl_HashTable *utable, SHADER_PROG *sp)
   name = malloc(maxlength+1);
 
   for(i = 0; i < total; i++)  {
-    int name_len=-1, num=-1;
+    int name_len=-1, size=-1;
     GLenum type = GL_ZERO;
     GLint location;
     glGetActiveUniform(sp->program, i, maxlength,
-			&name_len, &num, &type, name);
+            &name_len, &size, &type, name);
     name[name_len] = 0;
     location = glGetUniformLocation(sp->program, name);
 
     if (location >= 0) {
       uinfo = (UNIFORM_INFO *) calloc(1, sizeof(UNIFORM_INFO));
-      uinfo->name = strdup(name); /* make local copy */
+      uinfo->name = get_uniform_basename(name);
       uinfo->type = type;
+      uinfo->size = size;
       uinfo->location = location;
       uinfo->val = NULL;
       entryPtr = Tcl_CreateHashEntry(&sp->uniformTable, uinfo->name, &newentry);
       Tcl_SetHashValue(entryPtr, uinfo);
       if (verbose)
-	fprintf(stdout, "%s: %s\n", uinfo->name,
-		GL_type_to_string(type));
+    fprintf(stdout, "%s: %s (%d)\n", uinfo->name,
+	    GL_type_to_string(type), uinfo->size);
     }
   }
 
@@ -96,6 +111,7 @@ int copy_uniform_table(Tcl_HashTable *source, Tcl_HashTable *dest)
     new_uinfo = (UNIFORM_INFO *) calloc(1, sizeof(UNIFORM_INFO));
     new_uinfo->name = strdup(uinfo->name);
     new_uinfo->type = uinfo->type;
+    new_uinfo->size = uinfo->size;
     new_uinfo->location = uinfo->location;
     newEntryPtr = Tcl_CreateHashEntry(dest, new_uinfo->name, &newentry);
     Tcl_SetHashValue(newEntryPtr, new_uinfo);
@@ -125,7 +141,7 @@ int delete_uniform_table(Tcl_HashTable *utable)
 
 
 int add_defaults_to_table(Tcl_Interp *interp, Tcl_HashTable *dtable,
-			  char *shadername)
+              char *shadername)
 {
   char sname[256];
   const char *u;
@@ -155,10 +171,10 @@ int add_defaults_to_table(Tcl_Interp *interp, Tcl_HashTable *dtable,
   while (pch != NULL) {
     if (pch[0] != '#') {
       if (Tcl_SplitList(interp, pch, &argc, (const char ***) &argv) == TCL_OK) {
-	if (argc == 2) {
-	  entryPtr = Tcl_CreateHashEntry(dtable, argv[0], &newentry);
-	  Tcl_SetHashValue(entryPtr, argv[1]);
-	}
+    if (argc == 2) {
+      entryPtr = Tcl_CreateHashEntry(dtable, argv[0], &newentry);
+      Tcl_SetHashValue(entryPtr, argv[1]);
+    }
       }
     }
     pch = (char *) strtok(NULL, "\n");
@@ -198,14 +214,14 @@ int add_attribs_to_table(Tcl_HashTable *atable, SHADER_PROG *sp)
 
   if (verbose)
     fprintf(stdout, "%d active attribs / maxlength = %d\n", 
-	    total, maxlength);
+        total, maxlength);
   
   for(i = 0; i < total; i++)  {
     int name_len=-1, size=-1;
     GLenum type = GL_ZERO;
     GLint location;
     glGetActiveAttrib(sp->program, i, maxlength,
-		      &name_len, &size, &type, name);
+              &name_len, &size, &type, name);
     name[name_len] = 0;
     location = glGetAttribLocation(sp->program, name);
     if (location >= 0) {
@@ -219,8 +235,8 @@ int add_attribs_to_table(Tcl_HashTable *atable, SHADER_PROG *sp)
       entryPtr = Tcl_CreateHashEntry(&sp->attribTable, ainfo->name, &newentry);
       Tcl_SetHashValue(entryPtr, ainfo);
       if (verbose) fprintf(stdout, "%s: %s [%d@%d]\n", 
-			   ainfo->name, GL_type_to_string(type),
-			   size, location);
+               ainfo->name, GL_type_to_string(type),
+               size, location);
     }
   }
   free(name);
@@ -284,31 +300,31 @@ int update_uniforms(Tcl_HashTable *utable)
       case GL_SAMPLER_2D:
       case GL_SAMPLER_2D_ARRAY:
       case GL_SAMPLER_3D:
-	glUniform1iv(uinfo->location, 1, uinfo->val);
-	break;
+    glUniform1iv(uinfo->location, uinfo->size, uinfo->val);
+    break;
       case GL_FLOAT:
-	glUniform1fv(uinfo->location, 1, uinfo->val);
-	break;
+    glUniform1fv(uinfo->location, uinfo->size, uinfo->val);
+    break;
       case GL_FLOAT_VEC2:
-	glUniform2fv(uinfo->location, 1, uinfo->val);
-	break;
+    glUniform2fv(uinfo->location, uinfo->size, uinfo->val);
+    break;
       case GL_FLOAT_VEC3:
-	glUniform3fv(uinfo->location, 1, uinfo->val);
-	break;
+    glUniform3fv(uinfo->location, uinfo->size, uinfo->val);
+    break;
       case GL_FLOAT_VEC4:
-	glUniform4fv(uinfo->location, 1, uinfo->val);
-	break;
+    glUniform4fv(uinfo->location, uinfo->size, uinfo->val);
+    break;
       case GL_FLOAT_MAT2:
-	glUniformMatrix2fv(uinfo->location, 1, 0, uinfo->val);
-	break;
+    glUniformMatrix2fv(uinfo->location, uinfo->size, 0, uinfo->val);
+    break;
       case GL_FLOAT_MAT3:
-	glUniformMatrix3fv(uinfo->location, 1, 0, uinfo->val);
-	break;
+    glUniformMatrix3fv(uinfo->location, uinfo->size, 0, uinfo->val);
+    break;
       case GL_FLOAT_MAT4:
-       	glUniformMatrix4fv(uinfo->location, 1, 0, uinfo->val);
-	break;
+        glUniformMatrix4fv(uinfo->location, uinfo->size, 0, uinfo->val);
+    break;
       default: 
-	break;
+    break;
       }
     }
     entryPtr = Tcl_NextHashEntry(&searchEntry);
@@ -444,7 +460,7 @@ void printShaderInfoLog(GLuint obj)
 }
 
 GLenum CompileProgram(GLenum target, const GLchar* sourcecode, GLuint *shader,
-		      int verbose)
+              int verbose)
 {
   if (sourcecode != 0)
     {
@@ -456,10 +472,10 @@ GLenum CompileProgram(GLenum target, const GLchar* sourcecode, GLuint *shader,
       int params = -1;
       glGetShaderiv (*shader, GL_COMPILE_STATUS, &params);
       if (GL_TRUE != params) {
-	fprintf (stderr, "ERROR: GL shader index %i did not compile \n",
-		 *shader);
-	printShaderInfoLog (*shader);
-	return -1;
+    fprintf (stderr, "ERROR: GL shader index %i did not compile \n",
+         *shader);
+    printShaderInfoLog (*shader);
+    return -1;
       }
     }
   return GL_NO_ERROR;

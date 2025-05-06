@@ -78,12 +78,12 @@
 #define MAX_PATH 512
 #endif
 
-static int ShaderObjID = -1;	/* unique shader object id */
+static int ShaderObjID = -1;    /* unique shader object id */
 
 Tcl_HashTable shaderProgramTable; /* keep track of compiled/linked programs */
 static int shaderProgramCount = 0;
 
-#define NSAMPLERS 4		/* currently allow four textures in shader */
+#define NSAMPLERS 4     /* currently allow four textures in shader */
 
 typedef struct _vao_info {
   GLuint vao;
@@ -99,23 +99,23 @@ typedef struct _vao_info {
 
 typedef struct _shader_obj {
   int type;
-  GLuint texid[NSAMPLERS];	/* if >= 0, bind this texture  */
-  UNIFORM_INFO *tex0;		/* Texture samples to share    */
-  UNIFORM_INFO *tex1;		/* Will be called tex0-tex3    */
-  UNIFORM_INFO *tex2;		
-  UNIFORM_INFO *tex3;		
-  UNIFORM_INFO *time;	        /* set if we have "time" uniform  */
+  GLuint texid[NSAMPLERS];  /* if >= 0, bind this texture  */
+  UNIFORM_INFO *tex0;       /* Texture samples to share    */
+  UNIFORM_INFO *tex1;       /* Will be called tex0-tex3    */
+  UNIFORM_INFO *tex2;       
+  UNIFORM_INFO *tex3;       
+  UNIFORM_INFO *time;           /* set if we have "time" uniform  */
   UNIFORM_INFO *resolution;     /* set if we have "resolution" uniform */
   UNIFORM_INFO *modelviewMat;   /* set if we have "modelviewMat" uniform */
   UNIFORM_INFO *projMat;        /* set if we have "projMat" uniform */
   SHADER_PROG *program;
-  VAO_INFO *vao_info;		/* to track vertex attributes */
-  Tcl_HashTable uniformTable;	/* local unique version */
-  Tcl_HashTable attribTable;	/* local unique version */
+  VAO_INFO *vao_info;       /* to track vertex attributes */
+  Tcl_HashTable uniformTable;   /* local unique version */
+  Tcl_HashTable attribTable;    /* local unique version */
 } SHADER_OBJ;
 
 static int uniform_set(Tcl_Interp *interp, Tcl_HashTable *table,
-		       char *shader_name, char *name, char *valstr);
+               char *shader_name, char *name, char *valstr);
 
 static void delete_vao_info(VAO_INFO *v);
 
@@ -124,19 +124,19 @@ static int parse_floats(char *str, float *vals, int n);
 
 /* from shaderimage.c */
 int imageLoadCmd(ClientData clientData, Tcl_Interp *interp,
-		 int argc, char *argv[]);
+         int argc, char *argv[]);
 int imageCreateCmd(ClientData clientData, Tcl_Interp *interp,
-		   int argc, char *argv[]);
+           int argc, char *argv[]);
 int imageCreateFromStringCmd(ClientData clientData, Tcl_Interp *interp,
-			     int argc, char *argv[]);
+                 int argc, char *argv[]);
 int imageTextureIDCmd(ClientData  clientData, Tcl_Interp *interp,
-		      int argc, char *argv[]);
+              int argc, char *argv[]);
 int imageResetCmd(ClientData clientData, Tcl_Interp *interp,
-		  int argc, char *argv[]);
+          int argc, char *argv[]);
 void imageListReset(void);
 
 int imageSetFilterType(ClientData cdata, Tcl_Interp * interp, 
-		       int objc, Tcl_Obj * const objv[]);
+               int objc, Tcl_Obj * const objv[]);
   
 
 
@@ -281,13 +281,13 @@ static int shaderObjCreate(OBJ_LIST *olist, SHADER_PROG *sp)
 
   /* To be replaced with dynamic ones at some point */
   static GLfloat texcoords[] = { 0.0, 0.0,
-				 0.0, 1.0,
-				 1.0, 0.0,
-				 1.0, 1.0 };
+                 0.0, 1.0,
+                 1.0, 0.0,
+                 1.0, 1.0 };
   static GLfloat points[] = { -.5, -.5, 0.0,
-			      -.5, .5, 0.0,
-			      .5, -.5, 0.0,
-  			      .5, .5, 0.0 };
+                  -.5, .5, 0.0,
+                  .5, -.5, 0.0,
+                  .5, .5, 0.0 };
 
   obj = gobjCreateObj();
   if (!obj) return -1;
@@ -318,18 +318,18 @@ static int shaderObjCreate(OBJ_LIST *olist, SHADER_PROG *sp)
     g->vao_info->points = 
       (GLfloat *) calloc(g->vao_info->npoints, sizeof(GLfloat));
     memcpy(g->vao_info->points, points, 
-	   g->vao_info->npoints*sizeof(GLfloat));
+       g->vao_info->npoints*sizeof(GLfloat));
     
     glGenBuffers(1, &g->vao_info->points_vbo);
     glBindBuffer(GL_ARRAY_BUFFER, g->vao_info->points_vbo);
     glBufferData(GL_ARRAY_BUFFER, g->vao_info->npoints*sizeof(GLfloat),
-		 g->vao_info->points, GL_STATIC_DRAW);
+         g->vao_info->points, GL_STATIC_DRAW);
     
     
     glBindBuffer(GL_ARRAY_BUFFER, g->vao_info->points_vbo);
     glVertexAttribPointer(ainfo->location, 3, GL_FLOAT, GL_FALSE, 0, NULL);
     glEnableVertexAttribArray(ainfo->location);
-    g->vao_info->nindices = 4;	/* single quad */
+    g->vao_info->nindices = 4;  /* single quad */
     g->vao_info->narrays++;
   }
 
@@ -339,12 +339,12 @@ static int shaderObjCreate(OBJ_LIST *olist, SHADER_PROG *sp)
     g->vao_info->texcoords = 
       (GLfloat *) calloc(g->vao_info->ntexcoords, sizeof(GLfloat));
     memcpy(g->vao_info->texcoords, texcoords, 
-	   g->vao_info->ntexcoords*sizeof(GLfloat));
+       g->vao_info->ntexcoords*sizeof(GLfloat));
     
     glGenBuffers(1, &g->vao_info->texcoords_vbo);
     glBindBuffer(GL_ARRAY_BUFFER, g->vao_info->texcoords_vbo);
     glBufferData(GL_ARRAY_BUFFER, g->vao_info->ntexcoords*sizeof(GLfloat),
-		 g->vao_info->texcoords, GL_STATIC_DRAW);
+         g->vao_info->texcoords, GL_STATIC_DRAW);
 
     glVertexAttribPointer(ainfo->location, 2, GL_FLOAT, GL_FALSE, 0, NULL);
     glEnableVertexAttribArray(ainfo->location);
@@ -396,10 +396,10 @@ static int shaderObjCreate(OBJ_LIST *olist, SHADER_PROG *sp)
     *((int *)(g->tex3->val)) = 3;
   }
   
-  g->texid[0] = -1;		/* initialize to no texture sampler */
-  g->texid[1] = -1;		
-  g->texid[2] = -1;		
-  g->texid[3] = -1;		
+  g->texid[0] = -1;     /* initialize to no texture sampler */
+  g->texid[1] = -1;     
+  g->texid[2] = -1;     
+  g->texid[3] = -1;     
 
    return(gobjAddObj(olist, obj));
 }
@@ -413,20 +413,20 @@ static int set_default_uniforms(Tcl_Interp *interp, SHADER_OBJ *s)
   entryPtr = Tcl_FirstHashEntry(table, &searchEntry);
   if (entryPtr) {
     uniform_set(interp, &s->uniformTable, s->program->name, 
-		Tcl_GetHashKey(table, entryPtr),
-		Tcl_GetHashValue(entryPtr));
+        Tcl_GetHashKey(table, entryPtr),
+        Tcl_GetHashValue(entryPtr));
     while ((entryPtr = Tcl_NextHashEntry(&searchEntry))) {
       uniform_set(interp, &s->uniformTable, s->program->name, 
-		  Tcl_GetHashKey(table, entryPtr),
-		  Tcl_GetHashValue(entryPtr));
+          Tcl_GetHashKey(table, entryPtr),
+          Tcl_GetHashValue(entryPtr));
     }
   }
   
   return 1;
 }
-					  
+                      
 static int shaderObjCmd(ClientData clientData, Tcl_Interp *interp,
-		      int argc, char *argv[])
+              int argc, char *argv[])
 {
   OBJ_LIST *olist = (OBJ_LIST *) clientData;
   int id;
@@ -439,7 +439,7 @@ static int shaderObjCmd(ClientData clientData, Tcl_Interp *interp,
 
   if (!(sp = find_shader_program(argv[1]))) {
     Tcl_AppendResult(interp, argv[0], ": shader \"", argv[1], "\" not found", 
-		     NULL);
+             NULL);
     return(TCL_ERROR);
   }
 
@@ -456,7 +456,7 @@ static int shaderObjCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 static int shaderObjSetSamplerCmd(ClientData clientData, Tcl_Interp *interp,
-				 int argc, char *argv[])
+                 int argc, char *argv[])
 {
   OBJ_LIST *olist = (OBJ_LIST *) clientData;
   SHADER_OBJ *g;
@@ -466,7 +466,7 @@ static int shaderObjSetSamplerCmd(ClientData clientData, Tcl_Interp *interp,
   
   if (argc < 2) {
     Tcl_AppendResult(interp, "usage: ", argv[0],
-		     " shaderObj [textureID] [sampler]", NULL);
+             " shaderObj [textureID] [sampler]", NULL);
     return TCL_ERROR;
   }
 
@@ -502,7 +502,7 @@ static int shaderObjSetSamplerCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 static int shaderSetPathCmd(ClientData clientData, Tcl_Interp *interp,
-			    int argc, char *argv[])
+                int argc, char *argv[])
 {
   char oldpath[MAX_PATH];
   strncpy(oldpath, shaderPath, MAX_PATH-1);
@@ -516,10 +516,10 @@ static int shaderSetPathCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 static int shaderBuildCmd(ClientData clientData, Tcl_Interp *interp,
-		      int argc, char *argv[])
+              int argc, char *argv[])
 {
   OBJ_LIST *olist = (OBJ_LIST *) clientData;
-  SHADER_PROG shader_prog;	/* temp to hold new prog */
+  SHADER_PROG shader_prog;  /* temp to hold new prog */
   char shader_name[64];
   Tcl_HashEntry *entryPtr;
   int newentry;
@@ -591,7 +591,7 @@ static int shader_prog_delete(SHADER_PROG *sp)
 }
 
 static int shaderDeleteCmd(ClientData clientData, Tcl_Interp *interp,
-			   int argc, char *argv[])
+               int argc, char *argv[])
 {
   Tcl_HashEntry *entryPtr;
   
@@ -609,7 +609,7 @@ static int shaderDeleteCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 static int shaderDeleteAllCmd(ClientData clientData, Tcl_Interp *interp,
-			      int argc, char *argv[])
+                  int argc, char *argv[])
 {
   Tcl_HashEntry *entryPtr;
   Tcl_HashSearch searchEntry;
@@ -650,7 +650,7 @@ static int uniform_names(Tcl_Interp *interp, Tcl_HashTable *table)
 }
 
 static int shaderUniformNamesCmd(ClientData clientData, Tcl_Interp *interp,
-				 int argc, char *argv[])
+                 int argc, char *argv[])
 {
   SHADER_PROG *sp;
 
@@ -661,7 +661,7 @@ static int shaderUniformNamesCmd(ClientData clientData, Tcl_Interp *interp,
 
   if (!(sp = find_shader_program(argv[1]))) {
     Tcl_AppendResult(interp, argv[0], ": shader \"", argv[1], "\" not found", 
-		     NULL);
+             NULL);
     return(TCL_ERROR);
   }
   return(uniform_names(interp, &sp->uniformTable));
@@ -688,7 +688,7 @@ static int uniform_defaults(Tcl_Interp *interp, Tcl_HashTable *table)
 }
 
 static int shaderDefaultSettingsCmd(ClientData clientData, Tcl_Interp *interp,
-				    int argc, char *argv[])
+                    int argc, char *argv[])
 {
   SHADER_PROG *sp;
 
@@ -699,7 +699,7 @@ static int shaderDefaultSettingsCmd(ClientData clientData, Tcl_Interp *interp,
   
   if (!(sp = find_shader_program(argv[1]))) {
     Tcl_AppendResult(interp, argv[0], ": shader \"", argv[1], "\" not found", 
-		     NULL);
+             NULL);
     return(TCL_ERROR);
   }
   return(uniform_defaults(interp, &sp->defaultsTable));
@@ -707,7 +707,7 @@ static int shaderDefaultSettingsCmd(ClientData clientData, Tcl_Interp *interp,
 
 
 static int shaderObjUniformNamesCmd(ClientData clientData, Tcl_Interp *interp,
-				    int argc, char *argv[])
+                    int argc, char *argv[])
 {
   OBJ_LIST *olist = (OBJ_LIST *) clientData;
   SHADER_OBJ *g;
@@ -768,165 +768,197 @@ static int parse_floats(char *str, float *vals, int n)
 }
 
 static int uniform_set(Tcl_Interp *interp, Tcl_HashTable *table,
-		       char *shader_name, char *name, char *valstr)
+                       char *shader_name, char *name, char *valstr)
 {
   Tcl_HashEntry *entryPtr;
   UNIFORM_INFO *uinfo;
-  int ival;
-  float fval;
-  float fvals[16];
+  Tcl_Obj *listObj;
+  Tcl_Obj **elements;
+  Tcl_Size elementCount;
+  int totalNumbersRequired = 0;
+  int i;
+
+  Tcl_ResetResult(interp);
   
   if ((entryPtr = Tcl_FindHashEntry(table, name))) {
-    uinfo = (UNIFORM_INFO *) Tcl_GetHashValue(entryPtr);
+    uinfo = (UNIFORM_INFO *)Tcl_GetHashValue(entryPtr);
   }
   else {
-    Tcl_AppendResult(interp, "uniform \"", name, "\" not found in shader \"", 
-		     shader_name, "\"", NULL);
+    Tcl_AppendResult(interp, "uniform \"", name, "\" not found in shader \"",
+                     shader_name, "\"", NULL);
     return TCL_ERROR;
   }
 
-  switch(uinfo->type) {
-  case GL_BOOL: 
+  listObj = Tcl_NewStringObj(valstr, -1);
+
+  // Determine the total number of individual numbers required based on the type
+  switch (uinfo->type) {
+  case GL_BOOL:
   case GL_INT:
-    if (sscanf(valstr, "%d", &ival) == 1) {
-      if (!uinfo->val) {
-	uinfo->val = (int *) malloc(sizeof(int));
-      }
-      memcpy(uinfo->val, &ival, sizeof(int));
-      return TCL_OK;
-    }
-    break;
-  case GL_FLOAT: 
-    if (sscanf(valstr, "%f", &fval) == 1) {
-      if (!uinfo->val) 
-	uinfo->val = (float *) malloc(sizeof(float));
-      memcpy(uinfo->val, &fval, sizeof(float));
-      return TCL_OK;
-    }
+  case GL_FLOAT:
+    totalNumbersRequired = uinfo->size; // 1 number per element
     break;
   case GL_FLOAT_VEC2:
-    if (parse_floats(valstr, fvals, 2) == 2) {
-      if (!uinfo->val) 
-	uinfo->val = (float *) malloc(2*sizeof(float));
-      memcpy(uinfo->val, &fvals[0], 2*sizeof(float));
-      return TCL_OK;
-    }
+    totalNumbersRequired = uinfo->size * 2; // 2 numbers per element
     break;
   case GL_FLOAT_VEC3:
-    if (parse_floats(valstr, fvals, 3) == 3) {
-      if (!uinfo->val) 
-	uinfo->val = (float *) malloc(3*sizeof(float));
-      memcpy(uinfo->val, &fvals[0], 3*sizeof(float));
-      return TCL_OK;
-    }
+    totalNumbersRequired = uinfo->size * 3; // 3 numbers per element
     break;
   case GL_FLOAT_VEC4:
   case GL_FLOAT_MAT2:
-    if (parse_floats(valstr, fvals, 4) == 4) {
-      if (!uinfo->val) 
-	uinfo->val = (float *) malloc(4*sizeof(float));
-      memcpy(uinfo->val, &fvals[0], 4*sizeof(float));
-      return TCL_OK;
-    }
+    totalNumbersRequired = uinfo->size * 4; // 4 numbers per element
     break;
   case GL_FLOAT_MAT3:
-    if (parse_floats(valstr, fvals, 9) == 9) {
-      if (!uinfo->val) 
-	uinfo->val = (float *) malloc(9*sizeof(float));
-      memcpy(uinfo->val, &fvals[0], 9*sizeof(float));
-      return TCL_OK;
-    }
+    totalNumbersRequired = uinfo->size * 9; // 9 numbers per element
     break;
   case GL_FLOAT_MAT4:
-    if (parse_floats(valstr, fvals, 16) == 16) {
-      if (!uinfo->val) 
-	uinfo->val = (float *) malloc(16*sizeof(float));
-      memcpy(uinfo->val, &fvals[0], 16*sizeof(float));
-      return TCL_OK;
-    }
+    totalNumbersRequired = uinfo->size * 16; // 16 numbers per element
     break;
-  case GL_SAMPLER_2D:
-  case GL_SAMPLER_3D:
-  case GL_SAMPLER_CUBE:
-  case GL_SAMPLER_2D_SHADOW:
-    break;
+  default:
+    Tcl_DecrRefCount(listObj);
+    Tcl_AppendResult(interp,
+		     "unsupported uniform type for \"", name, "\"", NULL);
+    return TCL_ERROR;
   }
-  
-  Tcl_AppendResult(interp, "unable to set uniform: \"", name, "\" in shader \"", 
-		   shader_name, "\"", NULL);
-  return TCL_ERROR;
+
+  // Split the input string into individual components
+  if (Tcl_ListObjGetElements(interp, listObj,
+			     &elementCount, &elements) != TCL_OK) {
+    Tcl_DecrRefCount(listObj);
+    Tcl_AppendResult(interp, "failed to parse uniform value: \"",
+		     valstr, "\"", NULL);
+    return TCL_ERROR;
+  }
+	
+  // Check if the number of elements is a multiple of the total numbers required
+  if (elementCount > totalNumbersRequired) {
+      Tcl_DecrRefCount(listObj);
+      Tcl_AppendResult(interp, "uniform \"", name, "\" expects no more than ",
+                     totalNumbersRequired,
+		     " values but got ", elementCount, NULL);
+    return TCL_ERROR;
+  }
+
+  // Parse and store the values based on the uniform type
+  if (uinfo->type == GL_BOOL || uinfo->type == GL_INT) {
+    if (!uinfo->val) {
+      uinfo->val = malloc(totalNumbersRequired * sizeof(int));
+      if (!uinfo->val){
+        Tcl_DecrRefCount(listObj);
+        Tcl_AppendResult(interp,
+			 "memory allocation failed for uniform \"",
+			 name, "\"", NULL);
+        return TCL_ERROR;
+      }
+    }
+    int ival;
+    for (i = 0; i < elementCount; i++) {
+      if (Tcl_GetIntFromObj(interp, elements[i], &ival) != TCL_OK) {
+        Tcl_DecrRefCount(listObj);
+        return TCL_ERROR;
+      }
+      ((int *)uinfo->val)[i] = ival;
+    }
+  }
+  else {
+    for (i = 0; i < elementCount; i++) {
+      if (!uinfo->val) {
+        uinfo->val = malloc(totalNumbersRequired * sizeof(float));
+        if (!uinfo->val)
+        {
+          Tcl_DecrRefCount(listObj);
+          Tcl_AppendResult(interp,
+			   "memory allocation failed for uniform \"",
+			   name, "\"", NULL);
+          return TCL_ERROR;
+        }
+      }
+      double fval;
+      if (Tcl_GetDoubleFromObj(interp, elements[i], &fval) != TCL_OK) {
+        Tcl_DecrRefCount(listObj);
+        return TCL_ERROR;
+      }
+      ((float *)uinfo->val)[i] = (float)fval;
+    }
+  }
+
+  Tcl_DecrRefCount(listObj);
+  return TCL_OK;
 }
 
 static int uniform_get(Tcl_Interp *interp, Tcl_HashTable *table,
-		       char *shader_name, char *name)
+                       char *shader_name, char *name)
 {
   Tcl_HashEntry *entryPtr;
   UNIFORM_INFO *uinfo;
-  static char valstr[256];
+  Tcl_Obj *listObj;
   int *ival;
   float *fvals;
-  
+  int i, j, elementsPerUniform;
+
   if ((entryPtr = Tcl_FindHashEntry(table, name))) {
-    uinfo = (UNIFORM_INFO *) Tcl_GetHashValue(entryPtr);
-  }
-  else {
-    Tcl_AppendResult(interp, "uniform \"", name, "\" not found in shader \"", 
-		     shader_name, "\"", NULL);
+    uinfo = (UNIFORM_INFO *)Tcl_GetHashValue(entryPtr);
+  } else {
+    Tcl_AppendResult(interp, "uniform \"", name, "\" not found in shader \"",
+                     shader_name, "\"", NULL);
     return TCL_ERROR;
   }
 
-  valstr[0] = 0;
-  switch(uinfo->type) {
-  case GL_BOOL: 
+  // Create a new Tcl list object to hold the uniform values
+  listObj = Tcl_NewListObj(0, NULL);
+
+  // Determine the number of elements per uniform based on the type
+  switch (uinfo->type) {
+  case GL_BOOL:
   case GL_INT:
-    ival = (int *) uinfo->val;
-    sprintf(valstr, "%d", ival[0]);
-    break;
-  case GL_FLOAT: 
-    fvals = (float *) uinfo->val;
-    sprintf(valstr, "%f", fvals[0]);
+  case GL_FLOAT:
+    elementsPerUniform = 1;
     break;
   case GL_FLOAT_VEC2:
-    fvals = (float *) uinfo->val;
-    sprintf(valstr, "%f %f", fvals[0], fvals[1]);
+    elementsPerUniform = 2;
     break;
   case GL_FLOAT_VEC3:
-    fvals = (float *) uinfo->val;
-    sprintf(valstr, "%f %f %f", fvals[0], fvals[1], fvals[2]);
+    elementsPerUniform = 3;
     break;
   case GL_FLOAT_VEC4:
   case GL_FLOAT_MAT2:
-    fvals = (float *) uinfo->val;
-    sprintf(valstr, "%f %f %f %f",
-	    fvals[0], fvals[1], fvals[2], fvals[3]);
+    elementsPerUniform = 4;
     break;
   case GL_FLOAT_MAT3:
-    fvals = (float *) uinfo->val;
-    sprintf(valstr, "%f %f %f %f %f %f %f %f",
-	    fvals[0],	    fvals[1],	    fvals[2],	    fvals[3],
-	    fvals[4],       fvals[5],	    fvals[6],	    fvals[7]);
+    elementsPerUniform = 9;
     break;
   case GL_FLOAT_MAT4:
-    fvals = (float *) uinfo->val;
-    sprintf(valstr, "%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f",
-	    fvals[0],	    fvals[1],	    fvals[2],	    fvals[3],
-	    fvals[4],       fvals[5],	    fvals[6],	    fvals[7],
-	    fvals[8],	    fvals[9],	    fvals[10],	    fvals[11],
-	    fvals[12],      fvals[13],	    fvals[14],	    fvals[15]);	    
+    elementsPerUniform = 16;
     break;
-  case GL_SAMPLER_2D:
-  case GL_SAMPLER_3D:
-  case GL_SAMPLER_CUBE:
-  case GL_SAMPLER_2D_SHADOW:
-    break;
+  default:
+    Tcl_AppendResult(interp, "unsupported uniform type for \"", name, "\"", NULL);
+    return TCL_ERROR;
   }
-  
-  Tcl_SetResult(interp, valstr, TCL_STATIC);
+
+  // Iterate over the uniform values and add them to the list
+  if (uinfo->type == GL_BOOL || uinfo->type == GL_INT) {
+    ival = (int *)uinfo->val;
+    for (i = 0; i < uinfo->size; i++) {
+      for (j = 0; j < elementsPerUniform; j++) {
+        Tcl_ListObjAppendElement(interp, listObj, Tcl_NewIntObj(ival[i * elementsPerUniform + j]));
+      }
+    }
+  } else {
+    fvals = (float *)uinfo->val;
+    for (i = 0; i < uinfo->size; i++) {
+      for (j = 0; j < elementsPerUniform; j++) {
+        Tcl_ListObjAppendElement(interp, listObj, Tcl_NewDoubleObj(fvals[i * elementsPerUniform + j]));
+      }
+    }
+  }
+
+  // Set the Tcl list as the result
+  Tcl_SetObjResult(interp, listObj);
   return TCL_OK;
 }
 
 static int shaderObjSetUniformCmd(ClientData clientData, Tcl_Interp *interp,
-				  int argc, char *argv[])
+                  int argc, char *argv[])
 {
   OBJ_LIST *olist = (OBJ_LIST *) clientData;
   SHADER_OBJ *g;
@@ -951,11 +983,11 @@ static int shaderObjSetUniformCmd(ClientData clientData, Tcl_Interp *interp,
   g = GR_CLIENTDATA(OL_OBJ(olist,id));
   if (argc > 3) {
     return(uniform_set(interp, &g->uniformTable, g->program->name, 
-		       argv[2], argv[3]));
+               argv[2], argv[3]));
   }
   else {
     return(uniform_get(interp, &g->uniformTable, g->program->name,
-		       argv[2]));
+               argv[2]));
   }
 }
 
@@ -989,54 +1021,54 @@ int Shader_Init(Tcl_Interp *interp)
   Tcl_InitHashTable(&shaderProgramTable, TCL_STRING_KEYS);
 
   Tcl_CreateCommand(interp, "shaderObj", 
-		    (Tcl_CmdProc *) shaderObjCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+            (Tcl_CmdProc *) shaderObjCmd, 
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "shaderObjUniformNames", 
-		    (Tcl_CmdProc *) shaderObjUniformNamesCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+            (Tcl_CmdProc *) shaderObjUniformNamesCmd, 
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "shaderObjSetUniform", 
-		    (Tcl_CmdProc *) shaderObjSetUniformCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+            (Tcl_CmdProc *) shaderObjSetUniformCmd, 
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "shaderObjSetSampler", 
-		    (Tcl_CmdProc *) shaderObjSetSamplerCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+            (Tcl_CmdProc *) shaderObjSetSamplerCmd, 
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
   Tcl_CreateCommand(interp, "shaderSetPath", 
-		    (Tcl_CmdProc *) shaderSetPathCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+            (Tcl_CmdProc *) shaderSetPathCmd, 
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "shaderBuild", 
-		    (Tcl_CmdProc *) shaderBuildCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+            (Tcl_CmdProc *) shaderBuildCmd, 
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "shaderDelete", 
-		    (Tcl_CmdProc *) shaderDeleteCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+            (Tcl_CmdProc *) shaderDeleteCmd, 
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "shaderDeleteAll", 
-		    (Tcl_CmdProc *) shaderDeleteAllCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+            (Tcl_CmdProc *) shaderDeleteAllCmd, 
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "shaderUniformNames", 
-		    (Tcl_CmdProc *) shaderUniformNamesCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+            (Tcl_CmdProc *) shaderUniformNamesCmd, 
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "shaderDefaultSettings", 
-		    (Tcl_CmdProc *) shaderDefaultSettingsCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+            (Tcl_CmdProc *) shaderDefaultSettingsCmd, 
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
 
   Tcl_CreateCommand(interp, "shaderImageLoad", (Tcl_CmdProc *) imageLoadCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "shaderImageCreate",
-		    (Tcl_CmdProc *) imageCreateCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+            (Tcl_CmdProc *) imageCreateCmd, 
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "shaderImageCreateFromString",
-		    (Tcl_CmdProc *) imageCreateFromStringCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+            (Tcl_CmdProc *) imageCreateFromStringCmd, 
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "shaderImageID", (Tcl_CmdProc *) imageTextureIDCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "shaderImageReset", (Tcl_CmdProc *) imageResetCmd, 
-		    NULL, (Tcl_CmdDeleteProc *) NULL);
+            NULL, (Tcl_CmdDeleteProc *) NULL);
 
   Tcl_CreateObjCommand(interp, "shaderImageSetFilterType",
-		       imageSetFilterType,
-		       NULL, NULL);
+               imageSetFilterType,
+               NULL, NULL);
 
 
   return TCL_OK;
@@ -1049,6 +1081,6 @@ DllEntryPoint(hInst, reason, reserved)
     DWORD reason;
     LPVOID reserved;
 {
-	return TRUE;
+    return TRUE;
 }
 #endif
