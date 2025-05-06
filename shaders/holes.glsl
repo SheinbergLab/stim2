@@ -16,17 +16,19 @@ void main(void)
 
 -- Fragment
 
-#define MAX_CIRCLES 20
+#define MAX_CIRCLES 30
 uniform float time;
 uniform vec2 resolution;
 
-uniform float radius;        // Radius of each circle
 uniform float smoothness;    // Edge smoothness (0.0 = hard, higher = softer)
 uniform vec4  maskColor;     // RGBA color of the mask
 
 uniform int nCircles;
 uniform float rotationAngle;
 uniform vec2 circlePos[MAX_CIRCLES];
+uniform float radii[MAX_CIRCLES];  // Radius of each circle
+
+uniform bool invert;
 
 uniform sampler2D tex0;
 in vec2 texcoord;
@@ -59,19 +61,23 @@ void main(void){
     for (int i = 0; i < MAX_CIRCLES; i++) {
        if (i >= nCircles) break;
        mask = max(mask,
-                  drawCircle(position, circlePos[i], radius, smoothness));
+                  drawCircle(position, circlePos[i], radii[i], smoothness));
     }
     
     vec4 textureColor = texture(tex0, vec2(texcoord.s, 1.0-texcoord.t));
 
+    if (invert) {
+       mask = 1-mask;
+    }
     fragcolor = mix(maskColor, textureColor, mask);
 }
 
 -- Uniforms
 
-radius 0.1
 smoothness .005
 maskColor "0.6 0.1 0.9 1.0"
 circlePos "-.1 0.0 0.0 .2"
+radii "0.1 0.06"
 nCircles 2
 rotationAngle 0
+invert 0
