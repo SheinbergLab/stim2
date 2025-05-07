@@ -15,6 +15,7 @@ void main(void)
 }
 
 -- Fragment
+precision mediump float;
 
 #define MAX_CIRCLES 30
 uniform float time;
@@ -71,7 +72,7 @@ void main(void){
                   drawCircle(position, circlePos[i], radii[i], smoothness));
     }
     if (!invert) {
-       mask = 1-mask;
+       mask = 1.0-mask;
     }
     fragcolor = vec4(maskColor.rgb, mask);
 }
