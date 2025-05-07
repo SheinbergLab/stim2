@@ -16,6 +16,8 @@ void main(void)
 
 -- Fragment
 
+precision mediump float;
+
 #define MAX_CIRCLES 30
 uniform float time;
 uniform vec2 resolution;
