@@ -1,4 +1,5 @@
 -- Vertex
+precision mediump float;
 
 in vec3 vertex_position;
 in vec2 vertex_texcoord;
@@ -69,7 +70,7 @@ void main(void){
     vec4 textureColor = texture(tex0, vec2(texcoord.s, 1.0-texcoord.t));
 
     if (invert) {
-       mask = 1-mask;
+       mask = 1.0-mask;
     }
     fragcolor = mix(maskColor, textureColor, mask);
 }
