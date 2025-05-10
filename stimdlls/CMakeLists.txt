@@ -10,7 +10,7 @@ option(STIM2_USE_GLES "use GLES" OFF)
 add_definitions(-DUSE_TCL_STUBS)
 
 if (STIM2_USE_GLES)
-add_definitions(-DSTIM2_USE_GLES)
+add_definitions(-DSTIM2_USE_GLES=1)
 endif()
 
 set(APP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../src")
