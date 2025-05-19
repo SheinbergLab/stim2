@@ -1,1 +1,4 @@
 *.deb
+*.dmg
+_CPack_Packages/
+build/

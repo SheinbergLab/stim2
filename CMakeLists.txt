@@ -50,8 +50,9 @@ if(WIN32)
     link_directories(c:/usr/local/lib/$ENV{VSCMD_ARG_TGT_ARCH} ${PYTHON_LIB_DIR})
     add_definitions(-DNOMINMAX -D_WIN32)
 elseif(APPLE)
-    include_directories(/usr/local/include ${IMGUI_DIR} ${IMGUI_DIR}/backends)
-    link_directories(/usr/local/lib)
+    # libglm and libtcl may be installed from source or by homebrew.
+    include_directories("/usr/local/include" "/opt/homebrew/include" "/opt/homebrew/include/tcl-tk" ${IMGUI_DIR} ${IMGUI_DIR}/backends)
+    link_directories("/usr/local/lib" "/opt/homebrew/lib")
 else()
     include_directories(/usr/local/include ${IMGUI_DIR} ${IMGUI_DIR}/backends)
     link_directories(/usr/local/lib)
@@ -59,29 +60,11 @@ else()
 endif()
 
 if(APPLE)
-    set(ICON_NAME "stim2.icns")
-    set(ICON_PATH ${PROJECT_SOURCE_DIR}/res/${ICON_NAME})
-    set(foo_ICON ${ICON_PATH})
-    set_source_files_properties(${foo_ICON} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
-
-    file(COPY ${ICON_PATH} DESTINATION "stim2.app/Contents/Resources")
-    add_executable(stim2 MACOSX_BUNDLE ${ICON_PATH} src/stim2.cpp src/objgroup.c src/grobj.c
+    add_executable(stim2 MACOSX_BUNDLE src/stim2.cpp src/objgroup.c src/grobj.c
         src/tclproc.c src/prmutil.c src/timer.cpp src/glad.c src/rawapi.c src/imgui_console.cpp
         ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_demo.cpp ${IMGUI_DIR}/imgui_draw.cpp
         ${IMGUI_DIR}/imgui_tables.cpp ${IMGUI_DIR}/imgui_widgets.cpp
         ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp )
-
-    add_custom_command(TARGET stim2 POST_BUILD COMMAND
-        dylibbundler -of -b -x $<TARGET_FILE:stim2> -d ./stim2.app/Contents/MacOS/lib -p @executable_path/lib -i /usr/local/lib)
-
-    add_custom_command(TARGET stim2 POST_BUILD COMMAND
-        ${CMAKE_INSTALL_NAME_TOOL} -add_rpath "@executable_path/stimdlls"
-        $<TARGET_FILE:stim2>)
-
-    add_custom_command(TARGET stim2 POST_BUILD COMMAND
-        ${CMAKE_INSTALL_NAME_TOOL} -add_rpath "@executable_path/../lib"
-        $<TARGET_FILE:stim2>)
-
 else()
     add_executable(stim2 src/stim2.cpp src/objgroup.c src/grobj.c
         src/tclproc.c src/prmutil.c src/timer.cpp src/glad.c src/rawapi.c src/imgui_console.cpp
@@ -107,10 +90,15 @@ if(WIN32)
     set(DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/src/stim2.def")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}  /NODEFAULTLIB:MSVCRTD /def:${DEF_FILE}")
 elseif(APPLE)
-    set(TCLLIB tcl9.1)
-    # find_library(TCLLIB "libtcl9.0" tcl)
-    set(COCOA "-framework Cocoa")
-    set(GLFW_LIB glfw)
+    find_library(GLFW_LIB NAMES "libglfw3.a")
+
+    #set(TCLLIB tcl9.1)
+    # Locate TCL library files, as installed by homebrew.
+    find_library(TCLLIB "tcl9.0")
+    get_filename_component(LIBTCL_ACTUAL ${TCLLIB} REALPATH)
+    get_filename_component(LIBTCL_DIR ${LIBTCL_ACTUAL} DIRECTORY)
+
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -framework Cocoa -framework IOKit -framework OpenGL -framework QuartzCore")
 else()
     set(GLFW_LIB glfw3)
     find_library(GLFW NAMES "libglfw3.a")
@@ -129,13 +117,11 @@ if(EMBED_PYTHON)
     target_link_libraries(stim2 PRIVATE ${GLFW_LIB} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${JETSON_GPIO_LIB} pybind11::embed)
 else()
     if(WIN32)
-        target_link_libraries(stim2 ${GLFW_LIB} ${TCLLIB} ${COCOA} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${JETSON_GPIO_LIB} zlibstatic)
+        target_link_libraries(stim2 ${GLFW_LIB} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${JETSON_GPIO_LIB} zlibstatic)
     else()
-        target_link_libraries(stim2 ${GLFW_LIB} ${TCLLIB} ${COCOA} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${JETSON_GPIO_LIB} z)
+        target_link_libraries(stim2 ${GLFW_LIB} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${JETSON_GPIO_LIB} z)
     endif()
 endif()
-
-install(TARGETS stim2 DESTINATION bin)
 
 if(EMBED_PYTHON)
     if(WIN32)
@@ -158,19 +144,83 @@ endif()
 set(CPACK_PACKAGE_NAME stim2)
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Multiplatform OpenGL presentation program.")
 set(CPACK_PACKAGE_CONTACT SheinbergLab)
+set(CPACK_PACKAGE_VENDOR SheinbergLab)
+set(CPACK_COMPONENTS_ALL stim2)
 
 set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS ${TCLLIB})
 include(InstallRequiredSystemLibraries)
 
 if(WIN32)
-    # TODO
+    install(TARGETS stim2 DESTINATION bin)
 elseif(APPLE)
-    # TODO
+    # Wrap the stim2 executable in a stim2.app bundle.
+    set_target_properties(stim2 PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_BUNDLE_NAME stim2
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+        MACOSX_BUNDLE_GUI_IDENTIFIER org.sheinberglab.stim2
+        MACOSX_BUNDLE_ICON_FILE stim2
+    )
+
+    # Copy the app icon that will show in finder, dock, etc.
+    target_sources(stim2 PRIVATE ${CMAKE_SOURCE_DIR}/res/stim2.icns)
+    set_source_files_properties(${CMAKE_SOURCE_DIR}/res/stim2.icns PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+
+    # "Fix up" the app bundle to make it relocatable.
+    # Copy dylib dependencies into the bundle.
+    # Configure the executable and dylibs to load dylibs from within the bundle.
+    set(CMAKE_SKIP_RPATH TRUE)
+    set(APP_BUNDLE ${CMAKE_BINARY_DIR}/Release/stim2.app)
+    install(
+        CODE "include(BundleUtilities)
+        set(BU_CHMOD_BUNDLE_ITEMS ON)
+        fixup_bundle(\"${APP_BUNDLE}\" \"\" \"\")"
+        COMPONENT stim2
+    )
+
+    if(LIBTCL_DIR)
+        # Copy TCL library files into the bundle as well.
+        install(
+            DIRECTORY ${LIBTCL_DIR}/tcl9.0/
+            DESTINATION ${APP_BUNDLE}/Contents/lib/tcl9.0
+            COMPONENT stim2
+        )
+    endif()
+
+    # TODO: include and "fix up" stimdlls?
+    # add_custom_command(TARGET stim2 POST_BUILD COMMAND
+    #     ${CMAKE_INSTALL_NAME_TOOL} -add_rpath "@executable_path/stimdlls"
+    #     $<TARGET_FILE:stim2>)
+
+    if(DEFINED "CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM")
+        # Configure for apple code signing and notarization.
+        set(CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--strict --timestamp --options=runtime")
+        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_INJECT_BASE_ENTITLEMENTS "NO")
+        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Manual")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0")
+        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "Developer ID Application")
+
+        # "Fixing up" the app bundle invalidates previously signed binaries.
+        # Go back and sign things again: the executable, any relocated dylibs, and the bundle itself.
+        set(CODESIGN_COMMAND /usr/bin/codesign --force --verify ${CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS} --sign)
+        install(
+            CODE "file(GLOB BUNDLE_DYLIBS ${APP_BUNDLE}/Contents/Frameworks/*.dylib)"
+            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" \$\{BUNDLE_DYLIBS\})"
+            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" ${APP_BUNDLE}/Contents/MacOS/stim2)"
+            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" ${APP_BUNDLE})"
+            COMPONENT stim2
+        )
+    endif()
+
+    # We want to install the "Fixed up" and re-signed bundle, so this instruction goes last.
+    install(TARGETS stim2 BUNDLE DESTINATION . COMPONENT stim2)
 else()
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
     set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
     set(CPACK_DEBIAN_PACKAGE_DEPENDS "zlib1g, libc6, libdecor-0-0, libegl1, libglx0, libopengl0, libwayland-client0, libwayland-cursor0, libwayland-egl1, libx11-6, libx11-xcb1, libxcursor1, libxext6, libxi6, libxinerama1, libxkbcommon0, libxrandr2, libxrender1, mesa-utils, libgl1-mesa-dri, libegl-mesa0")
     set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA ${CMAKE_CURRENT_SOURCE_DIR}/dpkg/postinst)
+
+    install(TARGETS stim2 DESTINATION bin)
 endif()
 
 include(CPack)
