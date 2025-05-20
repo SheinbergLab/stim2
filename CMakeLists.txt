@@ -92,7 +92,8 @@ if(WIN32)
 elseif(APPLE)
     find_library(GLFW_LIB NAMES "libglfw3.a")
 
-    #set(TCLLIB tcl9.1)
+    # set(TCLLIB tcl9.1)
+    # TCL 9.1 is not yet available from homebrew.
     # Locate TCL library files, as installed by homebrew.
     find_library(TCLLIB "tcl9.0")
     get_filename_component(LIBTCL_ACTUAL ${TCLLIB} REALPATH)
