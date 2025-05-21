@@ -20,7 +20,7 @@ jobs:
       - name: Install cmake build tool and dependencies.
         run: |
           brew update
-          brew install cmake tcl-tk@9 glm
+          brew install cmake tcl-tk@9 glm box2d
 
       - name: Check out our code
         uses: actions/checkout@v4
@@ -33,6 +33,29 @@ jobs:
           cmake -B build-full-static -D GLFW_BUILD_WAYLAND=ON -D GLFW_BUILD_X11=ON
           cmake --build build-full-static --parallel
           sudo cmake --install build-full-static
+
+      - name: Build and install spine-c runtime library
+        run: |
+          cd deps/spine-runtimes/spine-c/
+          cmake -B build -D CMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build build --parallel
+          cmake --install build --prefix ./build
+          sudo mkdir -p /usr/local/include/spine/
+          sudo cp ./build/dist/include/*.h /usr/local/include/spine/
+          sudo cp ./build/dist/lib/*.a /usr/local/lib
+
+      # TODO: obtain dlsh from SheinbergLab, not benjamin-heasly
+      - name: Install our dlsh libs and headers into the build environment.
+        run: |
+          DLSH_VERSION=0.0.19
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-signed.pkg
+          sudo installer -pkg dlsh-${DLSH_VERSION}-Darwin-signed.pkg -target /
+
+      - name: Build our stimdlls to include within the stim2 app bundle.
+        run: |
+          cd stimdlls
+          cmake -B build -G Xcode -D CMAKE_OSX_DEPLOYMENT_TARGET="14.0"
+          cmake --build build --parallel --config Release
 
       - name: Set up a keychain for Apple code signing.
         env:
@@ -105,4 +128,5 @@ jobs:
 
       - name: Sanity check the installed stim2.
         run: |
+          /Applications/stim2.app/Contents/MacOS/stim2 --help
           timeout --preserve-status --signal SIGINT 2 /Applications/stim2.app/Contents/MacOS/stim2 || echo "$?"

@@ -93,3 +93,4 @@ jobs:
           ls -alth /usr/local/bin
           which stim2
           stim2 --help
+          timeout --preserve-status --signal SIGINT 2 stim2 || echo "$?"

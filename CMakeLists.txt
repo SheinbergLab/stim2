@@ -167,9 +167,9 @@ elseif(APPLE)
     target_sources(stim2 PRIVATE ${CMAKE_SOURCE_DIR}/res/stim2.icns)
     set_source_files_properties(${CMAKE_SOURCE_DIR}/res/stim2.icns PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
 
-    # "Fix up" the app bundle to make it relocatable.
-    # Copy dylib dependencies into the bundle.
-    # Configure the executable and dylibs to load dylibs from within the bundle.
+    # "Fix up" the app bundle to make it relocatable:
+    #  - Copy dylib dependencies into the bundle.
+    #  - Configure the executable and dylibs to load dylibs from within the bundle.
     set(CMAKE_SKIP_RPATH TRUE)
     set(APP_BUNDLE ${CMAKE_BINARY_DIR}/Release/stim2.app)
     install(
@@ -188,10 +188,27 @@ elseif(APPLE)
         )
     endif()
 
-    # TODO: include and "fix up" stimdlls?
-    # add_custom_command(TARGET stim2 POST_BUILD COMMAND
-    #     ${CMAKE_INSTALL_NAME_TOOL} -add_rpath "@executable_path/stimdlls"
-    #     $<TARGET_FILE:stim2>)
+    # Add stimdlls (if build previously with ./stimdlls/CMakeLists.txt)
+    file(GLOB STIMDLLS stimdlls/build/Release/*.dylib)
+    message("Bundling STIMDLLS: ${STIMDLLS}")
+    install(
+        FILES ${STIMDLLS}
+        DESTINATION ${APP_BUNDLE}/Contents/stimdlls/build_macos
+        COMPONENT stim2
+    )
+
+    # Make each stimdll relocatable:
+    #  - Copy any dylib dependencies into the bundle.
+    #  - Configure the each stimdll to load dylibs from within the bundle.
+    set(DYLIBBUNDLER_COMMAND "dylibbundler --bundle-deps --no-codesign -s /usr/local/lib -s deps/bink/lib/macos --dest-dir ${APP_BUNDLE}/Contents/Frameworks --install-path @executable_path/../..Frameworks/")
+    install(
+        CODE "file(GLOB BUNDLE_STIMDLLS ${APP_BUNDLE}/Contents/stimdlls/build_macos/*.dylib)"
+        CODE "list(JOIN BUNDLE_STIMDLLS \" -x \" FIX_FILES)"
+        CODE "separate_arguments(FIX_FILES_ARGS UNIX_COMMAND \$\{FIX_FILES\})"
+        CODE "message(\"Fixing stimdlls:\")"
+        CODE "execute_process(COMMAND_ECHO STDOUT COMMAND ${DYLIBBUNDLER_COMMAND} -x \$\{FIX_FILES_ARGS\})"
+        COMPONENT stim2
+    )
 
     if(DEFINED "CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM")
         # Configure for apple code signing and notarization.
@@ -207,6 +224,8 @@ elseif(APPLE)
         install(
             CODE "file(GLOB BUNDLE_DYLIBS ${APP_BUNDLE}/Contents/Frameworks/*.dylib)"
             CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" \$\{BUNDLE_DYLIBS\})"
+            CODE "file(GLOB BUNDLE_STIMDLLS ${APP_BUNDLE}/Contents/stimdlls/build_macos/*.dylib)"
+            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" \$\{BUNDLE_STIMDLLS\})"
             CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" ${APP_BUNDLE}/Contents/MacOS/stim2)"
             CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" ${APP_BUNDLE})"
             COMPONENT stim2

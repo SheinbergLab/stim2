@@ -2,3 +2,5 @@
 *.dmg
 _CPack_Packages/
 build/
+developer_log.json
+.DS_Store
