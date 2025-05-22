@@ -29,7 +29,7 @@ jobs:
           sudo apt install -y libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev libwayland-dev libxkbcommon-dev
           sudo apt install -y libglew-dev libglm-dev
 
-      - name: Check out our dserv code for the current tag.
+      - name: Check out our stim2 code for the current tag.
         uses: actions/checkout@v4
         with:
           submodules: true

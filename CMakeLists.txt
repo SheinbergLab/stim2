@@ -164,8 +164,8 @@ elseif(APPLE)
     )
 
     # Copy the app icon that will show in finder, dock, etc.
-    target_sources(stim2 PRIVATE ${CMAKE_SOURCE_DIR}/res/stim2.icns)
-    set_source_files_properties(${CMAKE_SOURCE_DIR}/res/stim2.icns PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+    target_sources(stim2 PRIVATE ${CMAKE_SOURCE_DIR}/macos/stim2.icns)
+    set_source_files_properties(${CMAKE_SOURCE_DIR}/macos/stim2.icns PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
 
     # "Fix up" the app bundle to make it relocatable:
     #  - Copy dylib dependencies into the bundle.
@@ -200,7 +200,7 @@ elseif(APPLE)
     # Make each stimdll relocatable:
     #  - Copy any dylib dependencies into the bundle.
     #  - Configure the each stimdll to load dylibs from within the bundle.
-    set(DYLIBBUNDLER_COMMAND "dylibbundler --bundle-deps --no-codesign -s /usr/local/lib -s deps/bink/lib/macos --dest-dir ${APP_BUNDLE}/Contents/Frameworks --install-path @executable_path/../..Frameworks/")
+    set(DYLIBBUNDLER_COMMAND "dylibbundler --bundle-deps --no-codesign -s /usr/local/lib -s deps/bink/lib/macos --dest-dir ${APP_BUNDLE}/Contents/Frameworks --install-path @executable_path/../Frameworks/")
     install(
         CODE "file(GLOB BUNDLE_STIMDLLS ${APP_BUNDLE}/Contents/stimdlls/build_macos/*.dylib)"
         CODE "list(JOIN BUNDLE_STIMDLLS \" -x \" FIX_FILES)"
@@ -220,7 +220,7 @@ elseif(APPLE)
 
         # "Fixing up" the app bundle invalidates previously signed binaries.
         # Go back and sign things again: the executable, any relocated dylibs, and the bundle itself.
-        set(CODESIGN_COMMAND /usr/bin/codesign --force --verify ${CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS} --sign)
+        set(CODESIGN_COMMAND /usr/bin/codesign --force --verify ${CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS} --entitlements ${CMAKE_CURRENT_SOURCE_DIR}/macos/stim2.entitlements --sign)
         install(
             CODE "file(GLOB BUNDLE_DYLIBS ${APP_BUNDLE}/Contents/Frameworks/*.dylib)"
             CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" \$\{BUNDLE_DYLIBS\})"

@@ -27,6 +27,7 @@ if(WIN32)
 elseif(APPLE)
     include_directories(${APP_DIR} /usr/local/include /usr/local/include/freetype2 /opt/homebrew/include /opt/homebrew/include/freetype2 /opt/homebrew/include/tcl-tk)
     link_directories(/usr/local/lib /opt/homebrew/lib)
+    set(CMAKE_SKIP_RPATH TRUE)
 else()
     add_definitions(-DLINUX)
     include_directories(${APP_DIR} /usr/local/include)
@@ -222,7 +223,7 @@ endif()
 if(APPLE)
     target_link_libraries(bink ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} "-framework CoreAudio" ${BINK_LIB} ${LIBDL} ${LIBPTHREAD})
 
-    # Using @rpath instead of @executable_path allows dylibbundler to find and relocate this dylib dependency, in the stim2 macos build.
+    # Using @rpath instead of @executable_path allows dylibbundler to find and relocate this dylib dependency, during the stim2 macos build and bundling.
     add_custom_command(
         TARGET bink POST_BUILD
         COMMAND ${CMAKE_INSTALL_NAME_TOOL} -change "@executable_path/libBink2MacArm64.dylib" "@rpath/libBink2MacArm64.dylib" $<TARGET_FILE:bink>
