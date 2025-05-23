@@ -14,3 +14,6 @@
 [submodule "tcl"]
 	path = deps/tcl
 	url = https://github.com/tcltk/tcl.git
+[submodule "deps/spine-runtimes"]
+	path = deps/spine-runtimes
+	url = https://github.com/EsotericSoftware/spine-runtimes.git
