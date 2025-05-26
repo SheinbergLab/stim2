@@ -7,11 +7,19 @@ set(CMAKE_BUILD_TYPE Release)
 
 option(STIM2_USE_GLES "use GLES" OFF)
 
-add_definitions(-DUSE_TCL_STUBS)
+if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
+        message(STATUS "Linux and aarch/arm -- assuming Raspberry Pi, setting STIM2_USE_GLES.")
+        set(STIM2_USE_GLES ON)
+    endif()
+endif()
+message(STATUS "${CMAKE_SYSTEM_NAME} and ${CMAKE_SYSTEM_PROCESSOR}: STIM2_USE_GLES=${STIM2_USE_GLES}")
 
 if (STIM2_USE_GLES)
 add_definitions(-DSTIM2_USE_GLES=1)
 endif()
+
+add_definitions(-DUSE_TCL_STUBS)
 
 set(APP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../src")
 
