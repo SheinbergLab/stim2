@@ -188,12 +188,30 @@ elseif(APPLE)
         )
     endif()
 
-    # Add stimdlls (if build previously with ./stimdlls/CMakeLists.txt)
+    # Add stimdlls (if built previously with ./stimdlls/CMakeLists.txt)
     file(GLOB STIMDLLS stimdlls/build/Release/*.dylib)
     message("Bundling STIMDLLS: ${STIMDLLS}")
     install(
         FILES ${STIMDLLS}
-        DESTINATION ${APP_BUNDLE}/Contents/stimdlls/build_macos
+        DESTINATION ${APP_BUNDLE}/Contents/MacOS/stimdlls
+        COMPONENT stim2
+    )
+
+    # Add shader sources to the bundle.
+    file(GLOB STIM_SHADERS shaders/*.glsl)
+    message("Bundling shaders: ${STIM_SHADERS}")
+    install(
+        FILES ${STIM_SHADERS}
+        DESTINATION ${APP_BUNDLE}/Contents/Resources/shaders
+        COMPONENT stim2
+    )
+
+    # Add the macos config script.
+    set(CONFIG_SCRIPT config/stim2.cfg)
+    message("Bundling config script: ${CONFIG_SCRIPT}")
+    install(
+        FILES ${CONFIG_SCRIPT}
+        DESTINATION ${APP_BUNDLE}/Contents/Resources
         COMPONENT stim2
     )
 
@@ -202,7 +220,7 @@ elseif(APPLE)
     #  - Configure the each stimdll to load dylibs from within the bundle.
     set(DYLIBBUNDLER_COMMAND "dylibbundler --bundle-deps --no-codesign -s /usr/local/lib -s deps/bink/lib/macos --dest-dir ${APP_BUNDLE}/Contents/Frameworks --install-path @executable_path/../Frameworks/")
     install(
-        CODE "file(GLOB BUNDLE_STIMDLLS ${APP_BUNDLE}/Contents/stimdlls/build_macos/*.dylib)"
+        CODE "file(GLOB BUNDLE_STIMDLLS ${APP_BUNDLE}/Contents/MacOS/stimdlls/*.dylib)"
         CODE "list(JOIN BUNDLE_STIMDLLS \" -x \" FIX_FILES)"
         CODE "separate_arguments(FIX_FILES_ARGS UNIX_COMMAND \$\{FIX_FILES\})"
         CODE "message(\"Fixing stimdlls:\")"
@@ -224,7 +242,7 @@ elseif(APPLE)
         install(
             CODE "file(GLOB BUNDLE_DYLIBS ${APP_BUNDLE}/Contents/Frameworks/*.dylib)"
             CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" \$\{BUNDLE_DYLIBS\})"
-            CODE "file(GLOB BUNDLE_STIMDLLS ${APP_BUNDLE}/Contents/stimdlls/build_macos/*.dylib)"
+            CODE "file(GLOB BUNDLE_STIMDLLS ${APP_BUNDLE}/Contents/MacOS/stimdlls/*.dylib)"
             CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" \$\{BUNDLE_STIMDLLS\})"
             CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" ${APP_BUNDLE}/Contents/MacOS/stim2)"
             CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" ${APP_BUNDLE})"
@@ -235,12 +253,40 @@ elseif(APPLE)
     # We want to install the "Fixed up" and re-signed bundle, so this instruction goes last.
     install(TARGETS stim2 BUNDLE DESTINATION . COMPONENT stim2)
 else()
+
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
     set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
     set(CPACK_DEBIAN_PACKAGE_DEPENDS "zlib1g, libc6, libdecor-0-0, libegl1, libglx0, libopengl0, libwayland-client0, libwayland-cursor0, libwayland-egl1, libx11-6, libx11-xcb1, libxcursor1, libxext6, libxi6, libxinerama1, libxkbcommon0, libxrandr2, libxrender1, mesa-utils, libgl1-mesa-dri, libegl-mesa0")
     set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA ${CMAKE_CURRENT_SOURCE_DIR}/dpkg/postinst)
 
     install(TARGETS stim2 DESTINATION bin)
+
+    # Add stimdlls (if built previously with ./stimdlls/CMakeLists.txt)
+    file(GLOB STIMDLLS stimdlls/build/*.so)
+    message("Adding STIMDLLS: ${STIMDLLS}")
+    install(
+        FILES ${STIMDLLS}
+        DESTINATION "/usr/local/stim2/stimdlls"
+        COMPONENT stim2
+    )
+
+    # Add shader sources to the bundle.
+    file(GLOB STIM_SHADERS shaders/*.glsl)
+    message("Adding shaders: ${STIM_SHADERS}")
+    install(
+        FILES ${STIM_SHADERS}
+        DESTINATION "/usr/local/stim2/shaders"
+        COMPONENT stim2
+    )
+
+    # Add the Linux config script.
+    set(CONFIG_SCRIPT config/linux.cfg)
+    message("Bundling config script: ${CONFIG_SCRIPT}")
+    install(
+        FILES ${CONFIG_SCRIPT}
+        DESTINATION /usr/local/stim2/config
+        COMPONENT stim2
+    )
 endif()
 
 include(CPack)
