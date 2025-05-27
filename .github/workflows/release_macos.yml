@@ -20,7 +20,7 @@ jobs:
       - name: Install cmake build tool and dependencies.
         run: |
           brew update
-          brew install cmake tcl-tk@9 glm box2d
+          brew install cmake dylibbundler tcl-tk@9 glm box2d
 
       - name: Check out our code
         uses: actions/checkout@v4
@@ -47,7 +47,7 @@ jobs:
       # TODO: obtain dlsh from SheinbergLab, not benjamin-heasly
       - name: Install our dlsh libs and headers into the build environment.
         run: |
-          DLSH_VERSION=0.0.20
+          DLSH_VERSION=0.0.21
           wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-signed.pkg
           sudo installer -pkg dlsh-${DLSH_VERSION}-Darwin-signed.pkg -target /
 
