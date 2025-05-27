@@ -232,7 +232,7 @@ elseif(APPLE)
     install(
         CODE "execute_process(COMMAND_ECHO STDOUT COMMAND ls -alth /usr/local/lib)"
         CODE "execute_process(COMMAND_ECHO STDOUT COMMAND ls -alth deps/bink/lib/macos)"
-        CODE "execute_process(COMMAND_ECHO STDOUT COMMAND dylibbundler --bundle-deps --no-codesign -s /usr/local/lib -s deps/bink/lib/macos --dest-dir /Users/runner/work/stim2/stim2/build/Release/stim2.app/Contents/Frameworks --install-path @executable_path/../Frameworks/ -x /Users/runner/work/stim2/stim2/build/Release/stim2.app/Contents/MacOS/stimdlls/bink.dylib)"
+        CODE "execute_process(COMMAND_ECHO STDOUT COMMAND dylibbundler --bundle-deps --no-codesign -s /usr/local/lib -s deps/bink/lib/macos --dest-dir /Users/runner/work/stim2/stim2/build/Release/stim2.app/Contents/Frameworks --install-path @executable_path/../Frameworks/ -x /This/should/error.wft)"
         COMPONENT stim2
     )
 
