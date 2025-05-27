@@ -20,7 +20,7 @@ jobs:
       - name: Install cmake build tool and dependencies.
         run: |
           brew update
-          brew install cmake tcl-tk@9 glm box2d
+          brew install cmake dylibbundler tcl-tk@9 glm box2d
 
       - name: Check out our code
         uses: actions/checkout@v4
