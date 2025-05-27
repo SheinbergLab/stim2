@@ -228,6 +228,14 @@ elseif(APPLE)
         COMPONENT stim2
     )
 
+    # TEMP for debugging
+    install(
+        CODE "execute_process(COMMAND_ECHO STDOUT COMMAND ls -alth /usr/local/lib)"
+        CODE "execute_process(COMMAND_ECHO STDOUT COMMAND ls -alth deps/bink/lib/macos)"
+        CODE "execute_process(COMMAND_ECHO STDOUT COMMAND dylibbundler --bundle-deps --no-codesign -s /usr/local/lib -s deps/bink/lib/macos --dest-dir /Users/runner/work/stim2/stim2/build/Release/stim2.app/Contents/Frameworks --install-path @executable_path/../Frameworks/ -x /Users/runner/work/stim2/stim2/build/Release/stim2.app/Contents/MacOS/stimdlls/bink.dylib)"
+        COMPONENT stim2
+    )
+
     if(DEFINED "CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM")
         # Configure for apple code signing and notarization.
         set(CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--strict --timestamp --options=runtime")
