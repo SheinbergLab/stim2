@@ -47,7 +47,7 @@ jobs:
       # TODO: obtain dlsh from SheinbergLab, not benjamin-heasly
       - name: Install our dlsh libs and headers into the build environment.
         run: |
-          DLSH_VERSION=0.0.21
+          DLSH_VERSION=0.0.22
           wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-signed.pkg
           sudo installer -pkg dlsh-${DLSH_VERSION}-Darwin-signed.pkg -target /
 
