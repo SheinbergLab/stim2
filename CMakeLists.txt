@@ -215,16 +215,17 @@ elseif(APPLE)
         COMPONENT stim2
     )
 
-    # Make each stimdll relocatable:
+    # Make the stimdlls relocatable:
     #  - Copy any dylib dependencies into the bundle.
-    #  - Configure the each stimdll to load dylibs from within the bundle.
-    set(DYLIBBUNDLER_COMMAND "dylibbundler --bundle-deps --no-codesign -s /usr/local/lib -s deps/bink/lib/macos --dest-dir ${APP_BUNDLE}/Contents/Frameworks --install-path @executable_path/../Frameworks/")
+    #  - Add the bundle's Contents/Frameworks/ dir as an @rpath from where libs may be found and loaded.
+    set(DYLIBBUNDLER_COMMAND "dylibbundler --bundle-deps -s /usr/local/lib -s deps/bink/lib/macos --dest-dir ${APP_BUNDLE}/Contents/Frameworks --install-path @rpath")
     install(
         CODE "file(GLOB BUNDLE_STIMDLLS ${APP_BUNDLE}/Contents/MacOS/stimdlls/*.dylib)"
         CODE "list(JOIN BUNDLE_STIMDLLS \" -x \" FIX_FILES)"
         CODE "separate_arguments(FIX_FILES_ARGS UNIX_COMMAND \$\{FIX_FILES\})"
         CODE "message(\"Fixing stimdlls:\")"
         CODE "execute_process(COMMAND_ECHO STDOUT COMMAND ${DYLIBBUNDLER_COMMAND} -x \$\{FIX_FILES_ARGS\})"
+        CODE "execute_process(COMMAND_ECHO STDOUT COMMAND ${CMAKE_INSTALL_NAME_TOOL} -add_rpath @executable_path/../Frameworks $<TARGET_FILE:stim2>)"
         COMPONENT stim2
     )
 
