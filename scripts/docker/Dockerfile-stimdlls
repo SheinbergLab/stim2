@@ -1,0 +1,63 @@
+# This Dockerfile was helpful for building stim2/stimdlls.
+# Docker gives a clean environment, meaning the steps below must account for all dependencies.
+# Docker also gives us a local environment that's easy to iterate on.
+# Getting this working was the basis for the automated CI builds, over in .github/workflows/.
+#
+# docker build . -f scripts/docker/Dockerfile-stimdlls -t stim2-stimdlls:local
+# docker run --rm -ti stim2-stimdlls:local ls -alth /work/stim2/stimdlls/build
+#
+
+# Start with a fresh Ubuntu environment.
+FROM ubuntu:22.04
+
+# Install build tools, tlc 9 dependencies, glfw dependencies, and stimdll dependencies.
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt update \
+    && apt install --no-install-recommends --yes ca-certificates build-essential cmake pkg-config cmake-data wget \
+    zlib1g-dev \
+    libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev libwayland-dev libxkbcommon-dev \
+    libglew-dev libglm-dev libopenal-dev libfreetype-dev \
+    && apt-get clean \
+    && apt-get autoremove \
+    && rm -rf /var/lib/apt/lists/*
+
+# Get this repo and submodules.
+ADD . /work/stim2/
+
+# Install TLC 9 into the build environment.
+WORKDIR /work/stim2/deps/tcl/unix/
+RUN ./configure \
+  && make \
+  && make install
+
+# Install GLFW static lib into the build environment.
+WORKDIR /work/stim2/deps/glfw/
+RUN cmake -B build-full-static -D GLFW_BUILD_WAYLAND=ON -D GLFW_BUILD_X11=ON \
+  && cmake --build build-full-static --parallel \
+  && cmake --install build-full-static
+
+# Install spine-c static lib into the build environment.
+WORKDIR /work/stim2/deps/spine-runtimes/spine-c/
+RUN cmake -B build -D CMAKE_POSITION_INDEPENDENT_CODE=ON \
+  && cmake --build build --parallel \
+  && cmake --install build --prefix ./build \
+  && mkdir -p /usr/local/include/spine/ \
+  && cp ./build/dist/include/*.h /usr/local/include/spine/ \
+  && cp ./build/dist/lib/*.a /usr/local/lib
+
+# Install box2d v3 static lib into the build environment.
+WORKDIR /work/stim2/deps/box2d
+RUN cmake -B build -D BOX2D_UNIT_TESTS=OFF -D BOX2D_SAMPLES=OFF -D BOX2D_BENCHMARKS=OFF -D BUILD_SHARED_LIBS=OFF \
+  && cmake --build build --parallel \
+  && cmake --install build
+
+# Install our dlsh libs and headers into the build environment.
+ENV DLSH_VERSION=0.0.22
+WORKDIR /work/dlsh
+RUN wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh_${DLSH_VERSION}_amd64.deb \
+  && dpkg --install dlsh_${DLSH_VERSION}_amd64.deb
+
+# Build stimdlls.
+WORKDIR /work/stim2/stimdlls
+RUN cmake -D PROJECT_VERSION=0.0.0 -B build \
+  && cmake --build build --parallel

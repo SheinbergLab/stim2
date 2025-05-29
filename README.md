@@ -5,7 +5,8 @@
 This repo uses [git submodules](https://git-scm.com/book/en/v2/Git-Tools-Submodules) to obtain source code for several dependencies (and specific commits/versions of each):
  - [tcl](https://github.com/tcltk/tcl) 9
  - [GLFW](https://github.com/glfw/glfw) OpenGL
- - TODO: dll dependencies
+ - [spine-runtimes](https://github.com/EsotericSoftware/spine-runtimes)
+ - [box2d](https://github.com/erincatto/box2d) v3
 
 To clone this repo along with the submodules:
 

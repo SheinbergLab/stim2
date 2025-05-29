@@ -17,3 +17,6 @@
 [submodule "deps/spine-runtimes"]
 	path = deps/spine-runtimes
 	url = https://github.com/EsotericSoftware/spine-runtimes.git
+[submodule "deps/box2d"]
+	path = deps/box2d
+	url = https://github.com/erincatto/box2d.git
