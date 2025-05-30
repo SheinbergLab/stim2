@@ -148,9 +148,6 @@ set(CPACK_PACKAGE_CONTACT SheinbergLab)
 set(CPACK_PACKAGE_VENDOR SheinbergLab)
 set(CPACK_COMPONENTS_ALL stim2)
 
-set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS ${TCLLIB})
-include(InstallRequiredSystemLibraries)
-
 if(WIN32)
     install(TARGETS stim2 DESTINATION bin)
 elseif(APPLE)
