@@ -116,7 +116,7 @@ jobs:
         run: |
           DSERV_VERSION=0.0.48
           wget https://github.com/benjamin-heasly/dserv/releases/download/${DSERV_VERSION}/dserv_${DSERV_VERSION}_$(dpkg --print-architecture).deb
-          apt install --yes ./dserv_${DSERV_VERSION}_$(dpkg --print-architecture).deb
+          sudo apt install --yes ./dserv_${DSERV_VERSION}_$(dpkg --print-architecture).deb
 
       # TODO: obtain dlsh from SheinbergLab with a version, not from benjamin-heasly with "initial"
       - name: Install our dlsh TCL utils and thier dependencies into the packaging dir.
