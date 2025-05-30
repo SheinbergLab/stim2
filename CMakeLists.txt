@@ -216,8 +216,9 @@ elseif(APPLE)
     )
 
     # Make the stimdlls relocatable:
-    #  - Copy any dylib dependencies into the bundle.
+    #  - Detect dylib dependencies and copy them into the bundle.
     #  - Add the bundle's Contents/Frameworks/ dir as an @rpath from where libs may be found and loaded.
+    #  - Remove libdlsh.dylib -- this one is distributed separately in dlsh.zip.
     set(DYLIBBUNDLER_COMMAND "dylibbundler --bundle-deps -s /usr/local/lib -s deps/bink/lib/macos --dest-dir ${APP_BUNDLE}/Contents/Frameworks --install-path @rpath")
     install(
         CODE "file(GLOB BUNDLE_STIMDLLS ${APP_BUNDLE}/Contents/MacOS/stimdlls/*.dylib)"
@@ -226,6 +227,7 @@ elseif(APPLE)
         CODE "message(\"Fixing stimdlls:\")"
         CODE "execute_process(COMMAND_ECHO STDOUT COMMAND ${DYLIBBUNDLER_COMMAND} -x \$\{FIX_FILES_ARGS\})"
         CODE "execute_process(COMMAND_ECHO STDOUT COMMAND ${CMAKE_INSTALL_NAME_TOOL} -add_rpath @executable_path/../Frameworks $<TARGET_FILE:stim2>)"
+        CODE "execute_process(COMMAND_ECHO STDOUT COMMAND rm ${APP_BUNDLE}/Contents/Frameworks/libdlsh.dylib)"
         COMPONENT stim2
     )
 
