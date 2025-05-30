@@ -21,13 +21,14 @@ jobs:
 
     steps:
 
-      - name: Install build tools, tlc 9 dependencies, glfw dependencies, and stim2 dependencies.
+      - name: Install build tools, and depdendencies for tlc 9, glfw, stim2, and stimdlls.
         run: |
           sudo apt update
           sudo apt install -y ca-certificates build-essential cmake pkg-config cmake-data
           sudo apt install -y zlib1g-dev
           sudo apt install -y libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev libwayland-dev libxkbcommon-dev
           sudo apt install -y libglew-dev libglm-dev
+          sudo apt install -y libopenal-dev libfreetype-dev
 
       - name: Check out our stim2 code for the current tag.
         uses: actions/checkout@v4
@@ -48,6 +49,35 @@ jobs:
           cmake --build build-full-static --parallel
           sudo cmake --install build-full-static
 
+      - name: Install spine-c static lib into the build environment.
+        run: |
+          cd deps/spine-runtimes/spine-c/
+          cmake -B build -D CMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build build --parallel
+          cmake --install build --prefix ./build
+          sudo mkdir -p /usr/local/include/spine/
+          sudo cp ./build/dist/include/*.h /usr/local/include/spine/
+          sudo cp ./build/dist/lib/*.a /usr/local/lib
+
+      - name: Install box2d v3 static lib into the build environment.
+        run: |
+          cd deps/box2d/
+          cmake -B build -D BOX2D_UNIT_TESTS=OFF -D BOX2D_SAMPLES=OFF -D BOX2D_BENCHMARKS=OFF -D BUILD_SHARED_LIBS=OFF
+          cmake --build build --parallel
+          sudo cmake --install build
+
+      # TODO: obtain dlsh from SheinbergLab, not benjamin-heasly
+      - name: Install our dlsh libs and headers into the build environment.
+        run: |
+          DLSH_VERSION=0.0.22
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          sudo dpkg --install dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+
+      - name: Build stim2 stimdlls, to include along with the stim2 executable.
+        run: |
+          cd stimdlls/
+          cmake -D PROJECT_VERSION=${{ github.ref_name }} -B build
+          cmake --build build --parallel
 
       - name: Build stim2 itself and package it for release.
         run: |
@@ -58,7 +88,7 @@ jobs:
       - name: Create a GitHub release for the current tag and package.
         uses: ncipollo/release-action@v1
         with:
-          artifacts: ./*.deb
+          artifacts: ./stim2*.deb
           body: stim2 version ${{ github.ref_name }}
           generateReleaseNotes: true
           allowUpdates: true
@@ -80,6 +110,13 @@ jobs:
         run: |
           wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/stim2_${{ github.ref_name }}_$(dpkg --print-architecture).deb
           sudo apt install --yes ./stim2_${{ github.ref_name }}_$(dpkg --print-architecture).deb
+
+      # TODO: obtain dserv from SheinbergLab, not from benjamin-heasly.
+      - name: Install dserv along with the shared tcl 9 dependency.
+        run: |
+          DSERV_VERSION=0.0.48
+          wget https://github.com/benjamin-heasly/dserv/releases/download/${DSERV_VERSION}/dserv_${DSERV_VERSION}_$(dpkg --print-architecture).deb
+          sudo apt install --yes ./dserv_${DSERV_VERSION}_$(dpkg --print-architecture).deb
 
       # TODO: obtain dlsh from SheinbergLab with a version, not from benjamin-heasly with "initial"
       - name: Install our dlsh TCL utils and thier dependencies into the packaging dir.
