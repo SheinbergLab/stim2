@@ -111,6 +111,13 @@ jobs:
           wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/stim2_${{ github.ref_name }}_$(dpkg --print-architecture).deb
           sudo apt install --yes ./stim2_${{ github.ref_name }}_$(dpkg --print-architecture).deb
 
+      # TODO: obtain dserv from SheinbergLab, not from benjamin-heasly.
+      - name: Install dserv along with the shared tcl 9 dependency.
+        run: |
+          DSERV_VERSION=0.0.48
+          wget https://github.com/benjamin-heasly/dserv/releases/download/$DSERV_VERSION/dserv_$DSERV_VERSION_$(dpkg --print-architecture).deb
+          apt install --yes ./dserv_$DSERV_VERSION_$(dpkg --print-architecture).deb
+
       # TODO: obtain dlsh from SheinbergLab with a version, not from benjamin-heasly with "initial"
       - name: Install our dlsh TCL utils and thier dependencies into the packaging dir.
         run: |
