@@ -62,6 +62,7 @@ endif()
 if(APPLE)
     add_executable(stim2 MACOSX_BUNDLE src/stim2.cpp src/objgroup.c src/grobj.c
         src/tclproc.c src/prmutil.c src/timer.cpp src/glad.c src/rawapi.c src/imgui_console.cpp
+	src/SleepWakeHandler.mm
         ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_demo.cpp ${IMGUI_DIR}/imgui_draw.cpp
         ${IMGUI_DIR}/imgui_tables.cpp ${IMGUI_DIR}/imgui_widgets.cpp
         ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp )
