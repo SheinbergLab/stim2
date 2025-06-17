@@ -1144,9 +1144,9 @@ class Application
 
   Timer::timer_id timerID;
 #if defined(__APPLE__)
-    SleepWakeHandler sleepWakeHandler;
-    std::atomic<bool> systemIsSleeping{false};  
+  SleepWakeHandler sleepWakeHandler;
 #endif
+  std::atomic<bool> systemIsSleeping{false};  
   
   GLsync swap_sync;
   
