@@ -14,6 +14,7 @@
 
 #if defined(__APPLE__)
 #include <filesystem>
+#include "SleepWakeHandler.h"
 #endif
 
 #ifdef _WIN32
@@ -1131,23 +1132,29 @@ class Application
   
   Tcl_Interp *interp;
 
+  GLuint vao;           // gotta have at least one!  ARGH
+  std::atomic<bool> done;
+  std::atomic<bool> m_bDone;
+
   // wake up queue
   SharedQueue<int> wake_queue;
   
   Timer appTimer;
   SharedQueue<int> tqueue;
 
-  GLuint vao;           // gotta have at least one!  ARGH
-  std::atomic<bool> done;
-  std::atomic<bool> m_bDone;
   Timer::timer_id timerID;
-
+#if defined(__APPLE__)
+    SleepWakeHandler sleepWakeHandler;
+    std::atomic<bool> systemIsSleeping{false};  
+#endif
+  
   GLsync swap_sync;
   
   // for GPIO swap acknowledge
   int output_pin;
   
 public:
+
   void wakeup(void) { wake_queue.push_back(0); }
 
   void wait_for_wakeup(void) {
@@ -1221,6 +1228,18 @@ public:
   
   Application()
   {
+#if defined(__APPLE__)
+    // Set up sleep/wake callbacks
+    sleepWakeHandler.setSleepCallback([this]() {
+      onSystemSleep();
+    });
+    
+    sleepWakeHandler.setWakeCallback([this]() {
+      onSystemWake();
+    });
+    
+    sleepWakeHandler.startMonitoring();
+#endif
     m_bDone = false;
     done = false;
     fullscreen = 0;
@@ -1228,7 +1247,10 @@ public:
 
   ~Application()
   {
-
+#if defined(__APPLE__)
+    sleepWakeHandler.stopMonitoring();
+    stopTimer();
+#endif
   }
 
   void init_gpio(int pin)
@@ -1370,28 +1392,46 @@ public:
     glFinish();
 #endif
   }
+
+private:  
+  void
+  startTimerImpl() {
+    timerID = appTimer.create(0, timer_interval, [this]() {
+      if (!systemIsSleeping) {
+	updateTimes();
+	if (NextFrameTime >= 0 && StimTime >=
+	    (unsigned int) NextFrameTime) {
+	  NextFrameTime = -1;
+	  kickAnimation();
+	}
+	tqueue.push_back(StimTime);
+      }
+      do_wakeup();
+    });
+  }
+public:
+
+  void startTimer() {
+    if (!systemIsSleeping) {
+      startTimerImpl();
+    }    
+  }
   
-  void
-  startTimer() {
-    // Timer fires every interval ms, starting now
-    timerID = appTimer.create(0, timer_interval,
-                  [this]() {
-                updateTimes();
-                if (NextFrameTime >= 0 && StimTime >=
-                    (unsigned int) NextFrameTime) {
-                  NextFrameTime = -1;
-                  kickAnimation();
-                }
-		tqueue.push_back(StimTime);
-		do_wakeup();
-                  });
+  void stopTimer() {
+    if (timerID != 0) {
+      appTimer.destroy(timerID);
+      timerID = 0;
+    }
   }
-
-  void
-  stopTimer(void) {
-    appTimer.destroy(timerID);
+  
+  void onSystemSleep() {
+    systemIsSleeping = true;
   }
-
+  
+  void onSystemWake() {
+    systemIsSleeping = false;
+  }  
+  
   int Tcl_StimAppInit(Tcl_Interp *interp)
   {
 
