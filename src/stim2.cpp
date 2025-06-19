@@ -1995,23 +1995,25 @@ Application::tcp_client_process(int sockfd,
   
 static  void sendMessage(int socket, const std::string& message) {
   uint32_t msgSize = htonl(message.size()); // Convert size to network byte order
-  send(socket, &msgSize, sizeof(msgSize), 0);
+  send(socket, (char *) &msgSize, sizeof(msgSize), 0);
   send(socket, message.c_str(), message.size(), 0);
 }
 
 static std::pair<char*, size_t> receiveMessage(int socket) {
     uint32_t msgSize;
     // Receive the size of the message
-    ssize_t bytesReceived = recv(socket, &msgSize, sizeof(msgSize), 0);
+    int bytesReceived = recv(socket, (char *) &msgSize, sizeof(msgSize), 0);
     if (bytesReceived <= 0) return {nullptr, 0}; // Connection closed or error
 
-    msgSize = ntohl(msgSize); // Convert size from network byte order to host byte order
+    msgSize = ntohl(msgSize);
 
-    // Allocate buffer for the message
-    char* buffer = new char[msgSize];
+    // Allocate buffer for the message (+1 for null termination)
+    char* buffer = new char[msgSize+1]{};
     size_t totalBytesReceived = 0;
     while (totalBytesReceived < msgSize) {
-        bytesReceived = recv(socket, buffer + totalBytesReceived, msgSize - totalBytesReceived, 0);
+        bytesReceived = recv(socket,
+			     buffer + totalBytesReceived,
+			     msgSize - totalBytesReceived, 0);
         if (bytesReceived <= 0) {
             delete[] buffer;
             return {nullptr, 0}; // Connection closed or error
