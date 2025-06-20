@@ -2634,8 +2634,13 @@ PYBIND11_EMBEDDED_MODULE(stim, m) {
     )pbdoc");
 }
 
+#endif
 
-
+// On windows, make this a windows, not console, app
+#ifdef _MSC_VER
+#ifdef HIDE_CONSOLE
+# pragma comment(linker, "/subsystem:windows /ENTRY:mainCRTStartup")
+#endif
 #endif
 
 
@@ -2654,6 +2659,12 @@ main(int argc, char *argv[]) {
   const char *startup_file = NULL;
   bool updated_display = false;
 
+#ifdef _MSC_VER
+  // Set DPI awareness
+  SetProcessDPIAware();
+  //  SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+#endif
+  
   // Use this GPIO pin for swap acknowledge on Jetson Hardware
   int gpio_output_pin = 13;
   
