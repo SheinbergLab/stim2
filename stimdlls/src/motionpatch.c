@@ -23,7 +23,6 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h> 
 
-#include <utilc.h>
 #include <prmutil.h>
 
 /* If you want access to dlsh connectivity, include these */

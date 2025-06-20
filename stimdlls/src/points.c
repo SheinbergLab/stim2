@@ -42,7 +42,6 @@
 #include <df.h>
 #include <dfana.h>
 #include <tcl_dl.h>
-#include <utilc.h>
 
 #ifndef PI
 #define PI 3.141592654

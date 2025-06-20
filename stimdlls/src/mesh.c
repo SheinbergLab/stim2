@@ -61,7 +61,6 @@
 #include <df.h>
 #include <dfana.h>
 #include <tcl_dl.h>
-#include <utilc.h>
  
 #include "glsw.h"
 

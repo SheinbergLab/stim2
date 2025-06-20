@@ -20,8 +20,6 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h> 
 
-#include <utilc.h>
-
 #include "df.h"
 #include "tcl_dl.h"
 #include <stim2.h>
