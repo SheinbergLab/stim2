@@ -20,7 +20,7 @@ jobs:
       - name: Install cmake build tool and dependencies.
         run: |
           brew update
-          brew install cmake dylibbundler tcl-tk@9 glm box2d
+          brew install cmake dylibbundler tcl-tk@9 glm
 
       - name: Check out our code
         uses: actions/checkout@v4
@@ -44,6 +44,15 @@ jobs:
           sudo cp ./build/dist/include/*.h /usr/local/include/spine/
           sudo cp ./build/dist/lib/*.a /usr/local/lib
 
+      - name: Build Box2D from source and install
+        run: |
+          git clone https://github.com/erincatto/box2d.git
+          cd box2d
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake --build . --config Release
+          sudo make install
+    
       # TODO: obtain dlsh from SheinbergLab, not benjamin-heasly
       - name: Install our dlsh libs and headers into the build environment.
         run: |
