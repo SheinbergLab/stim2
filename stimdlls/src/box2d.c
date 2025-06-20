@@ -1061,12 +1061,15 @@ static int Box2DRevoluteJointCreateCmd(ClientData clientData, Tcl_Interp *interp
   /* check this, was get GetWorldCenter for 2.4 */
   b2Vec2 pivot = b2Body_GetWorldCenterOfMass(bodyA);
   b2RevoluteJointDef jointDef = b2DefaultRevoluteJointDef();
-  jointDef.bodyIdA = bodyA;
-  jointDef.bodyIdB = bodyB;
-  jointDef.localAnchorA = b2Body_GetLocalPoint(jointDef.bodyIdA, pivot);
-  jointDef.localAnchorB = b2Body_GetLocalPoint(jointDef.bodyIdB, pivot);
-  jointDef.collideConnected = false;
-
+  jointDef.base.bodyIdA = bodyA;
+  jointDef.base.bodyIdB = bodyB;
+  // might need this?
+  //  jointDef.base.localFrameA.q = b2MakeRot( 0.5f * B2_PI );
+  jointDef.base.localFrameA.p =
+    b2Body_GetLocalPoint(jointDef.base.bodyIdA, pivot);
+  jointDef.base.localFrameB.p =
+    b2Body_GetLocalPoint(jointDef.base.bodyIdB, pivot);
+  
   b2JointId jointID = b2CreateRevoluteJoint(bw->worldId, &jointDef);
   snprintf(joint_name, sizeof(joint_name), "joint%d", bw->jointCount++); 
   entryPtr = Tcl_CreateHashEntry(&bw->jointTable, joint_name, &newentry);
