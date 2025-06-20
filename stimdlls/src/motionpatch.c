@@ -239,8 +239,8 @@ void motionpatchUpdate(GR_OBJ *g)
   for (i = 0; i < s->num_dots; i++) {
     if (s->dots[i].lifetime >= 0 &&
 	s->dots[i].frames >= s->dots[i].lifetime) {
-      s->dots[i].pos[0] = ((float) random()/RAND_MAX) - 0.5;
-      s->dots[i].pos[1] = ((float) random()/RAND_MAX) - 0.5;
+      s->dots[i].pos[0] = ((float) rand()/RAND_MAX) - 0.5;
+      s->dots[i].pos[1] = ((float) rand()/RAND_MAX) - 0.5;
       s->dots[i].frames = 0;
 
       if (s->set_direction_by_noise) {
@@ -262,7 +262,7 @@ void motionpatchUpdate(GR_OBJ *g)
       }
       /* If this dot is incoherent, randomize motion direction */
       else {
-	float angle = ((float) random()/RAND_MAX) *2*PI;
+	float angle = ((float) rand()/RAND_MAX) *2*PI;
 	s->dots[i].speed[0] = cos(angle)*s->speed;
 	s->dots[i].speed[1] = sin(angle)*s->speed;
       }
@@ -287,7 +287,7 @@ void motionpatchUpdate(GR_OBJ *g)
 	/* If this dot is incoherent, randomize motion direction */
 	/**** It's possible to not update this on every frame ****/
 	else {
-	  float angle = ((float) random()/RAND_MAX)*2*PI;
+	  float angle = ((float) rand()/RAND_MAX)*2*PI;
 	  s->dots[i].speed[0] = cos(angle)*s->speed;
 	  s->dots[i].speed[1] = sin(angle)*s->speed;
 	}
@@ -350,8 +350,8 @@ static int setPositions(MOTIONPATCH *s)
 {
   int i;
   for (i = 0; i < s->num_dots; i++) {
-    s->dots[i].pos[0] = ((float) random()/RAND_MAX)-0.5;
-    s->dots[i].pos[1] = ((float) random()/RAND_MAX)-0.5;
+    s->dots[i].pos[0] = ((float) rand()/RAND_MAX)-0.5;
+    s->dots[i].pos[1] = ((float) rand()/RAND_MAX)-0.5;
     s->dots[i].pos[2] = 0;
   }
   return TCL_OK;
@@ -369,7 +369,7 @@ static int setSpeeds(MOTIONPATCH *s, float vx, float vy)
       s->dots[i].speed[2] = 0;
     }
     else {
-      angle = ((float) random()/RAND_MAX) *2*PI;
+      angle = ((float) rand()/RAND_MAX) *2*PI;
       s->dots[i].speed[0] = cos(angle)*s->speed;
       s->dots[i].speed[1] = sin(angle)*s->speed;
     }
@@ -393,9 +393,9 @@ static int setCoherences(MOTIONPATCH *s, float coherence)
   int i;
   float angle;
   for (i = 0; i < s->num_dots; i++) {
-    s->dots[i].coherent = (((float) random()/RAND_MAX) < coherence);
+    s->dots[i].coherent = (((float) rand()/RAND_MAX) < coherence);
     if (!s->dots[i].coherent) {
-      angle = ((float) random()/RAND_MAX)*2*PI;
+      angle = ((float) rand()/RAND_MAX)*2*PI;
       s->dots[i].speed[0] = cos(angle)*s->speed;
       s->dots[i].speed[1] = sin(angle)*s->speed;
     }
