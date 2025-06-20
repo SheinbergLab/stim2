@@ -37,11 +37,9 @@
 #include <GLFW/glfw3.h> 
 #endif
 
-#include <utilc.h>
 #include <prmutil.h>
 #include <stim2.h>
 #include "shaderutils.h"
-
 
 typedef struct _vao_info {
   GLuint vao;
