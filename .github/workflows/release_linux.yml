@@ -61,7 +61,9 @@ jobs:
 
       - name: Install box2d v3 static lib into the build environment.
         run: |
-          cd deps/box2d/
+          git clone https://github.com/erincatto/box2d.git
+          cd box2d
+          mkdir build
           cmake -B build -D BOX2D_UNIT_TESTS=OFF -D BOX2D_SAMPLES=OFF -D BOX2D_BENCHMARKS=OFF -D BUILD_SHARED_LIBS=OFF
           cmake --build build --parallel
           sudo cmake --install build
