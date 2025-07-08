@@ -46,8 +46,7 @@ jobs:
 
       - name: Build Box2D from source and install
         run: |
-          git clone https://github.com/erincatto/box2d.git
-          cd box2d
+          cd deps/box2d
           mkdir build && cd build
           cmake -DCMAKE_BUILD_TYPE=Release -DBOX2D_BUILD_UNIT_TESTS=OFF -DBOX2D_BUILD_TESTBED=OFF -DBUILD_SHARED_LIBS=OFF ..
           cmake --build . --config Release
