@@ -68,11 +68,13 @@ jobs:
           sudo cmake --install build
 
       # TODO: obtain dlsh from SheinbergLab, not benjamin-heasly
-      - name: Install our dlsh libs and headers into the build environment.
+      - name: Install our dg and dlsh libs and headers into the build environment.
         run: |
-          DLSH_VERSION=0.0.23
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
-          sudo dpkg --install dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          DLSH_VERSION=0.0.48
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dg_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          sudo dpkg --install dlsh-dg_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          sudo dpkg --install dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
 
       - name: Build stim2 stimdlls, to include along with the stim2 executable.
         run: |
@@ -111,20 +113,6 @@ jobs:
         run: |
           wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/stim2_${{ github.ref_name }}_$(dpkg --print-architecture).deb
           sudo apt install --yes ./stim2_${{ github.ref_name }}_$(dpkg --print-architecture).deb
-
-      # TODO: obtain dserv from SheinbergLab, not from benjamin-heasly.
-      - name: Install dserv along with the shared tcl 9 dependency.
-        run: |
-          DSERV_VERSION=0.0.48
-          wget https://github.com/benjamin-heasly/dserv/releases/download/${DSERV_VERSION}/dserv_${DSERV_VERSION}_$(dpkg --print-architecture).deb
-          sudo apt install --yes ./dserv_${DSERV_VERSION}_$(dpkg --print-architecture).deb
-
-      # TODO: obtain dlsh from SheinbergLab with a version, not from benjamin-heasly with "initial"
-      - name: Install our dlsh TCL utils and thier dependencies into the packaging dir.
-        run: |
-          mkdir -p /tmp/package/usr/local/dlsh
-          cd /tmp/package/usr/local/dlsh
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/initial/dlsh.zip
 
       - name: Sanity check the installed package.
         run: |
