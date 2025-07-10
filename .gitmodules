@@ -1,22 +1,28 @@
 [submodule "lib/glfw"]
-	path = lib/glfw
-	url = https://github.com/glfw/glfw
-
+    path = lib/glfw
+    url = https://github.com/glfw/glfw
+    ignore = untracked
 [submodule "lib/sockpp"]
-        path = lib/sockpp
-        url = https://github.com/fpagliughu/sockpp
+    path = lib/sockpp
+    url = https://github.com/fpagliughu/sockpp
+    ignore = untracked
 [submodule "deps/glfw"]
-	path = deps/glfw
-	url = https://github.com/glfw/glfw
+    path = deps/glfw
+    url = https://github.com/glfw/glfw
+    ignore = untracked
 [submodule "deps/sockpp"]
-	path = deps/sockpp
-	url = https://github.com/fpagliughi/sockpp
+    path = deps/sockpp
+    url = https://github.com/fpagliughi/sockpp
+    ignore = untracked
 [submodule "tcl"]
-	path = deps/tcl
-	url = https://github.com/tcltk/tcl.git
+    path = deps/tcl
+    url = https://github.com/tcltk/tcl.git
+    ignore = untracked
 [submodule "deps/spine-runtimes"]
-	path = deps/spine-runtimes
-	url = https://github.com/EsotericSoftware/spine-runtimes.git
+    path = deps/spine-runtimes
+    url = https://github.com/EsotericSoftware/spine-runtimes.git
+    ignore = untracked
 [submodule "deps/box2d"]
-	path = deps/box2d
-	url = https://github.com/erincatto/box2d.git
+    path = deps/box2d
+    url = https://github.com/erincatto/box2d.git
+    ignore = untracked
