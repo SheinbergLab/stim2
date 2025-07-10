@@ -109,6 +109,11 @@ jobs:
 
     steps:
 
+      - name: Check out our stim2 code for the current tag.
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
       - name: Install TCL 9 to the sanity check environment.
         run: |
           cd deps/tcl/unix/
