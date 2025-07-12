@@ -61,19 +61,20 @@ jobs:
 
       - name: Install box2d v3 static lib into the build environment.
         run: |
-          git clone https://github.com/erincatto/box2d.git
-          cd box2d
+          cd deps/box2d
           mkdir build
           cmake -B build -D BOX2D_UNIT_TESTS=OFF -D BOX2D_SAMPLES=OFF -D BOX2D_BENCHMARKS=OFF -D BUILD_SHARED_LIBS=OFF
           cmake --build build --parallel
           sudo cmake --install build
 
       # TODO: obtain dlsh from SheinbergLab, not benjamin-heasly
-      - name: Install our dlsh libs and headers into the build environment.
+      - name: Install our dg and dlsh libs and headers into the build environment.
         run: |
-          DLSH_VERSION=0.0.22
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
-          sudo dpkg --install dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          DLSH_VERSION=0.0.48
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dg_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          sudo dpkg --install dlsh-dg_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          sudo dpkg --install dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
 
       - name: Build stim2 stimdlls, to include along with the stim2 executable.
         run: |
@@ -108,24 +109,22 @@ jobs:
 
     steps:
 
+      - name: Check out our stim2 code for the current tag.
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install TCL 9 to the sanity check environment.
+        run: |
+          cd deps/tcl/unix/
+          ./configure
+          make
+          sudo make install
+
       - name: Install the package we just released.
         run: |
           wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/stim2_${{ github.ref_name }}_$(dpkg --print-architecture).deb
           sudo apt install --yes ./stim2_${{ github.ref_name }}_$(dpkg --print-architecture).deb
-
-      # TODO: obtain dserv from SheinbergLab, not from benjamin-heasly.
-      - name: Install dserv along with the shared tcl 9 dependency.
-        run: |
-          DSERV_VERSION=0.0.48
-          wget https://github.com/benjamin-heasly/dserv/releases/download/${DSERV_VERSION}/dserv_${DSERV_VERSION}_$(dpkg --print-architecture).deb
-          sudo apt install --yes ./dserv_${DSERV_VERSION}_$(dpkg --print-architecture).deb
-
-      # TODO: obtain dlsh from SheinbergLab with a version, not from benjamin-heasly with "initial"
-      - name: Install our dlsh TCL utils and thier dependencies into the packaging dir.
-        run: |
-          mkdir -p /tmp/package/usr/local/dlsh
-          cd /tmp/package/usr/local/dlsh
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/initial/dlsh.zip
 
       - name: Sanity check the installed package.
         run: |

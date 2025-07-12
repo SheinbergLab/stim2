@@ -46,18 +46,18 @@ jobs:
 
       - name: Build Box2D from source and install
         run: |
-          git clone https://github.com/erincatto/box2d.git
-          cd box2d
+          cd deps/box2d
           mkdir build && cd build
           cmake -DCMAKE_BUILD_TYPE=Release -DBOX2D_BUILD_UNIT_TESTS=OFF -DBOX2D_BUILD_TESTBED=OFF -DBUILD_SHARED_LIBS=OFF ..
           cmake --build . --config Release
           sudo make install
     
-      - name: Install our dlsh libs and headers into the build environment.
+      # TODO: obtain dlsh from SheinbergLab, not benjamin-heasly
+      - name: Install our dg and dlsh libs and headers into the build environment.
         run: |
-          DLSH_VERSION=0.9.6
-          wget https://github.com/sheinberglab/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-signed.pkg
-          sudo installer -pkg dlsh-${DLSH_VERSION}-Darwin-signed.pkg -target /
+          DLSH_VERSION=0.0.48
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-$(uname -m)-signed.pkg
+          sudo installer -pkg dlsh-${DLSH_VERSION}-Darwin-$(uname -m)-signed.pkg -target /
 
       - name: Build our stimdlls to include within the stim2 app bundle.
         run: |
