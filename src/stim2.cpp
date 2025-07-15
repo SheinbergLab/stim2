@@ -889,6 +889,8 @@ public:
   
   int size();
   bool empty();
+  bool wait_with_timeout(int timeout_ms);
+  void clear_all();
   
 private:
   std::deque<T> queue_;
@@ -910,7 +912,6 @@ T& SharedQueue<T>::front()
     {
       cond_.wait(mlock);
     }
-  mlock.unlock();     // unlock before notificiation to minimize mutex con
   return queue_.front();
 }
 
@@ -922,8 +923,31 @@ void SharedQueue<T>::pop_front()
     {
       cond_.wait(mlock);
     }
-  mlock.unlock();     // unlock before notificiation to minimize mutex con
   queue_.pop_front();
+}
+
+template <typename T>
+bool SharedQueue<T>::empty()
+{
+  std::unique_lock<std::mutex> mlock(mutex_);
+  return queue_.empty();
+}
+
+template <typename T>
+bool SharedQueue<T>::wait_with_timeout(int timeout_ms)
+{
+  std::unique_lock<std::mutex> mlock(mutex_);
+  if (queue_.empty()) {
+    return cond_.wait_for(mlock, std::chrono::milliseconds(timeout_ms)) == std::cv_status::no_timeout;
+  }
+  return true;
+}
+
+template <typename T>
+void SharedQueue<T>::clear_all()
+{
+  std::unique_lock<std::mutex> mlock(mutex_);
+  queue_.clear();
 }     
 
 template <typename T>
@@ -1158,11 +1182,24 @@ public:
   void wakeup(void) { wake_queue.push_back(0); }
 
   void wait_for_wakeup(void) {
-    int req = wake_queue.front();
-    wake_queue.pop_front();
-    while (wake_queue.size()) {
+#ifdef __APPLE__
+    // On macOS, use timeout only during sleep/wake transitions
+    if (systemIsSleeping) {
+      // During sleep, use a longer timeout to avoid blocking indefinitely
+      wake_queue.wait_with_timeout(1000);  // 1 second timeout during sleep
+    } else {
+      // Normal operation - pure event-driven, no timeout
+      int req = wake_queue.front();
       wake_queue.pop_front();
     }
+#else
+    // Non-macOS: always use pure event-driven approach
+    int req = wake_queue.front();
+    wake_queue.pop_front();
+#endif
+    
+    // Clean up any remaining signals
+    wake_queue.clear_all();
   }
 
   
@@ -1202,7 +1239,7 @@ public:
   bool show_console = false;
   bool show_log = true;
 
-  void start_tcp_server(void);	   // crlf oriented commands
+  void start_tcp_server(void);     // crlf oriented commands
   void start_dstcp_server(void);   // data point receiver
   void start_msg_server(void); // frame oriented with size prefix
 
@@ -1214,7 +1251,7 @@ public:
             SharedQueue<ds_client_request_t *> *queue);
   static void
   message_client_process(int sockfd,
-			 SharedQueue<client_request_t *> *queue);
+             SharedQueue<client_request_t *> *queue);
   
   bool show_imgui = false;
   AppLog log;
@@ -1398,15 +1435,15 @@ private:
   startTimerImpl() {
     timerID = appTimer.create(0, timer_interval, [this]() {
       if (!systemIsSleeping) {
-	updateTimes();
-	if (NextFrameTime >= 0 && StimTime >=
-	    (unsigned int) NextFrameTime) {
-	  NextFrameTime = -1;
-	  kickAnimation();
-	}
-	tqueue.push_back(StimTime);
+    updateTimes();
+    if (NextFrameTime >= 0 && StimTime >=
+        (unsigned int) NextFrameTime) {
+      NextFrameTime = -1;
+      kickAnimation();
+    }
+    tqueue.push_back(StimTime);
+    do_wakeup();
       }
-      do_wakeup();
     });
   }
 public:
@@ -1426,9 +1463,14 @@ public:
   
   void onSystemSleep() {
     systemIsSleeping = true;
+    // Wake up any currently blocked wait_for_wakeup() with timeout behavior
+    wakeup();
   }
   
   void onSystemWake() {
+    // Wake up immediately, then mark as not sleeping
+    wakeup();
+    glfwPostEmptyEvent();
     systemIsSleeping = false;
   }  
   
@@ -1562,11 +1604,11 @@ public:
       // std::cout << "processing tcl request: " << req->script << std::endl;
       
       if (req->wait_for_swap) {
-	wait_for_swap = true;
-	
-	if (log_level) log.AddLog("[%.3f]: %s", glfwGetTime(), script);
+    wait_for_swap = true;
+    
+    if (log_level) log.AddLog("[%.3f]: %s", glfwGetTime(), script);
 #ifdef JETSON_NANO
-	GPIO::output(output_pin, GPIO::HIGH);
+    GPIO::output(output_pin, GPIO::HIGH);
 #endif
       }
 
@@ -1574,36 +1616,36 @@ public:
 
       const char *rcstr = Tcl_GetStringResult(interp);
       if (retcode == TCL_OK) {
-	if (!req->wait_for_swap) {
-	  if (rcstr) {
-	    req->rqueue->push_back(std::string(rcstr));
-	  }
-	  else {
-	    req->rqueue->push_back("");
-	  }
-	}
-	else {
-	  // put result back into the request and queue for after swap
-	  req->script = std::string(rcstr);
-	  reply_queue.push_back(req);
-	}
+    if (!req->wait_for_swap) {
+      if (rcstr) {
+        req->rqueue->push_back(std::string(rcstr));
       }
       else {
-	if (!req->wait_for_swap) {
-	  if (rcstr) {
-	    req->rqueue->push_back("!TCL_ERROR "+std::string(rcstr));
-	    //      std::cout << "Error: " + std::string(rcstr) << std::endl;
-	    log.AddLog("[error]: %s\n", rcstr);
-	  }
-	  else {
-	    req->rqueue->push_back("Error:");
-	  }
-	}
-	else {
-	  // put result back into the request and queue for after swap
-	  req->script = std::string("!TCL_ERROR "+std::string(rcstr));
-	  reply_queue.push_back(req);
-	}
+        req->rqueue->push_back("");
+      }
+    }
+    else {
+      // put result back into the request and queue for after swap
+      req->script = std::string(rcstr);
+      reply_queue.push_back(req);
+    }
+      }
+      else {
+    if (!req->wait_for_swap) {
+      if (rcstr) {
+        req->rqueue->push_back("!TCL_ERROR "+std::string(rcstr));
+        //      std::cout << "Error: " + std::string(rcstr) << std::endl;
+        log.AddLog("[error]: %s\n", rcstr);
+      }
+      else {
+        req->rqueue->push_back("Error:");
+      }
+    }
+    else {
+      // put result back into the request and queue for after swap
+      req->script = std::string("!TCL_ERROR "+std::string(rcstr));
+      reply_queue.push_back(req);
+    }
       }
     }
 
@@ -1758,8 +1800,8 @@ void Application::start_tcp_server(void)
   struct sockaddr_in address;
   struct sockaddr client_address;
   socklen_t client_address_len = sizeof(client_address);
-  int socket_fd;		// accept socket
-  int new_socket_fd;		// client socket
+  int socket_fd;        // accept socket
+  int new_socket_fd;        // client socket
   int on = 1;
   
   //    std::cout << "opening server on port " << std::to_string(tcpport) << std::endl;
@@ -1782,7 +1824,7 @@ void Application::start_tcp_server(void)
   
   /* Bind address to socket. */
   if (bind(socket_fd, (const struct sockaddr *) &address,
-	   sizeof (struct sockaddr)) == -1) {
+       sizeof (struct sockaddr)) == -1) {
     perror("bind");
     return;
   }
@@ -1814,8 +1856,8 @@ void Application::start_msg_server(void)
   struct sockaddr_in address;
   struct sockaddr client_address;
   socklen_t client_address_len = sizeof(client_address);
-  int socket_fd;		// accept socket
-  int new_socket_fd;		// client socket
+  int socket_fd;        // accept socket
+  int new_socket_fd;        // client socket
   int on = 1;
   
   //    std::cout << "opening server on port " << std::to_string(tcpport) << std::endl;
@@ -1838,7 +1880,7 @@ void Application::start_msg_server(void)
   
   /* Bind address to socket. */
   if (bind(socket_fd, (const struct sockaddr *) &address,
-	   sizeof (struct sockaddr)) == -1) {
+       sizeof (struct sockaddr)) == -1) {
     perror("bind");
     return;
   }
@@ -1870,8 +1912,8 @@ void Application::start_dstcp_server(void)
   struct sockaddr_in address;
   struct sockaddr client_address;
   socklen_t client_address_len = sizeof(client_address);
-  int socket_fd;		// accept socket
-  int new_socket_fd;		// client socket
+  int socket_fd;        // accept socket
+  int new_socket_fd;        // client socket
   int on = 1;
   
   //    std::cout << "opening server on port " << std::to_string(tcpport) << std::endl;
@@ -1894,7 +1936,7 @@ void Application::start_dstcp_server(void)
   
   /* Bind address to socket. */
   if (bind(socket_fd, (const struct sockaddr *) &address,
-	   sizeof (struct sockaddr)) == -1) {
+       sizeof (struct sockaddr)) == -1) {
     perror("bind");
     return;
   }
@@ -1927,7 +1969,7 @@ void Application::start_dstcp_server(void)
  */
 void
 Application::tcp_client_process(int sockfd,
-				SharedQueue<client_request_t *> *queue)
+                SharedQueue<client_request_t *> *queue)
 {
   int rval;
   int wrval;
@@ -1944,44 +1986,44 @@ Application::tcp_client_process(int sockfd,
     for (int i = 0; i < rval; i++) {
       char c = buf[i];
       if (c == '\n') {
-	
-	if (script.length() > 0) {
-	  if (script[0] == '!') {
-	    client_request.wait_for_swap = true;
-	    client_request.script = script.substr(1);
-	  }
-	  else {
-	    client_request.wait_for_swap = false;
-	    client_request.script = std::string(script);
-	  }
-	  /* push request onto queue for main thread to retrieve */
-	  queue->push_back(&client_request);
-	  
-	  /* get lock and wake up main thread to process */
-	  do_wakeup();
-	  
-	  /* rqueue will be available after command has been processed */
-	  std::string s(client_request.rqueue->front());
-	  client_request.rqueue->pop_front();
-	  
-	  //	  std::cout << "TCL Result: " << s << std::endl;
-	  
-	  // Add a newline, and send the buffer including the null termination
-	  s = s+"\n";
-#ifndef _MSC_VER
-	  wrval = write(sockfd, s.c_str(), s.size());
-#else
-	  wrval = send(sockfd, s.c_str(), s.size(), 0);
-#endif
-	  if (wrval < 0) {		// couldn't send to client
-	    break;
-	  }
-	  
-	}
-	script = "";
+    
+    if (script.length() > 0) {
+      if (script[0] == '!') {
+        client_request.wait_for_swap = true;
+        client_request.script = script.substr(1);
       }
       else {
-	script += c;
+        client_request.wait_for_swap = false;
+        client_request.script = std::string(script);
+      }
+      /* push request onto queue for main thread to retrieve */
+      queue->push_back(&client_request);
+      
+      /* get lock and wake up main thread to process */
+      do_wakeup();
+      
+      /* rqueue will be available after command has been processed */
+      std::string s(client_request.rqueue->front());
+      client_request.rqueue->pop_front();
+      
+      //      std::cout << "TCL Result: " << s << std::endl;
+      
+      // Add a newline, and send the buffer including the null termination
+      s = s+"\n";
+#ifndef _MSC_VER
+      wrval = write(sockfd, s.c_str(), s.size());
+#else
+      wrval = send(sockfd, s.c_str(), s.size(), 0);
+#endif
+      if (wrval < 0) {      // couldn't send to client
+        break;
+      }
+      
+    }
+    script = "";
+      }
+      else {
+    script += c;
       }
     }
   }
@@ -2012,8 +2054,8 @@ static std::pair<char*, size_t> receiveMessage(int socket) {
     size_t totalBytesReceived = 0;
     while (totalBytesReceived < msgSize) {
         bytesReceived = recv(socket,
-			     buffer + totalBytesReceived,
-			     msgSize - totalBytesReceived, 0);
+                 buffer + totalBytesReceived,
+                 msgSize - totalBytesReceived, 0);
         if (bytesReceived <= 0) {
             delete[] buffer;
             return {nullptr, 0}; // Connection closed or error
@@ -2030,7 +2072,7 @@ static std::pair<char*, size_t> receiveMessage(int socket) {
  */
 void
 Application::message_client_process(int sockfd,
-				    SharedQueue<client_request_t *> *queue)
+                    SharedQueue<client_request_t *> *queue)
 {
   int rval;
   int wrval;
@@ -2047,12 +2089,12 @@ Application::message_client_process(int sockfd,
     if (buffer == nullptr) break;
     if (msgSize) {
       if (buffer[0] == '!') {
-	client_request.wait_for_swap = true;
-	client_request.script = std::string(buffer+1, msgSize-1);
+    client_request.wait_for_swap = true;
+    client_request.script = std::string(buffer+1, msgSize-1);
       }
       else {
-	client_request.wait_for_swap = false;
-	client_request.script = std::string(buffer, msgSize);
+    client_request.wait_for_swap = false;
+    client_request.script = std::string(buffer, msgSize);
       }
       
       /* push request onto queue for main thread to retrieve */
@@ -2064,7 +2106,7 @@ Application::message_client_process(int sockfd,
       /* rqueue will be available after command has been processed */
       std::string s(client_request.rqueue->front());
       client_request.rqueue->pop_front();
-	  
+      
       // Send a response back to the client
       sendMessage(sockfd, s);
       
@@ -2081,7 +2123,7 @@ Application::message_client_process(int sockfd,
   
 void
 Application::ds_client_process(int sockfd,
-			       SharedQueue<ds_client_request_t *> *queue)
+                   SharedQueue<ds_client_request_t *> *queue)
 {
   int rval;
   char buf[1024];
@@ -2104,19 +2146,19 @@ Application::ds_client_process(int sockfd,
 
         //std::cout << "received ds input" << std::endl;
 
-	if (dpoint_str.length() > 0) {
-	  client_request.datapoint_string = std::string(dpoint_str);
-	  
-	  /* push request onto queue for main thread to retrieve */
-	  queue->push_back(&client_request);
-	  
-	  /* get lock and wake up main thread to process */
-	  do_wakeup();
-	}
-	dpoint_str = "";
+    if (dpoint_str.length() > 0) {
+      client_request.datapoint_string = std::string(dpoint_str);
+      
+      /* push request onto queue for main thread to retrieve */
+      queue->push_back(&client_request);
+      
+      /* get lock and wake up main thread to process */
+      do_wakeup();
+    }
+    dpoint_str = "";
       }
       else {
-	dpoint_str += c;
+    dpoint_str += c;
       }
     }
   }

@@ -42,8 +42,8 @@
 
 - (void)systemDidWake:(NSNotification*)notification {
     if (self.wakeCallback) {
-        // Dispatch to a background queue to avoid blocking main thread
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        // Ensure callback runs on main thread
+        dispatch_async(dispatch_get_main_queue(), ^{
             self.wakeCallback();
         });
     }
