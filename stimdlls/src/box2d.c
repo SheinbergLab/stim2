@@ -782,13 +782,13 @@ static int Box2DSetTransformCmd(ClientData clientData, Tcl_Interp *interp,
   b2BodyId body;
   double x, y;
   double angle = 0;
-
+  
   if (argc < 5)
   {
     Tcl_AppendResult(interp, "usage: ", argv[0], " world body x y [angle=0]", NULL);
     return TCL_ERROR;
   }
-
+  
   if (!(bw = find_Box2D(interp, olist, argv[1])))
     return TCL_ERROR;
   if (find_body(bw, argv[2], &body) != TCL_OK)
@@ -802,13 +802,35 @@ static int Box2DSetTransformCmd(ClientData clientData, Tcl_Interp *interp,
     if (Tcl_GetDouble(interp, argv[5], &angle) != TCL_OK)
       return TCL_ERROR;
   }
-
   
-  b2Vec2 pos = {x,y};
-  b2Rot rot = {angle};
+  b2Body_SetTransform(body, (b2Vec2){x, y}, b2MakeRot(angle));
+  return TCL_OK;
+}
 
-  b2Body_SetTransform(body, (b2Vec2){x,y}, b2MakeRot(angle));
-
+static int Box2DSetLinearVelocityCmd(ClientData clientData, Tcl_Interp *interp,
+                                     int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *)clientData;
+  BOX2D_WORLD *bw;
+  b2BodyId body;
+  double vx, vy;
+  
+  if (argc != 5)
+  {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " world body vx vy", NULL);
+    return TCL_ERROR;
+  }
+  
+  if (!(bw = find_Box2D(interp, olist, argv[1])))
+    return TCL_ERROR;
+  if (find_body(bw, argv[2], &body) != TCL_OK)
+    return TCL_ERROR;
+  if (Tcl_GetDouble(interp, argv[3], &vx) != TCL_OK)
+    return TCL_ERROR;
+  if (Tcl_GetDouble(interp, argv[4], &vy) != TCL_OK)
+    return TCL_ERROR;
+  
+  b2Body_SetLinearVelocity(body, (b2Vec2){vx, vy});
   return TCL_OK;
 }
 
@@ -1990,6 +2012,9 @@ int Box_Init(Tcl_Interp *interp)
 
   Tcl_CreateCommand(interp, "Box2D_setTransform",
                     (Tcl_CmdProc *)Box2DSetTransformCmd,
+                    (ClientData) OBJList, (Tcl_CmdDeleteProc *)NULL);
+  Tcl_CreateCommand(interp, "Box2D_setLinearVelocity",
+                    (Tcl_CmdProc *)Box2DSetLinearVelocityCmd,
                     (ClientData) OBJList, (Tcl_CmdDeleteProc *)NULL);
 
 #if 0
