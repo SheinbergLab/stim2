@@ -22,11 +22,17 @@ jobs:
 
     steps:
 
-      - name: Install build tools, and depdendencies for tcl 9, glfw, stim2, and stimdlls.
+      - name: Install build tools, and dependencies for tcl 9, glfw, stim2, and stimdlls.
         run: |
-          apt update
-          apt install -y sudo wget
-          sudo apt install -y ca-certificates build-essential cmake pkg-config cmake-data
+          # Check if we're in a container (ARM) or native Ubuntu (x86)
+          if [ -f /etc/debian_version ] && ! command -v sudo &> /dev/null; then
+            # In container, install sudo first
+            apt update
+            apt install -y sudo wget
+          fi
+          # Now use sudo for all package installs (works in both environments)
+          sudo apt update
+          sudo apt install -y ca-certificates build-essential cmake pkg-config cmake-data wget
           sudo apt install -y zlib1g-dev
           sudo apt install -y libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev libwayland-dev libxkbcommon-dev
           sudo apt install -y libglew-dev libglm-dev
