@@ -463,6 +463,13 @@ int videoCreate(OBJ_LIST *objlist, char *filename, double rate, int play_audio) 
     mpv_set_option_string(v->mpv, "hwdec", "auto");
     mpv_set_option_string(v->mpv, "pause", "yes");
     mpv_set_option_string(v->mpv, "loop-file", "no");
+
+    // Cache settings
+    mpv_set_option_string(v->mpv, "cache", "yes");
+    mpv_set_option_string(v->mpv, "cache-secs", "10");
+    mpv_set_option_string(v->mpv, "demuxer-max-bytes", "50M");
+    mpv_set_option_string(v->mpv, "demuxer-max-back-bytes", "25M");
+    
     
     if (!play_audio) {
         mpv_set_option_string(v->mpv, "audio", "no");
