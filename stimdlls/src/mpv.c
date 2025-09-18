@@ -709,6 +709,49 @@ static int videohideCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
+static int videoseekCmd(ClientData clientData, Tcl_Interp *interp,
+                       int argc, char *argv[]) {
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MPV_VIDEO *v;
+  int id;
+  double time;
+  
+  if (argc < 3) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " id time_in_seconds", NULL);
+    return TCL_ERROR;
+  }
+  
+  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+  if (id >= OL_NOBJS(olist)) {
+    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+    return TCL_ERROR;
+  }
+  
+  if (GR_OBJTYPE(OL_OBJ(olist, id)) != MpvID) {
+    Tcl_AppendResult(interp, argv[0], ": object not of type mpv video", NULL);
+    return TCL_ERROR;
+  }
+  
+  v = GR_CLIENTDATA(OL_OBJ(olist, id));
+  
+  if (Tcl_GetDouble(interp, argv[2], &time) != TCL_OK) return TCL_ERROR;
+  
+  if (v->mpv) {
+    // Seek to specified time
+    mpv_set_property(v->mpv, "time-pos", MPV_FORMAT_DOUBLE, &time);
+    
+    // If paused, force decode one frame
+    if (v->paused) {
+      int frame_step = 1;
+      mpv_set_property(v->mpv, "frame-step", MPV_FORMAT_FLAG, &frame_step);
+    }
+    
+    v->redraw = 1;
+  }
+  
+  return TCL_OK;
+}
+
 #ifdef _WIN32
 EXPORT(int, Mpvvideo_Init) (Tcl_Interp *interp)
 #else
@@ -755,6 +798,8 @@ int Mpvvideo_Init(Tcl_Interp *interp)
     Tcl_CreateCommand(interp, "videoRepeat", (Tcl_CmdProc *) videorepeatCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
     Tcl_CreateCommand(interp, "videoHide", (Tcl_CmdProc *) videohideCmd,
+                      (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+    Tcl_CreateCommand(interp, "videoSeek", (Tcl_CmdProc *) videoseekCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
     return TCL_OK;
