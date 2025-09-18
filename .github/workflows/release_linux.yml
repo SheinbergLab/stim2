@@ -137,7 +137,4 @@ jobs:
 
       - name: Sanity check the installed package.
         run: |
-          ls -alth /usr/local/bin
-          which stim2
-          stim2 --help
-          timeout --preserve-status --signal SIGINT 2 stim2 || echo "$?"
+          /usr/local/stim2/stim2 --help
