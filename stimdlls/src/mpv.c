@@ -13,6 +13,10 @@
 #include <math.h>
 #include <string.h>
 
+#ifdef __linux__
+#define _GNU_SOURCE
+#endif
+
 #ifndef WIN32
 #include <dlfcn.h>
 #endif
