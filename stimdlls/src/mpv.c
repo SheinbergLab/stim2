@@ -13,10 +13,6 @@
 #include <math.h>
 #include <string.h>
 
-#ifdef __linux__
-#define _GNU_SOURCE
-#endif
-
 #ifndef WIN32
 #include <dlfcn.h>
 #endif
@@ -133,7 +129,7 @@ static void on_mpv_render_update(void *cb_ctx) {
 // Helper function to get OpenGL procedure address
 static void *get_proc_address(void *ctx, const char *name) {
     // Just use dlsym since GLAD has already loaded the functions
-    return dlsym(RTLD_DEFAULT, name);
+    return dlsym(NULL, name);
 }
 
 void videoOff(GR_OBJ *gobj) {
