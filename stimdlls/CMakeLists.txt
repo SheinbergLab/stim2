@@ -248,6 +248,9 @@ if(APPLE)
         COMMAND ${CMAKE_INSTALL_NAME_TOOL} -add_rpath "/opt/homebrew/Cellar/mpv/0.40.0_4/lib" $<TARGET_FILE:mpvvideo>
         COMMAND ${CMAKE_INSTALL_NAME_TOOL} -add_rpath "/opt/homebrew/lib" $<TARGET_FILE:mpvvideo>
     )
+elseif(LINUX)  # Add this block
+    target_link_libraries(mpvvideo ${DLSH} ${BUNDLE_LOAD} ${TCLLIB} ${OPENGL_LIBRARIES} ${MPV_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${APP_LIB})
+    set_target_properties(mpvvideo PROPERTIES PREFIX "")    
 endif()
 
 #target_link_libraries(sound ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${LIBMATH} ${APP_LIB})
