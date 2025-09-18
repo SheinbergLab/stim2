@@ -3,6 +3,10 @@
  *  Use libmpv to render video animations using OpenGL
  */
 
+#ifdef __linux__
+#define _GNU_SOURCE
+#endif
+
 #ifdef WIN32
 #include <windows.h>
 #define __arm__
@@ -129,7 +133,7 @@ static void on_mpv_render_update(void *cb_ctx) {
 // Helper function to get OpenGL procedure address
 static void *get_proc_address(void *ctx, const char *name) {
     // Just use dlsym since GLAD has already loaded the functions
-    return dlsym(NULL, name);
+    return dlsym(RTLD_DEFAULT, name);
 }
 
 void videoOff(GR_OBJ *gobj) {
