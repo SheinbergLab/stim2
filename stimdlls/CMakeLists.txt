@@ -97,6 +97,16 @@ endif()
 # add_library(grannystim SHARED src/grannystim.c src/shaderutils.c src/bstrlib.c src/glsw.c ${GLAD})
 
 ###############################
+# mpvvideo
+###############################
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(MPV REQUIRED mpv)
+
+add_library(mpvvideo SHARED src/mpv.c src/shaderutils.c src/bstrlib.c src/glsw.c ${GLAD})
+target_include_directories(mpvvideo PRIVATE ${MPV_INCLUDE_DIRS})
+
+
+###############################
 # bink
 ###############################
 if(APPLE)
@@ -216,7 +226,7 @@ else()
     set(TCLLIB tclstub)
 endif()
 
-foreach (module polygon metagroup shader mesh )
+foreach (module polygon metagroup shader mesh)
     target_link_libraries(${module} ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${APP_LIB})
 endforeach()
 
@@ -224,6 +234,20 @@ target_link_libraries(motionpatch ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPE
 
 if(NOT WIN32)
     target_link_libraries(text ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${LIBMATH} ${APP_LIB} ${FREETYPE} ${PNG} ${ZLIB})
+endif()
+
+if(APPLE)
+    target_link_libraries(mpvvideo ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${MPV_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${APP_LIB})
+    set_target_properties(mpvvideo
+       PROPERTIES PREFIX ""
+       LINK_FLAGS "-Wl,-flat_namespace -Wl,-undefined,dynamic_lookup"       
+    )
+    
+    add_custom_command(
+        TARGET mpvvideo POST_BUILD
+        COMMAND ${CMAKE_INSTALL_NAME_TOOL} -add_rpath "/opt/homebrew/Cellar/mpv/0.40.0_4/lib" $<TARGET_FILE:mpvvideo>
+        COMMAND ${CMAKE_INSTALL_NAME_TOOL} -add_rpath "/opt/homebrew/lib" $<TARGET_FILE:mpvvideo>
+    )
 endif()
 
 #target_link_libraries(sound ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${LIBMATH} ${APP_LIB})
