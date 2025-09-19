@@ -570,12 +570,12 @@ static int svgCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    // Simple heuristic: if it starts with '<' and contains '<svg', treat as SVG data
+    // See if argument contains <svg> tag and then treat as svg_data directly
     const char *input = argv[1];
-    if (input[0] == '<' && strstr(input, "<svg") != NULL) {
-        is_svg_data = 1;
+    if (strncmp(input, "<svg", 4) == 0 || strstr(input, "<svg") != NULL) {
+      is_svg_data = 1;
     }
-
+    
     if (is_svg_data) {
         if ((id = svgCreateFromString(olist, argv[1])) < 0) {
             Tcl_SetResult(interp, "error parsing SVG data", TCL_STATIC);
