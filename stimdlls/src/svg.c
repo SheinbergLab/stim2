@@ -314,6 +314,52 @@ static int rasterize_svg(SVG_OBJ *svg, int width, int height) {
     return 0;
 }
 
+// Load SVG from string
+static int load_svg_from_string(SVG_OBJ *svg, const char *svg_data) {
+    // Parse SVG from memory - make a copy since nsvgParse modifies the string
+    char *svg_copy = strdup(svg_data);
+    if (!svg_copy) {
+        fprintf(getConsoleFP(), "Failed to allocate memory for SVG data\n");
+        return -1;
+    }
+    
+    svg->svg_image = nsvgParse(svg_copy, "px", 96.0f);
+    free(svg_copy);
+    
+    if (!svg->svg_image) {
+        fprintf(getConsoleFP(), "Failed to parse SVG from string\n");
+        return -1;
+    }
+    
+    // Create rasterizer
+    svg->rasterizer = nsvgCreateRasterizer();
+    if (!svg->rasterizer) {
+        fprintf(getConsoleFP(), "Failed to create SVG rasterizer\n");
+        nsvgDelete(svg->svg_image);
+        svg->svg_image = NULL;
+        return -1;
+    }
+    
+    // Set dimensions from SVG
+    svg->width = (int)svg->svg_image->width;
+    svg->height = (int)svg->svg_image->height;
+    svg->aspect_ratio = svg->svg_image->width / svg->svg_image->height;
+    
+    // Generate aspect-corrected vertices and update VBO
+    float vertices[30];
+    generate_svg_vertices(vertices, svg->aspect_ratio);
+    
+    glBindBuffer(GL_ARRAY_BUFFER, svg->vertex_buffer);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    
+    // Initial rasterization at native size
+    int raster_size = (int)fmaxf(svg->svg_image->width, svg->svg_image->height);
+    raster_size = fmaxf(256, fminf(2048, raster_size)); // Clamp to reasonable range
+    
+    return rasterize_svg(svg, raster_size, raster_size);
+}
+
 // Load SVG from file
 static int load_svg_from_file(SVG_OBJ *svg, const char *filename) {
     // Parse SVG file
@@ -460,21 +506,86 @@ int svgCreate(OBJ_LIST *objlist, char *filename) {
     return gobjAddObj(objlist, obj);
 }
 
+int svgCreateFromString(OBJ_LIST *objlist, char *svg_data) {
+    const char *name = "SVG";
+    GR_OBJ *obj;
+    SVG_OBJ *svg;
+
+    obj = gobjCreateObj();
+    if (!obj) return -1;
+
+    strcpy(GR_NAME(obj), name);
+    GR_OBJTYPE(obj) = SvgID;
+
+    GR_DELETEFUNCP(obj) = svgDelete;
+    GR_RESETFUNCP(obj) = svgReset;
+    GR_ACTIONFUNCP(obj) = svgShow;
+
+    svg = (SVG_OBJ *) calloc(1, sizeof(SVG_OBJ));
+    GR_CLIENTDATA(obj) = svg;
+
+    // Initialize state
+    svg->visible = 1;
+    svg->scale = 1.0f;
+    svg->opacity = 1.0f;
+    svg->color[0] = 1.0f;  // Default white tint
+    svg->color[1] = 1.0f;
+    svg->color[2] = 1.0f;
+    svg->color[3] = 1.0f;
+    svg->color_override = 0;  // Preserve original colors
+    svg->rotation = 0.0f;
+    svg->background_enabled = 0;
+    svg->background_color[0] = 1.0f;
+    svg->background_color[1] = 1.0f;
+    svg->background_color[2] = 1.0f;
+    svg->background_color[3] = 1.0f;
+    
+    // Initialize OpenGL resources
+    if (init_svg_gl_resources(svg) < 0) {
+        fprintf(getConsoleFP(), "error initializing SVG OpenGL resources\n");
+        svgDelete(obj);
+        return -1;
+    }
+
+    // Load SVG from string
+    if (load_svg_from_string(svg, svg_data) < 0) {
+        fprintf(getConsoleFP(), "error parsing SVG from string\n");
+        svgDelete(obj);
+        return -1;
+    }
+    
+    return gobjAddObj(objlist, obj);
+}
+
 // Tcl command implementations
 
 static int svgCmd(ClientData clientData, Tcl_Interp *interp,
                   int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *) clientData;
     int id;
+    int is_svg_data = 0;
 
     if (argc < 2) {
-        Tcl_AppendResult(interp, "usage: ", argv[0], " svgfile", NULL);
+        Tcl_AppendResult(interp, "usage: ", argv[0], " svgfile_or_data", NULL);
         return TCL_ERROR;
     }
 
-    if ((id = svgCreate(olist, argv[1])) < 0) {
-        Tcl_SetResult(interp, "error loading SVG", TCL_STATIC);
-        return TCL_ERROR;
+    // Simple heuristic: if it starts with '<' and contains '<svg', treat as SVG data
+    const char *input = argv[1];
+    if (input[0] == '<' && strstr(input, "<svg") != NULL) {
+        is_svg_data = 1;
+    }
+
+    if (is_svg_data) {
+        if ((id = svgCreateFromString(olist, argv[1])) < 0) {
+            Tcl_SetResult(interp, "error parsing SVG data", TCL_STATIC);
+            return TCL_ERROR;
+        }
+    } else {
+        if ((id = svgCreate(olist, argv[1])) < 0) {
+            Tcl_SetResult(interp, "error loading SVG file", TCL_STATIC);
+            return TCL_ERROR;
+        }
     }
 
     Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
