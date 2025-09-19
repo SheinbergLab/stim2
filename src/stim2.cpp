@@ -1374,6 +1374,8 @@ public:
       /* Set default projection */
       defaultProjection();
 
+      setBackgroundColor();
+ 
       /* a CORE OpenGL requirement is to have a bound VAO */
       glGenVertexArrays(1, &vao);
       /* Guarantee at least one is bound...*/
