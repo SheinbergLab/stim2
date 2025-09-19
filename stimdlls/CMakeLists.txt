@@ -66,6 +66,11 @@ endif()
  add_library(image SHARED src/image.c src/shaderutils.c src/bstrlib.c src/glsw.c ${GLAD})
 
 ###############################
+# svg
+###############################
+ add_library(svg SHARED src/svg.c src/shaderutils.c src/bstrlib.c src/glsw.c ${GLAD})
+
+###############################
 # metagroup
 ###############################
  add_library(metagroup SHARED src/metagroup.c ${GLAD})
@@ -92,14 +97,6 @@ endif()
 # motionpatch
 ###############################
  add_library(motionpatch SHARED src/motionpatch.c src/shaderutils.c src/bstrlib.c src/glsw.c src/open-simplex-noise.c ${GLAD})
-
-###############################
-# grannystim
-###############################
-#if(APPLE)
-#set(CMAKE_C_FLAGS  "${CMAKE_C_FLAGS} -D_MACOSX=1")
-#endif()
-# add_library(grannystim SHARED src/grannystim.c src/shaderutils.c src/bstrlib.c src/glsw.c ${GLAD})
 
 ###############################
 # video (FFmpeg-based)
@@ -185,12 +182,12 @@ elseif(APPLE)
     find_library(FREETYPE NAMES "libfreetype.a")
     find_library(PNG NAMES "libpng16.a")
 
-    foreach (module polygon image metagroup shader mesh motionpatch box2d bink spine text)
+    foreach (module polygon image svg metagroup shader mesh motionpatch box2d bink spine text)
         set_target_properties(${module} PROPERTIES PREFIX "")
         # set_target_properties(${module} PROPERTIES SUFFIX .bundle)
     endforeach()
 elseif(WIN32)
-    foreach (module polygon image metagroup shader mesh motionpatch box2d)
+    foreach (module polygon image svg metagroup shader mesh motionpatch box2d)
         set_target_properties(${module} PROPERTIES PREFIX "")
     endforeach()
 
@@ -204,8 +201,8 @@ elseif(WIN32)
     set(LAB lab)
     set(TCLLIB tclstub)
 else()
-    #	foreach (module polygon image metagroup shader mesh motionpatch newtonstim box2d bink spine creature)
-    foreach (module polygon image metagroup shader mesh motionpatch text box2d)
+    #	foreach (module polygon image svg metagroup shader mesh motionpatch newtonstim box2d bink spine creature)
+    foreach (module polygon image svg metagroup shader mesh motionpatch text box2d)
         set_target_properties(${module} PROPERTIES PREFIX "")
     endforeach()
 
@@ -230,7 +227,7 @@ else()
     set(TCLLIB tclstub)
 endif()
 
-foreach (module polygon image metagroup shader mesh)
+foreach (module polygon image svg metagroup shader mesh)
     target_link_libraries(${module} ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${APP_LIB})
 endforeach()
 
