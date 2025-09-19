@@ -61,6 +61,11 @@ endif()
  add_library(polygon SHARED src/polygon.c src/shaderutils.c src/bstrlib.c src/glsw.c ${GLAD})
 
 ###############################
+# image
+###############################
+ add_library(image SHARED src/image.c src/shaderutils.c src/bstrlib.c src/glsw.c ${GLAD})
+
+###############################
 # metagroup
 ###############################
  add_library(metagroup SHARED src/metagroup.c ${GLAD})
@@ -180,12 +185,12 @@ elseif(APPLE)
     find_library(FREETYPE NAMES "libfreetype.a")
     find_library(PNG NAMES "libpng16.a")
 
-    foreach (module polygon metagroup shader mesh motionpatch box2d bink spine text)
+    foreach (module polygon image metagroup shader mesh motionpatch box2d bink spine text)
         set_target_properties(${module} PROPERTIES PREFIX "")
         # set_target_properties(${module} PROPERTIES SUFFIX .bundle)
     endforeach()
 elseif(WIN32)
-    foreach (module polygon metagroup shader mesh motionpatch box2d)
+    foreach (module polygon image metagroup shader mesh motionpatch box2d)
         set_target_properties(${module} PROPERTIES PREFIX "")
     endforeach()
 
@@ -199,8 +204,8 @@ elseif(WIN32)
     set(LAB lab)
     set(TCLLIB tclstub)
 else()
-    #	foreach (module polygon metagroup shader mesh motionpatch newtonstim box2d bink spine creature)
-    foreach (module polygon metagroup shader mesh motionpatch text box2d)
+    #	foreach (module polygon image metagroup shader mesh motionpatch newtonstim box2d bink spine creature)
+    foreach (module polygon image metagroup shader mesh motionpatch text box2d)
         set_target_properties(${module} PROPERTIES PREFIX "")
     endforeach()
 
@@ -225,7 +230,7 @@ else()
     set(TCLLIB tclstub)
 endif()
 
-foreach (module polygon metagroup shader mesh)
+foreach (module polygon image metagroup shader mesh)
     target_link_libraries(${module} ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${APP_LIB})
 endforeach()
 
