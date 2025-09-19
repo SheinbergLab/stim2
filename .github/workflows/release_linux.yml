@@ -15,7 +15,8 @@ jobs:
         os: [ubuntu-22.04, ubuntu-22.04-arm]
 
     runs-on: ${{ matrix.os }}
-    container: ${{ (contains(matrix.os, 'arm') && 'debian:12') || null }}    
+    # Use Debian 12 container for both ARM and x86 to get consistent FFmpeg versions
+    container: debian:12
 
     permissions:
         contents: write
@@ -24,19 +25,18 @@ jobs:
 
       - name: Install build tools, and dependencies for tcl 9, glfw, stim2, and stimdlls.
         run: |
-          # Check if we're in a container (ARM) or native Ubuntu (x86)
-          if [ -f /etc/debian_version ] && ! command -v sudo &> /dev/null; then
-            # In container, install sudo and git first
-            apt update
-            apt install -y sudo wget git
-          fi
-          # Now use sudo for all package installs (works in both environments)
+          # Always in container now, so always need to install basics first
+          apt update
+          apt install -y sudo wget git ca-certificates
+          
+          # Install all build dependencies
           sudo apt update
-          sudo apt install -y ca-certificates build-essential cmake pkg-config cmake-data wget git
+          sudo apt install -y build-essential cmake pkg-config cmake-data
           sudo apt install -y zlib1g-dev
           sudo apt install -y libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev libwayland-dev libxkbcommon-dev
           sudo apt install -y libglew-dev libglm-dev
           sudo apt install -y libopenal-dev libfreetype-dev
+          # FFmpeg 5.1.7 libraries (matching your target system)
           sudo apt install -y libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev
 
       - name: Check out our stim2 code for the current tag.
@@ -84,6 +84,16 @@ jobs:
           wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
           sudo dpkg --install dlsh-dg_${DLSH_VERSION}_$(dpkg --print-architecture).deb
           sudo dpkg --install dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+
+      - name: Verify FFmpeg version matches target system
+        run: |
+          echo "FFmpeg versions in build environment:"
+          pkg-config --modversion libavformat
+          pkg-config --modversion libavcodec  
+          pkg-config --modversion libswscale
+          pkg-config --modversion libavutil
+          echo "Library files:"
+          ls -la /usr/lib/*/libavformat.so*
 
       - name: Build stim2 stimdlls, to include along with the stim2 executable.
         run: |
