@@ -136,6 +136,126 @@ static void *get_proc_address(void *ctx, const char *name) {
     return dlsym(RTLD_DEFAULT, name);
 }
 
+
+
+typedef struct {
+    GLint program;
+    GLint active_texture;
+    GLint texture_2d_bindings[8]; // For multiple texture units
+    GLint vao;
+    GLint array_buffer;
+    GLint element_array_buffer;
+    GLboolean blend_enabled;
+    GLint blend_src_rgb, blend_dst_rgb;
+    GLint blend_src_alpha, blend_dst_alpha;
+    GLboolean depth_test;
+    GLint depth_func;
+    GLboolean cull_face;
+    GLint front_face;
+    GLint cull_face_mode;
+    GLfloat clear_color[4];
+    GLboolean scissor_test;
+    GLint scissor_box[4];
+    GLint viewport[4];
+    GLint framebuffer;
+    // Add more as needed
+} gl_state_backup_t;
+
+static void save_gl_state(gl_state_backup_t *state) {
+  glGetIntegerv(GL_CURRENT_PROGRAM, &state->program);
+  glGetIntegerv(GL_ACTIVE_TEXTURE, &state->active_texture);
+  
+  // Save texture bindings for multiple units
+  for (int i = 0; i < 8; i++) {
+    glActiveTexture(GL_TEXTURE0 + i);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D,
+		  &state->texture_2d_bindings[i]);
+  }
+  glActiveTexture(state->active_texture); // Restore active texture
+  
+  glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &state->vao);
+  glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &state->array_buffer);
+  glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING,
+		&state->element_array_buffer);
+  
+  state->blend_enabled = glIsEnabled(GL_BLEND);
+  glGetIntegerv(GL_BLEND_SRC_RGB, &state->blend_src_rgb);
+  glGetIntegerv(GL_BLEND_DST_RGB, &state->blend_dst_rgb);
+  glGetIntegerv(GL_BLEND_SRC_ALPHA, &state->blend_src_alpha);
+  glGetIntegerv(GL_BLEND_DST_ALPHA, &state->blend_dst_alpha);
+  
+  state->depth_test = glIsEnabled(GL_DEPTH_TEST);
+  glGetIntegerv(GL_DEPTH_FUNC, &state->depth_func);
+  
+  state->cull_face = glIsEnabled(GL_CULL_FACE);
+  glGetIntegerv(GL_FRONT_FACE, &state->front_face);
+  glGetIntegerv(GL_CULL_FACE_MODE, &state->cull_face_mode);
+  
+  glGetFloatv(GL_COLOR_CLEAR_VALUE, state->clear_color);
+  
+  state->scissor_test = glIsEnabled(GL_SCISSOR_TEST);
+  glGetIntegerv(GL_SCISSOR_BOX, state->scissor_box);
+  
+  glGetIntegerv(GL_VIEWPORT, state->viewport);
+  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &state->framebuffer);
+}
+
+static void restore_gl_state(const gl_state_backup_t *state) {
+  glUseProgram(state->program);
+  
+  // Restore texture bindings
+  for (int i = 0; i < 8; i++) {
+    glActiveTexture(GL_TEXTURE0 + i);
+    glBindTexture(GL_TEXTURE_2D, state->texture_2d_bindings[i]);
+  }
+  glActiveTexture(state->active_texture);
+  
+  glBindVertexArray(state->vao);
+  glBindBuffer(GL_ARRAY_BUFFER, state->array_buffer);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, state->element_array_buffer);
+  
+  if (state->blend_enabled) {
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(state->blend_src_rgb,
+			state->blend_dst_rgb,
+			state->blend_src_alpha,
+			state->blend_dst_alpha);
+  } else {
+    glDisable(GL_BLEND);
+  }
+  
+  if (state->depth_test) {
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(state->depth_func);
+  } else {
+    glDisable(GL_DEPTH_TEST);
+  }
+  
+  if (state->cull_face) {
+    glEnable(GL_CULL_FACE);
+    glFrontFace(state->front_face);
+    glCullFace(state->cull_face_mode);
+  } else {
+    glDisable(GL_CULL_FACE);
+  }
+  
+  glClearColor(state->clear_color[0], state->clear_color[1], 
+	       state->clear_color[2], state->clear_color[3]);
+  
+  if (state->scissor_test) {
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(state->scissor_box[0], state->scissor_box[1],
+	      state->scissor_box[2], state->scissor_box[3]);
+  } else {
+    glDisable(GL_SCISSOR_TEST);
+  }
+  
+  glViewport(state->viewport[0], state->viewport[1], 
+	     state->viewport[2], state->viewport[3]);
+  glBindFramebuffer(GL_FRAMEBUFFER, state->framebuffer);
+}
+
+
 void videoOff(GR_OBJ *gobj) {
     MPV_VIDEO *v = (MPV_VIDEO *) GR_CLIENTDATA(gobj);
     if (v->mpv) {
@@ -149,33 +269,17 @@ void videoShow(GR_OBJ *gobj) {
     MPV_VIDEO *v = (MPV_VIDEO *) GR_CLIENTDATA(gobj);
     
     if (!v->visible || !v->mpv_gl) return;
+
+    GLfloat saved_clear_color[4];
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, saved_clear_color);
     
-    // Check if we've passed the stop frame
-    if (v->stop_frame && (v->cur_frame > v->stop_frame)) {
-        v->redraw = 0;
-        return;
-    }
-    
-    // If we've reached EOF and not repeating, just display last frame
-    if (v->eof_reached && !v->repeat_mode) {
-        // Still render the last frame but don't try to play
-        v->redraw = 1;  // Keep showing the last frame
-    } else {
-        // Unpause video when we start showing it (if not at EOF)
-        if (v->paused && !v->eof_reached && !v->user_paused) {
-            int pause = 0;
-            mpv_set_property(v->mpv, "pause", MPV_FORMAT_FLAG, &pause);
-            v->paused = 0;
-        }
-    }
-    
-    // Save current OpenGL state we'll modify
-    GLint prev_viewport[4];
+    // Save essential state for FBO operations
     GLint prev_framebuffer;
-    glGetIntegerv(GL_VIEWPORT, prev_viewport);
+    GLint prev_viewport[4];
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_framebuffer);
+    glGetIntegerv(GL_VIEWPORT, prev_viewport);
     
-    // Always update mpv texture (even if hidden, we want to keep decoding)
+    // Render to FBO with minimal state changes
     glBindFramebuffer(GL_FRAMEBUFFER, v->fbo);
     glViewport(0, 0, v->width, v->height);
     
@@ -195,47 +299,47 @@ void videoShow(GR_OBJ *gobj) {
     
     mpv_render_context_render(v->mpv_gl, params);
     
-    // Restore framebuffer and viewport
+    // Restore framebuffer state
     glBindFramebuffer(GL_FRAMEBUFFER, prev_framebuffer);
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+
+    glClearColor(saved_clear_color[0], saved_clear_color[1], 
+                 saved_clear_color[2], saved_clear_color[3]);
     
-    // If hidden, skip the actual drawing to screen
     if (v->hidden) {
         v->redraw = 0;
         return;
     }
     
-    // Now draw the textured quad using stim2's matrices (exactly like polygon.c)
+    // Draw quad with fresh state setup
     float modelview[16], projection[16];
     stimGetMatrix(STIM_MODELVIEW_MATRIX, modelview);
     stimGetMatrix(STIM_PROJECTION_MATRIX, projection);
     
-    // Enable blending
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    
-    // Use shader and set uniforms
     glUseProgram(MpvShaderProgram);
     glUniformMatrix4fv(MpvUniformModelview, 1, GL_FALSE, modelview);
     glUniformMatrix4fv(MpvUniformProjection, 1, GL_FALSE, projection);
     
-    // Bind texture
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, v->texture);
     glUniform1i(MpvUniformTexture, 0);
     
-    // Draw the quad
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    
     glBindVertexArray(v->vao);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     
     // Clean up
     glBindVertexArray(0);
     glUseProgram(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDisable(GL_BLEND);
     
     v->redraw = 0;
 }
 
-void videoOnTimer(GR_OBJ *gobj) {
+void videoUpdate(GR_OBJ *gobj) {
     MPV_VIDEO *v = (MPV_VIDEO *) GR_CLIENTDATA(gobj);
     
     if (v->timer_script) sendTclCommand(v->timer_script);
@@ -289,12 +393,18 @@ void videoOnTimer(GR_OBJ *gobj) {
 void videoDelete(GR_OBJ *gobj) {
     MPV_VIDEO *v = (MPV_VIDEO *) GR_CLIENTDATA(gobj);
 
+    // Clean up render context first (while mpv is still valid)
     if (v->mpv_gl) {
         mpv_render_context_free(v->mpv_gl);
+        v->mpv_gl = NULL;
     }
+    
+    // Simple mpv cleanup - let mpv_terminate_destroy handle everything
     if (v->mpv) {
         mpv_terminate_destroy(v->mpv);
+        v->mpv = NULL;
     }
+    
     if (v->timer_script) free(v->timer_script);
     
     // Clean up OpenGL resources
@@ -302,7 +412,6 @@ void videoDelete(GR_OBJ *gobj) {
     if (v->texture) glDeleteTextures(1, &v->texture);
     if (v->vertex_buffer) glDeleteBuffers(1, &v->vertex_buffer);
     if (v->vao) glDeleteVertexArrays(1, &v->vao);
-    // Note: shader program is shared, don't delete it here
     
     free((void *) v);
 }
@@ -439,7 +548,7 @@ int videoCreate(OBJ_LIST *objlist, char *filename, double rate, int play_audio) 
     strcpy(GR_NAME(obj), name);
     GR_OBJTYPE(obj) = MpvID;
 
-    GR_TIMERFUNCP(obj) = videoOnTimer;
+    GR_UPDATEFUNCP(obj) = videoUpdate;
     GR_DELETEFUNCP(obj) = videoDelete;
     GR_RESETFUNCP(obj) = videoReset;
     GR_OFFFUNCP(obj) = videoOff;
