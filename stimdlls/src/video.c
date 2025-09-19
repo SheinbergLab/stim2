@@ -61,7 +61,9 @@ typedef struct _ffmpeg_video {
     GLuint vao;
     
     // Frame timing
-    double last_frame_time;
+    double video_start_time;    // When video started playing (stimulus time)
+    double target_frame_time;   // When current frame should be displayed
+    int frames_decoded;         // Total frames decoded since start
     int needs_frame_update;
     
     char *timer_script;
@@ -261,31 +263,10 @@ void videoOff(GR_OBJ *gobj) {
 void videoShow(GR_OBJ *gobj) {
     FFMPEG_VIDEO *v = (FFMPEG_VIDEO *) GR_CLIENTDATA(gobj);
     
-    if (!v->visible) return;
+    if (!v->visible || v->hidden) return;
     
-    // Update frame if needed and not paused
-    if (v->needs_frame_update) {
-        if (!v->paused && !v->eof_reached) {
-            if (decode_next_frame(v)) {
-                upload_frame_to_texture(v);
-                v->needs_frame_update = 0;
-            } else {
-                // No frame available yet, skip rendering
-                return;
-            }
-        }
-    }    
-    
-    // Handle repeat mode
-    if (v->eof_reached && v->repeat_mode) {
-        av_seek_frame(v->format_ctx, v->video_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
-        avcodec_flush_buffers(v->codec_ctx);
-        v->eof_reached = 0;
-        v->current_time = 0.0;
-        v->current_pts = 0;
-    }
-    
-    if (v->hidden) return;
+    // Timer function handles frame decoding, we just render the current frame
+    // No frame timing logic needed here - just display what's in the texture
     
     // Render textured quad
     float modelview[16], projection[16];
@@ -313,13 +294,67 @@ void videoShow(GR_OBJ *gobj) {
     glDisable(GL_BLEND);
 }
 
-void videoUpdate(GR_OBJ *gobj) {
+void videoTimer(GR_OBJ *gobj) {
     FFMPEG_VIDEO *v = (FFMPEG_VIDEO *) GR_CLIENTDATA(gobj);
     
     if (v->timer_script) sendTclCommand(v->timer_script);
     
-    // Mark that we need a frame update
-    v->needs_frame_update = 1;
+    if (v->paused || v->eof_reached) {
+        return;
+    }
+    
+    // Get current stimulus time in seconds
+    double current_time = getStimTime() / 1000.0;
+    double elapsed_time = current_time - v->video_start_time;
+    
+    // Calculate how many frames should have been displayed by now
+    int target_frame = (int)(elapsed_time * v->frame_rate);
+    
+    // If we're behind, decode frames to catch up (with safety limit)
+    int frames_to_catch_up = target_frame - v->frames_decoded;
+    int max_catchup_frames = 5;  // Don't decode more than 5 frames at once
+    
+    if (frames_to_catch_up > 0) {
+        frames_to_catch_up = (frames_to_catch_up > max_catchup_frames) ? 
+                             max_catchup_frames : frames_to_catch_up;
+        
+        for (int i = 0; i < frames_to_catch_up; i++) {
+            if (decode_next_frame(v)) {
+                v->frames_decoded++;
+                // Only upload the last frame to texture (the one we'll display)
+                if (i == frames_to_catch_up - 1) {
+                    upload_frame_to_texture(v);
+                }
+            } else {
+                // Hit end of file or error
+                break;
+            }
+        }
+        
+        // Update target time for next frame
+        v->target_frame_time = v->video_start_time + (v->frames_decoded / v->frame_rate);
+        
+        if (frames_to_catch_up > 1) {
+            fprintf(stderr, "Video catchup: decoded %d frames\n", frames_to_catch_up);
+        }
+    }
+    
+    // Handle repeat mode
+    if (v->eof_reached && v->repeat_mode) {
+        av_seek_frame(v->format_ctx, v->video_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
+        avcodec_flush_buffers(v->codec_ctx);
+        v->eof_reached = 0;
+        v->current_time = 0.0;
+        v->current_pts = 0;
+        v->video_start_time = current_time;  // Reset timing
+        v->frames_decoded = 0;
+        
+        // Decode first frame immediately
+        if (decode_next_frame(v)) {
+            upload_frame_to_texture(v);
+            v->frames_decoded = 1;
+        }
+    }
     
     kickAnimation();
 }
@@ -371,7 +406,7 @@ int videoCreate(OBJ_LIST *objlist, char *filename) {
     strcpy(GR_NAME(obj), name);
     GR_OBJTYPE(obj) = VideoID;
 
-    GR_UPDATEFUNCP(obj) = videoUpdate;
+    GR_TIMERFUNCP(obj) = videoTimer;
     GR_DELETEFUNCP(obj) = videoDelete;
     GR_RESETFUNCP(obj) = videoReset;
     GR_OFFFUNCP(obj) = videoOff;
@@ -458,6 +493,9 @@ int videoCreate(OBJ_LIST *objlist, char *filename) {
     v->eof_reached = 0;
     v->current_time = 0.0;
     v->current_pts = 0;
+    v->video_start_time = 0.0;
+    v->target_frame_time = 0.0;
+    v->frames_decoded = 0;
     v->needs_frame_update = 1;
     v->timer_script = NULL;
 
@@ -523,6 +561,13 @@ static int videopauseCmd(ClientData clientData, Tcl_Interp *interp,
     v = GR_CLIENTDATA(OL_OBJ(olist, id));
     
     if (Tcl_GetInt(interp, argv[2], &pause) != TCL_OK) return TCL_ERROR;
+    
+    // Handle timing when transitioning from paused to playing
+    if (!pause && v->paused) {
+        // Starting playback - record the start time
+        v->video_start_time = getStimTime() / 1000.0;
+        v->frames_decoded = 1;  // We already have first frame loaded
+    }
     
     v->paused = pause;
     v->user_paused = pause;
