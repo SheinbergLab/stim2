@@ -97,14 +97,13 @@ endif()
 # add_library(grannystim SHARED src/grannystim.c src/shaderutils.c src/bstrlib.c src/glsw.c ${GLAD})
 
 ###############################
-# mpvvideo
+# video (FFmpeg-based)
 ###############################
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(MPV REQUIRED mpv)
+pkg_check_modules(FFMPEG REQUIRED libavformat libavcodec libswscale libavutil)
 
-add_library(mpvvideo SHARED src/mpv.c src/shaderutils.c src/bstrlib.c src/glsw.c ${GLAD})
-target_include_directories(mpvvideo PRIVATE ${MPV_INCLUDE_DIRS})
-
+add_library(video SHARED src/video.c src/shaderutils.c src/bstrlib.c src/glsw.c ${GLAD})
+target_include_directories(video PRIVATE ${FFMPEG_INCLUDE_DIRS})
 
 ###############################
 # bink
@@ -237,20 +236,20 @@ if(NOT WIN32)
 endif()
 
 if(APPLE)
-    target_link_libraries(mpvvideo ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${MPV_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${APP_LIB})
-    set_target_properties(mpvvideo
+    target_link_libraries(video ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${FFMPEG_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${APP_LIB})
+    set_target_properties(video
        PROPERTIES PREFIX ""
        LINK_FLAGS "-Wl,-flat_namespace -Wl,-undefined,dynamic_lookup"       
     )
     
+    # Add FFmpeg library paths if needed
     add_custom_command(
-        TARGET mpvvideo POST_BUILD
-        COMMAND ${CMAKE_INSTALL_NAME_TOOL} -add_rpath "/opt/homebrew/Cellar/mpv/0.40.0_4/lib" $<TARGET_FILE:mpvvideo>
-        COMMAND ${CMAKE_INSTALL_NAME_TOOL} -add_rpath "/opt/homebrew/lib" $<TARGET_FILE:mpvvideo>
+        TARGET video POST_BUILD
+        COMMAND ${CMAKE_INSTALL_NAME_TOOL} -add_rpath "/opt/homebrew/lib" $<TARGET_FILE:video>
     )
 elseif(LINUX)  
-    target_link_libraries(mpvvideo ${DLSH} ${BUNDLE_LOAD} ${TCLLIB} ${OPENGL_LIBRARIES} ${MPV_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${APP_LIB})
-    set_target_properties(mpvvideo PROPERTIES PREFIX "")    
+    target_link_libraries(video ${DLSH} ${BUNDLE_LOAD} ${TCLLIB} ${OPENGL_LIBRARIES} ${FFMPEG_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${APP_LIB})
+    set_target_properties(video PROPERTIES PREFIX "")    
 endif()
 
 #target_link_libraries(sound ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${LIBMATH} ${APP_LIB})
