@@ -20,7 +20,7 @@ jobs:
       - name: Install cmake build tool and dependencies.
         run: |
           brew update
-          brew install cmake dylibbundler tcl-tk@9 glm brew libavformat libavcodec libswscale libavutil
+          brew install cmake dylibbundler tcl-tk@9 glm libavformat libavcodec libswscale libavutil
 
       - name: Check out our code
         uses: actions/checkout@v4
