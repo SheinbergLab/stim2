@@ -435,14 +435,8 @@ static int init_gl_resources(IMAGE_OBJ *img) {
     return 0;
 }
 
-// Load image data to OpenGL texture
-static int load_image_to_texture(IMAGE_OBJ *img, const char *filename) {
-    unsigned char *data = stbi_load(filename, &img->width, &img->height, &img->channels, 0);
-    if (!data) {
-        fprintf(getConsoleFP(), "Failed to load image: %s\n", stbi_failure_reason());
-        return -1;
-    }
-    
+// Common function to upload image data to OpenGL texture
+static int load_image_data_to_texture(IMAGE_OBJ *img, unsigned char *data) {
     img->aspect_ratio = (float)img->width / (float)img->height;
     
     // Generate aspect-corrected vertices and update VBO
@@ -470,6 +464,26 @@ static int load_image_to_texture(IMAGE_OBJ *img, const char *filename) {
     glBindTexture(GL_TEXTURE_2D, 0);
     
     return 0;
+}
+
+static int load_image_to_texture_from_file(IMAGE_OBJ *img, const char *filename) {
+    unsigned char *data = stbi_load(filename, &img->width, &img->height, &img->channels, 0);
+    if (!data) {
+        fprintf(getConsoleFP(), "Failed to load image from file: %s\n", stbi_failure_reason());
+        return -1;
+    }
+    
+    return load_image_data_to_texture(img, data);
+}
+
+static int load_image_to_texture_from_memory(IMAGE_OBJ *img, const unsigned char *buffer, int len) {
+    unsigned char *data = stbi_load_from_memory(buffer, len, &img->width, &img->height, &img->channels, 0);
+    if (!data) {
+        fprintf(getConsoleFP(), "Failed to load image from memory: %s\n", stbi_failure_reason());
+        return -1;
+    }
+    
+    return load_image_data_to_texture(img, data);
 }
 
 void imageShow(GR_OBJ *gobj) {
@@ -534,7 +548,25 @@ void imageReset(GR_OBJ *gobj) {
     // Reset any state as needed
 }
 
-int imageCreate(OBJ_LIST *objlist, char *filename) {
+// Helper function to detect if data looks like image bytes
+static int is_image_data(const unsigned char *data, int len) {
+    int width, height, channels;
+    
+    // Try to get image info from memory - this is very fast
+    // and doesn't actually decode the image
+    return stbi_info_from_memory(data, len, &width, &height, &channels);
+}
+
+// Helper function to detect if string is a valid image file
+static int is_image_file(const char *filename) {
+    int width, height, channels;
+    
+    // Check if file exists and is a valid image
+    return stbi_info(filename, &width, &height, &channels);
+}
+
+// image creation function
+int imageCreate(OBJ_LIST *objlist, const void *input, int len, int is_filename) {
     const char *name = "Image";
     GR_OBJ *obj;
     IMAGE_OBJ *img;
@@ -580,9 +612,16 @@ int imageCreate(OBJ_LIST *objlist, char *filename) {
         return -1;
     }
 
-    // Load image
-    if (load_image_to_texture(img, filename) < 0) {
-        fprintf(getConsoleFP(), "error loading image: %s\n", filename);
+    // Load image based on input type
+    int result;
+    if (is_filename) {
+        result = load_image_to_texture_from_file(img, (const char*)input);
+    } else {
+        result = load_image_to_texture_from_memory(img, (const unsigned char*)input, len);
+    }
+    
+    if (result < 0) {
+        fprintf(getConsoleFP(), "error loading image\n");
         imageDelete(obj);
         return -1;
     }
@@ -590,25 +629,70 @@ int imageCreate(OBJ_LIST *objlist, char *filename) {
     return gobjAddObj(objlist, obj);
 }
 
+
 // Tcl command implementations
-
 static int imageCmd(ClientData clientData, Tcl_Interp *interp,
-                    int argc, char *argv[]) {
-    OBJ_LIST *olist = (OBJ_LIST *) clientData;
-    int id;
-
-    if (argc < 2) {
-        Tcl_AppendResult(interp, "usage: ", argv[0], " imagefile", NULL);
-        return TCL_ERROR;
+		    int objc, Tcl_Obj *const objv[]) {
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  int id;
+  
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "filename_or_imagedata");
+    return TCL_ERROR;
+  }
+  
+  // Get the input as both string and byte array
+  char *str_input = Tcl_GetString(objv[1]);
+  int str_len = strlen(str_input);
+  
+  unsigned char *byte_input;
+  Tcl_Size byte_len;
+  byte_input = Tcl_GetByteArrayFromObj(objv[1], &byte_len);
+  
+  int is_file = 0;
+  int is_data = 0;
+  
+  // Check if it could be a filename (reasonable length, exists, valid image)
+  if (str_len > 0 && str_len < 512) {  // Reasonable filename length
+    if (is_image_file(str_input)) {
+      is_file = 1;
     }
-
-    if ((id = imageCreate(olist, argv[1])) < 0) {
-        Tcl_SetResult(interp, "error loading image", TCL_STATIC);
-        return TCL_ERROR;
+  }
+  
+  // Check if it could be image data
+  if (byte_input && byte_len > 0) {
+    if (is_image_data(byte_input, byte_len)) {
+      is_data = 1;
     }
-
-    Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
-    return TCL_OK;
+  }
+  
+  // Decide what to do based on what we found
+  if (is_file && !is_data) {
+    // Definitely a file
+    id = imageCreate(olist, str_input, 0, 1);
+  } else if (is_data && !is_file) {
+    // Definitely data
+    id = imageCreate(olist, byte_input, byte_len, 0);
+  } else if (is_file && is_data) {
+    // Ambiguous - prefer file interpretation for shorter strings
+    if (str_len < 100) {
+      id = imageCreate(olist, str_input, 0, 1);
+    } else {
+      id = imageCreate(olist, byte_input, byte_len, 0);
+    }
+  } else {
+    // Neither worked
+    Tcl_SetResult(interp, "input is neither a valid image file nor valid image data", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  
+  if (id < 0) {
+    Tcl_SetResult(interp, "error loading image", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
+  return TCL_OK;
 }
 
 static int imageinfoCmd(ClientData clientData, Tcl_Interp *interp,
@@ -1017,14 +1101,16 @@ int Image_Init(Tcl_Interp *interp)
         }
     }
 
-    Tcl_CreateCommand(interp, "image", (Tcl_CmdProc *) imageCmd,
-                      (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+    Tcl_CreateObjCommand(interp, "image", imageCmd, 
+			 (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
     
     Tcl_CreateCommand(interp, "imageInfo", (Tcl_CmdProc *) imageinfoCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-    Tcl_CreateCommand(interp, "imageGrayscale", (Tcl_CmdProc *) imagegrayscaleCmd,
+    Tcl_CreateCommand(interp, "imageGrayscale",
+		      (Tcl_CmdProc *) imagegrayscaleCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-    Tcl_CreateCommand(interp, "imageBrightness", (Tcl_CmdProc *) imagebrightnessCmd,
+    Tcl_CreateCommand(interp, "imageBrightness",
+		      (Tcl_CmdProc *) imagebrightnessCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
     Tcl_CreateCommand(interp, "imageContrast", (Tcl_CmdProc *) imagecontrastCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
