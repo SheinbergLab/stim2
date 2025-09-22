@@ -27,7 +27,7 @@ if(UNIX AND NOT APPLE)
     set(LINUX TRUE)
 endif()
 
-include_directories(../../dlsh/src/ ../../dlsh/src/lablib ../deps/bink/include)
+include_directories(../../dlsh/src/ ../../dlsh/src/lablib )
 
 if(WIN32)
     include_directories(${APP_DIR} c:/usr/local/include c:/usr/local/include/freetype)
@@ -39,7 +39,7 @@ elseif(APPLE)
 else()
     add_definitions(-DLINUX)
     include_directories(${APP_DIR} /usr/local/include)
-    link_directories(/usr/local/lib ../deps/bink/linux)
+    link_directories(/usr/local/lib)
     set(LIBDL dl)
     set(FREETYPE freetype)
 endif()
@@ -108,18 +108,6 @@ add_library(video SHARED src/video.c src/shaderutils.c src/bstrlib.c src/glsw.c 
 target_include_directories(video PRIVATE ${FFMPEG_INCLUDE_DIRS})
 
 ###############################
-# bink
-###############################
-if(APPLE)
-    add_library(bink SHARED src/bink.c src/shaderutils.c src/bstrlib.c src/glsw.c src/binktexturesGL.cpp src/setup_audioMac.m)
-elseif(WIN32)
-    add_library(bink SHARED src/bink.c src/shaderutils.c src/bstrlib.c src/glsw.c src/binktexturesGL.cpp ${GLAD} ${PRMUTIL})
-else()
-    add_library(bink SHARED src/bink.c src/shaderutils.c src/bstrlib.c src/glsw.c src/binktexturesGL.cpp ${GLAD} ${PRMUTIL})
-endif()
-
-
-###############################
 # sound
 ###############################
 #include_directories(/usr/local/include/fmod)
@@ -157,7 +145,6 @@ if(WIN32)
         set(CMAKE_EXE_MODULE_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /NODEFAULTLIB:libcmt /NODEFAULTLIB:MSCVRT /def:${DEF_FILE}")
         set(APP_LIB stim2.lib)
         set(SPINE_LIB spine-c.lib)
-        set(BINK_LIB bink2winrt_$ENV{VSCMD_ARG_TGT_ARCH}.uni10.lib)
         set(BOX2D_LIB libbox2d.lib)
         set(FREETYPE freetype.lib)
         set(FMOD_LIB fmod_vc.lib)
@@ -170,9 +157,8 @@ elseif(APPLE)
     set(BUNDLE_LOAD "-dynamiclib -undefined dynamic_lookup")
 
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
-        set(BINK_LIB ${CMAKE_CURRENT_SOURCE_DIR}/../deps/bink/lib/macos/libBink2MacArm64.dylib)
     else()
-        set(BINK_LIB ${CMAKE_CURRENT_SOURCE_DIR}/../deps/bink/lib/macos/libBink2Macx64.dylib)
+
     endif()
     set(TCLLIB tclstub)
     set(FMOD_LIB fmod)
@@ -182,7 +168,7 @@ elseif(APPLE)
     find_library(FREETYPE NAMES "libfreetype.a")
     find_library(PNG NAMES "libpng16.a")
 
-    foreach (module polygon image svg metagroup shader mesh motionpatch box2d bink spine text)
+    foreach (module polygon image svg metagroup shader mesh motionpatch box2d spine text)
         set_target_properties(${module} PROPERTIES PREFIX "")
         # set_target_properties(${module} PROPERTIES SUFFIX .bundle)
     endforeach()
@@ -193,7 +179,6 @@ elseif(WIN32)
 
     set(SPINE_LIB spine-c)
     set(BOX2D_LIB libbox2d)
-    set(BINK_LIB ${CMAKE_CURRENT_SOURCE_DIR}/../deps/bink/lib/windows/bink2w64.lib)
     find_library(LIBDL dl)
     find_library(LIBPTHREAD pthread)
     find_library(LIBOPENAL openal)
@@ -201,7 +186,7 @@ elseif(WIN32)
     set(LAB lab)
     set(TCLLIB tclstub)
 else()
-    #	foreach (module polygon image svg metagroup shader mesh motionpatch newtonstim box2d bink spine creature)
+    #	foreach (module polygon image svg metagroup shader mesh motionpatch newtonstim box2d spine creature)
     foreach (module polygon image svg metagroup shader mesh motionpatch text box2d)
         set_target_properties(${module} PROPERTIES PREFIX "")
     endforeach()
@@ -210,12 +195,9 @@ else()
     set(NEWTON_LIB Newton)
     find_library(BOX2D_LIB NAMES "libbox2d.a")
     # set(BOX2D_LIB box2d)
-    # set(BINK_LIB Bink2x64)
     if (CMAKE_SYSTEM_NAME MATCHES "Linux")
         if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
-            set(BINK_LIB ${CMAKE_CURRENT_SOURCE_DIR}/../deps/bink/lib/linux/bink2lnxarm64.a)
         else()
-            set(BINK_LIB ${CMAKE_CURRENT_SOURCE_DIR}/../deps/bink/lib/linux/bink2lnx64.a)
         endif()
     endif()
 
@@ -255,20 +237,6 @@ elseif(LINUX)
 endif()
 
 #target_link_libraries(sound ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${LIBMATH} ${APP_LIB})
-
-if(APPLE)
-    target_link_libraries(bink ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} "-framework CoreAudio" ${BINK_LIB} ${LIBDL} ${LIBPTHREAD})
-
-    # Using @rpath instead of @executable_path allows dylibbundler to find and relocate this dylib dependency, during the stim2 macos build and bundling.
-    add_custom_command(
-        TARGET bink POST_BUILD
-        COMMAND ${CMAKE_INSTALL_NAME_TOOL} -change "@executable_path/libBink2MacArm64.dylib" "@rpath/libBink2MacArm64.dylib" $<TARGET_FILE:bink>
-    )
-elseif(WIN32)
-    target_link_libraries(bink ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${BINK_LIB} ${APP_LIB})
-else()
-    target_link_libraries(bink ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${BINK_LIB} ${LIBOPENAL} ${LIBDL} ${LIBPTHREAD})
-endif()
 
 if (WIN32)
     target_link_libraries(box2d ${DLSH} ${BUNDLE_LOAD} ${GLFW} ${TCLLIB} ${OPENGL_LIBRARIES} ${LIBDL} ${LIBPTHREAD} ${BOX2D_LIB} ${APP_LIB} "-def:${BOX2D_DEF_FILE}")
