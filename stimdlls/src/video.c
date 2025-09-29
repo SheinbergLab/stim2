@@ -44,6 +44,7 @@ typedef struct _ffmpeg_video {
   double duration;
   double frame_rate;
   AVRational time_base;
+  int64_t stream_start_pts;
   
   // Playback state
   double current_time;
@@ -461,37 +462,40 @@ static void upload_frame_to_texture(FFMPEG_VIDEO *v) {
 
 // Decode next frame if needed
 static int decode_next_frame(FFMPEG_VIDEO *v) {
-    int ret;
-    
-    while ((ret = av_read_frame(v->format_ctx, v->packet)) >= 0) {
-        if (v->packet->stream_index == v->video_stream_idx) {
-            ret = avcodec_send_packet(v->codec_ctx, v->packet);
-            if (ret < 0) {
-                av_packet_unref(v->packet);
-                continue;
-            }
-            
-            ret = avcodec_receive_frame(v->codec_ctx, v->frame);
-            if (ret == 0) {
-                // Convert to RGB
-                sws_scale(v->sws_ctx, (const uint8_t* const*)v->frame->data,
-                         v->frame->linesize, 0, v->codec_ctx->height,
-                         v->rgb_frame->data, v->rgb_frame->linesize);
-                
-                // Update timing
-                v->current_pts = v->frame->pts;
-                v->current_time = v->current_pts * av_q2d(v->time_base);
-                
-                av_packet_unref(v->packet);
-                return 1; // Got frame
-            }
-        }
-        av_packet_unref(v->packet);
+  int ret;
+  
+  while ((ret = av_read_frame(v->format_ctx, v->packet)) >= 0) {
+    if (v->packet->stream_index == v->video_stream_idx) {
+      ret = avcodec_send_packet(v->codec_ctx, v->packet);
+      if (ret < 0) {
+	av_packet_unref(v->packet);
+	continue;
+      }
+      
+      ret = avcodec_receive_frame(v->codec_ctx, v->frame);
+      if (ret == 0) {
+	// Convert to RGB
+	sws_scale(v->sws_ctx, (const uint8_t* const*)v->frame->data,
+		  v->frame->linesize, 0, v->codec_ctx->height,
+		  v->rgb_frame->data, v->rgb_frame->linesize);
+	
+	// Update timing
+	v->current_pts = v->frame->pts;
+
+	// Normalize PTS relative to stream start
+	v->current_time = (v->current_pts - v->stream_start_pts) *
+	  av_q2d(v->time_base);
+        
+	av_packet_unref(v->packet);
+	return 1; // Got frame
+      }
     }
-    
-    // End of file
-    v->eof_reached = 1;
-    return 0;
+    av_packet_unref(v->packet);
+  }
+  
+  // End of file
+  v->eof_reached = 1;
+  return 0;
 }
 
 void videoOff(GR_OBJ *gobj) {
@@ -770,6 +774,14 @@ int videoCreate(OBJ_LIST *objlist, char *filename) {
     v->current_time = 0.0;
     v->current_pts = 0;
     v->video_start_time = 0.0;
+
+    int64_t start_time = video_stream->start_time;
+    if (start_time == AV_NOPTS_VALUE) {
+      start_time = 0;
+    }
+    v->stream_start_pts = start_time;
+
+    
     v->target_frame_time = 0.0;
     v->frames_decoded = 0;
     v->needs_frame_update = 1;
