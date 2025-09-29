@@ -454,10 +454,22 @@ static int init_gl_resources(FFMPEG_VIDEO *v) {
 
 // Upload frame data to OpenGL texture
 static void upload_frame_to_texture(FFMPEG_VIDEO *v) {
-    glBindTexture(GL_TEXTURE_2D, v->texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, v->width, v->height, 0, 
-                 GL_RGB, GL_UNSIGNED_BYTE, v->rgb_frame->data[0]);
-    glBindTexture(GL_TEXTURE_2D, 0);
+  glBindTexture(GL_TEXTURE_2D, v->texture);
+  
+  // Set pixel store alignment based on linesize
+  int alignment = 1;
+  if (v->rgb_frame->linesize[0] % 8 == 0) alignment = 8;
+  else if (v->rgb_frame->linesize[0] % 4 == 0) alignment = 4;
+  else if (v->rgb_frame->linesize[0] % 2 == 0) alignment = 2;
+  
+  glPixelStorei(GL_UNPACK_ALIGNMENT, alignment);
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, v->rgb_frame->linesize[0] / 3);
+  
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, v->width, v->height, 0, 
+	       GL_RGB, GL_UNSIGNED_BYTE, v->rgb_frame->data[0]);
+  
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);  // Reset
+  glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 // Decode next frame if needed
@@ -756,8 +768,11 @@ int videoCreate(OBJ_LIST *objlist, char *filename) {
     v->packet = av_packet_alloc();
 
     // Set up RGB frame
+    v->rgb_frame->format = AV_PIX_FMT_RGB24;
+    v->rgb_frame->width = v->width;
+    v->rgb_frame->height = v->height;
     av_image_alloc(v->rgb_frame->data, v->rgb_frame->linesize, 
-                   v->width, v->height, AV_PIX_FMT_RGB24, 32);
+		   v->width, v->height, AV_PIX_FMT_RGB24, 1);
 
     // Set up software scaler
     v->sws_ctx = sws_getContext(v->width, v->height, v->codec_ctx->pix_fmt,
