@@ -11,54 +11,67 @@ jobs:
 
     strategy:
       matrix:
-        # Build on not-the-latest to keep dependency versions modest.
-        os: [ubuntu-22.04, ubuntu-22.04-arm]
+        include:
+          # Debian 12 (Bookworm) - FFmpeg 5.x / libav 59
+          - runner: ubuntu-22.04
+            container: debian:12
+            distro: bookworm
+            arch: amd64
+          - runner: ubuntu-22.04-arm
+            container: debian:12
+            distro: bookworm
+            arch: arm64
+          # Debian 13 (Trixie) - FFmpeg 7.x / libav 61
+          - runner: ubuntu-22.04
+            container: debian:13
+            distro: trixie
+            arch: amd64
+          - runner: ubuntu-22.04-arm
+            container: debian:13
+            distro: trixie
+            arch: arm64
 
-    runs-on: ${{ matrix.os }}
-    # Use Debian 12 container for both ARM and x86 to get consistent FFmpeg versions
-    container: debian:12
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
 
     permissions:
-        contents: write
+      contents: write
 
     steps:
 
-      - name: Install build tools, and dependencies for tcl 9, glfw, stim2, and stimdlls.
+      - name: Install build tools and dependencies
         run: |
-          # Always in container now, so always need to install basics first
           apt update
           apt install -y sudo wget git ca-certificates
           
-          # Install all build dependencies
           sudo apt update
           sudo apt install -y build-essential cmake pkg-config cmake-data
           sudo apt install -y zlib1g-dev
           sudo apt install -y libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev libwayland-dev libxkbcommon-dev
           sudo apt install -y libglew-dev libglm-dev
           sudo apt install -y libopenal-dev libfreetype-dev
-          # FFmpeg 5.1.7 libraries (matching your target system)
           sudo apt install -y libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev
 
-      - name: Check out our stim2 code for the current tag.
+      - name: Check out our stim2 code for the current tag
         uses: actions/checkout@v4
         with:
           submodules: true
 
-      - name: Install TCL 9 to the build environment.
+      - name: Install TCL 9 to the build environment
         run: |
           cd deps/tcl/unix/
           ./configure
           make
           sudo make install
 
-      - name: Install GLFW static lib into the build environment.
+      - name: Install GLFW static lib into the build environment
         run: |
           cd deps/glfw/
           cmake -B build-full-static -D GLFW_BUILD_WAYLAND=ON -D GLFW_BUILD_X11=ON
           cmake --build build-full-static --parallel
           sudo cmake --install build-full-static
 
-      - name: Install spine-c static lib into the build environment.
+      - name: Install spine-c static lib into the build environment
         run: |
           cd deps/spine-runtimes/spine-c/
           cmake -B build -D CMAKE_POSITION_INDEPENDENT_CODE=ON
@@ -68,7 +81,7 @@ jobs:
           sudo cp ./build/dist/include/*.h /usr/local/include/spine/
           sudo cp ./build/dist/lib/*.a /usr/local/lib
 
-      - name: Install box2d v3 static lib into the build environment.
+      - name: Install box2d v3 static lib into the build environment
         run: |
           cd deps/box2d
           mkdir build
@@ -76,38 +89,35 @@ jobs:
           cmake --build build --parallel
           sudo cmake --install build
 
-      # TODO: obtain dlsh from SheinbergLab, not benjamin-heasly
-      - name: Install our dg and dlsh libs and headers into the build environment.
+      - name: Install our dg and dlsh libs and headers into the build environment
         run: |
           DLSH_VERSION=0.0.48
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dg_${DLSH_VERSION}_$(dpkg --print-architecture).deb
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
-          sudo dpkg --install dlsh-dg_${DLSH_VERSION}_$(dpkg --print-architecture).deb
-          sudo dpkg --install dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dg_${DLSH_VERSION}_${{ matrix.arch }}.deb
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dlsh_${DLSH_VERSION}_${{ matrix.arch }}.deb
+          sudo dpkg --install dlsh-dg_${DLSH_VERSION}_${{ matrix.arch }}.deb
+          sudo dpkg --install dlsh-dlsh_${DLSH_VERSION}_${{ matrix.arch }}.deb
 
-      - name: Verify FFmpeg version matches target system
+      - name: Verify FFmpeg version
         run: |
-          echo "FFmpeg versions in build environment:"
+          echo "Building for ${{ matrix.distro }} (${{ matrix.arch }})"
+          echo "FFmpeg versions:"
           pkg-config --modversion libavformat
-          pkg-config --modversion libavcodec  
-          pkg-config --modversion libswscale
-          pkg-config --modversion libavutil
-          echo "Library files:"
-          ls -la /usr/lib/*/libavformat.so*
+          pkg-config --modversion libavcodec
 
-      - name: Build stim2 stimdlls, to include along with the stim2 executable.
+      - name: Build stim2 stimdlls
         run: |
           cd stimdlls/
           cmake -D PROJECT_VERSION=${{ github.ref_name }} -B build
           cmake --build build --parallel
 
-      - name: Build stim2 itself and package it for release.
+      - name: Build stim2 and package for release
         run: |
-          cmake -D PROJECT_VERSION=${{ github.ref_name }} -B build
+          cmake -D PROJECT_VERSION=${{ github.ref_name }} -D DISTRO_SUFFIX=${{ matrix.distro }} -B build
           cmake --build build --parallel
           cpack -G DEB --config build/CPackConfig.cmake
+          ls -la stim2*.deb
 
-      - name: Create a GitHub release for the current tag and package.
+      - name: Upload release artifacts
         uses: ncipollo/release-action@v1
         with:
           artifacts: ./stim2*.deb
@@ -121,30 +131,56 @@ jobs:
 
     strategy:
       matrix:
-        # Check on latest to confirm compatibility.
-        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        include:
+          # Test Bookworm packages on Debian 12
+          - runner: ubuntu-22.04
+            container: debian:12
+            distro: bookworm
+            arch: amd64
+          - runner: ubuntu-22.04-arm
+            container: debian:12
+            distro: bookworm
+            arch: arm64
+          # Test Trixie packages on Debian 13
+          - runner: ubuntu-22.04
+            container: debian:13
+            distro: trixie
+            arch: amd64
+          - runner: ubuntu-22.04-arm
+            container: debian:13
+            distro: trixie
+            arch: arm64
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
 
     steps:
 
-      - name: Check out our stim2 code for the current tag.
+      - name: Install runtime dependencies
+        run: |
+          apt update
+          apt install -y sudo wget ca-certificates
+          sudo apt install -y libavformat59 libavcodec59 libswscale6 libswresample4 || true
+          sudo apt install -y libavformat61 libavcodec61 libswscale8 libswresample5 || true
+          sudo apt install -y libglew2.2 libfreetype6 libopenal1
+
+      - name: Check out our stim2 code for the current tag
         uses: actions/checkout@v4
         with:
           submodules: true
 
-      - name: Install TCL 9 to the sanity check environment.
+      - name: Install TCL 9 to the check environment
         run: |
           cd deps/tcl/unix/
           ./configure
           make
           sudo make install
 
-      - name: Install the package we just released.
+      - name: Install the package we just released
         run: |
-          wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/stim2_${{ github.ref_name }}_$(dpkg --print-architecture).deb
-          sudo apt install --yes ./stim2_${{ github.ref_name }}_$(dpkg --print-architecture).deb
+          wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/stim2_${{ github.ref_name }}_${{ matrix.arch }}_${{ matrix.distro }}.deb
+          sudo apt install --yes ./stim2_${{ github.ref_name }}_${{ matrix.arch }}_${{ matrix.distro }}.deb
 
-      - name: Sanity check the installed package.
+      - name: Sanity check the installed package
         run: |
           /usr/local/stim2/stim2 --help

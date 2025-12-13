@@ -256,7 +256,27 @@ elseif(APPLE)
 else()
 
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
-    set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+    
+    # Allow distro suffix (e.g., bookworm, trixie) to be passed from CI
+    if(NOT DEFINED DISTRO_SUFFIX)
+        set(DISTRO_SUFFIX "")
+    endif()
+    
+    # Normalize architecture name to Debian conventions
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+        set(PACKAGE_ARCH "arm64")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
+        set(PACKAGE_ARCH "amd64")
+    else()
+        set(PACKAGE_ARCH ${CMAKE_SYSTEM_PROCESSOR})
+    endif()
+    
+    if(DISTRO_SUFFIX)
+        set(CPACK_DEBIAN_FILE_NAME "${PROJECT_NAME}_${PROJECT_VERSION}_${PACKAGE_ARCH}_${DISTRO_SUFFIX}.deb")
+    else()
+        set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+    endif()
+    
     set(CPACK_DEBIAN_PACKAGE_DEPENDS "zlib1g, libc6, libdecor-0-0, libegl1, libglx0, libopengl0, libwayland-client0, libwayland-cursor0, libwayland-egl1, libx11-6, libx11-xcb1, libxcursor1, libxext6, libxi6, libxinerama1, libxkbcommon0, libxrandr2, libxrender1, mesa-utils, libgl1-mesa-dri, libegl-mesa0, libopenal1, libfreetype6, mpv")
     set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA ${CMAKE_CURRENT_SOURCE_DIR}/dpkg/postinst)
 
