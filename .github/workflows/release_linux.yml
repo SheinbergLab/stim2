@@ -159,7 +159,7 @@ jobs:
       - name: Install runtime dependencies
         run: |
           apt update
-          apt install -y sudo wget ca-certificates git build-essential
+          apt install -y sudo wget ca-certificates git build-essential zlib1g-dev
           sudo apt install -y libavformat59 libavcodec59 libswscale6 libswresample4 || true
           sudo apt install -y libavformat61 libavcodec61 libswscale8 libswresample5 || true
           sudo apt install -y libglew2.2 libfreetype6 libopenal1
