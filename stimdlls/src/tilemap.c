@@ -120,7 +120,7 @@ typedef struct {
 
 typedef struct {
     char name[32];
-    char value[64];
+    char value[256];  /* larger for script callbacks */
     char type[16];  /* int, float, bool, string */
 } TMX_PROPERTY;
 
@@ -395,15 +395,16 @@ static void tilemap_update(GR_OBJ *obj) {
     
     /* Process collision callbacks */
     if (tm->collision_callback[0] != '\0') {
+        /* Process regular contact events */
         b2ContactEvents ev = b2World_GetContactEvents(tm->world_id);
         for (int i = 0; i < ev.beginCount; i++) {
             /* Find body names from shapes */
             b2BodyId bodyA = b2Shape_GetBody(ev.beginEvents[i].shapeIdA);
             b2BodyId bodyB = b2Shape_GetBody(ev.beginEvents[i].shapeIdB);
             
-            /* Find names by searching sprites and body table */
-            const char *nameA = "unknown";
-            const char *nameB = "unknown";
+            /* Find names by searching sprites first */
+            const char *nameA = NULL;
+            const char *nameB = NULL;
             
             for (int j = 0; j < tm->sprite_count; j++) {
                 if (tm->sprites[j].has_body) {
@@ -414,10 +415,67 @@ static void tilemap_update(GR_OBJ *obj) {
                 }
             }
             
+            /* Also search body_table for sensor bodies and tile bodies */
+            Tcl_HashEntry *e; Tcl_HashSearch s;
+            for (e = Tcl_FirstHashEntry(&tm->body_table, &s); e; e = Tcl_NextHashEntry(&s)) {
+                b2BodyId *body = Tcl_GetHashValue(e);
+                const char *bname = Tcl_GetHashKey(&tm->body_table, e);
+                if (body->index1 == bodyA.index1 && !nameA)
+                    nameA = bname;
+                if (body->index1 == bodyB.index1 && !nameB)
+                    nameB = bname;
+            }
+            
+            if (!nameA) nameA = "unknown";
+            if (!nameB) nameB = "unknown";
+            
             /* Call the Tcl callback: callback bodyA bodyB */
             char script[512];
             snprintf(script, sizeof(script), "%s {%s} {%s}",
                      tm->collision_callback, nameA, nameB);
+            Tcl_Eval(tm->interp, script);
+        }
+        
+        /* Process sensor events (Box2D v3 has separate sensor event system) */
+        b2SensorEvents sev = b2World_GetSensorEvents(tm->world_id);
+        
+        for (int i = 0; i < sev.beginCount; i++) {
+            b2ShapeId sensorShape = sev.beginEvents[i].sensorShapeId;
+            b2ShapeId visitorShape = sev.beginEvents[i].visitorShapeId;
+            
+            b2BodyId sensorBody = b2Shape_GetBody(sensorShape);
+            b2BodyId visitorBody = b2Shape_GetBody(visitorShape);
+            
+            /* Find names */
+            const char *sensorName = NULL;
+            const char *visitorName = NULL;
+            
+            /* Search sprites for visitor */
+            for (int j = 0; j < tm->sprite_count; j++) {
+                if (tm->sprites[j].has_body) {
+                    if (tm->sprites[j].body.index1 == visitorBody.index1)
+                        visitorName = tm->sprites[j].name;
+                }
+            }
+            
+            /* Search body_table for sensor name */
+            Tcl_HashEntry *e; Tcl_HashSearch s;
+            for (e = Tcl_FirstHashEntry(&tm->body_table, &s); e; e = Tcl_NextHashEntry(&s)) {
+                b2BodyId *body = Tcl_GetHashValue(e);
+                const char *bname = Tcl_GetHashKey(&tm->body_table, e);
+                if (body->index1 == sensorBody.index1)
+                    sensorName = bname;
+                if (body->index1 == visitorBody.index1 && !visitorName)
+                    visitorName = bname;
+            }
+            
+            if (!sensorName) sensorName = "unknown_sensor";
+            if (!visitorName) visitorName = "unknown_visitor";
+            
+            /* Call the Tcl callback: callback visitorName sensorName */
+            char script[512];
+            snprintf(script, sizeof(script), "%s {%s} {%s}",
+                     tm->collision_callback, visitorName, sensorName);
             Tcl_Eval(tm->interp, script);
         }
     }
@@ -635,18 +693,24 @@ static int tilemapLoadTMXCmd(ClientData cd, Tcl_Interp *interp, int argc, char *
             TMX_OBJECT *to = &tm->objects[tm->object_count++];
             const char *n = tmx_xml_object_get_string(obj, "name");
             const char *t = tmx_xml_object_get_string(obj, "type");
+            if (!t || strlen(t) == 0) {
+                t = tmx_xml_object_get_string(obj, "class");  /* Tiled 1.9+ uses "class" instead of "type" */
+            }
             strncpy(to->name, n ? n : "", 63);
             strncpy(to->type, t ? t : "", 63);
             float px = tmx_xml_object_get_float(obj, "x", 0);
             float py = tmx_xml_object_get_float(obj, "y", 0);
-            to->width = tmx_xml_object_get_float(obj, "width", 0);
-            to->height = tmx_xml_object_get_float(obj, "height", 0);
+            float ow = tmx_xml_object_get_float(obj, "width", 0);
+            float oh = tmx_xml_object_get_float(obj, "height", 0);
+            to->width = ow;
+            to->height = oh;
             to->x = px / ppm;
             to->y = (tm->map_height * tm->tile_pixel_height - py) / ppm;
             to->is_point = tmx_xml_object_is_point(obj);
             
             /* Parse custom properties */
             to->prop_count = 0;
+            int has_sensor_prop = 0;
             void *props = tmx_xml_first_properties(obj);
             if (props) {
                 for (void *prop = tmx_xml_first_property(props); 
@@ -657,9 +721,42 @@ static int tilemapLoadTMXCmd(ClientData cd, Tcl_Interp *interp, int argc, char *
                     const char *pv = tmx_xml_property_get_value(prop);
                     const char *pt = tmx_xml_property_get_type(prop);
                     strncpy(p->name, pn ? pn : "", 31);
-                    strncpy(p->value, pv ? pv : "", 63);
+                    strncpy(p->value, pv ? pv : "", 255);
                     strncpy(p->type, pt ? pt : "string", 15);
+                    if (pn && strcmp(pn, "sensor") == 0 && pv && strcmp(pv, "true") == 0) {
+                        has_sensor_prop = 1;
+                    }
                 }
+            }
+            
+            /* Auto-create sensor bodies for trigger/goal types or objects with sensor=true */
+            int is_trigger = (t && (strcmp(t, "trigger") == 0 || strcmp(t, "goal") == 0));
+            if ((is_trigger || has_sensor_prop) && ow > 0 && oh > 0 && n && strlen(n) > 0) {
+                /* Create invisible sensor body */
+                /* Note: to->x, to->y are already in world units from earlier conversion */
+                /* width/height are still in pixels, need to convert */
+                float hw = (ow / ppm) * 0.5f;
+                float hh = (oh / ppm) * 0.5f;
+                
+                b2BodyDef bd = b2DefaultBodyDef();
+                bd.type = b2_staticBody;
+                bd.position = (b2Vec2){to->x, to->y};
+                b2BodyId body = b2CreateBody(tm->world_id, &bd);
+                
+                b2Polygon box = b2MakeBox(hw, hh);
+                b2ShapeDef sd = b2DefaultShapeDef();
+                sd.isSensor = true;
+                sd.enableSensorEvents = true;  /* Box2D v3 requires this for sensor events */
+                sd.enableContactEvents = true; /* Try enabling both */
+                b2CreatePolygonShape(body, &sd, &box);
+                
+                /* Store body in table for auto-center offset and name lookup */
+                int newentry;
+                Tcl_HashEntry *e = Tcl_CreateHashEntry(&tm->body_table, to->name, &newentry);
+                b2BodyId *stored = malloc(sizeof(b2BodyId));
+                *stored = body;
+                Tcl_SetHashValue(e, stored);
+                tm->body_count++;
             }
         }
     }
@@ -756,7 +853,7 @@ static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, 
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 3) { 
         Tcl_AppendResult(interp, "usage: ", argv[0], 
-            " tm sprite ?type? ?-fixedrotation 0/1? ?-damping N? ?-friction N? ?-density N?", NULL); 
+            " tm sprite ?type? ?-fixedrotation 0/1? ?-damping N? ?-friction N? ?-density N? ?-restitution N? ?-sensor 0/1?", NULL); 
         return TCL_ERROR; 
     }
     int id, sid;
@@ -773,6 +870,8 @@ static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, 
     double damping = 5.0;        /* friction-like slowdown */
     double friction = 0.5;       /* surface friction */
     double density = 1.0;
+    double restitution = 0.0;    /* bounciness (0=none, 1=full) */
+    int is_sensor = 0;
     
     /* Parse arguments */
     int i = 3;
@@ -789,6 +888,10 @@ static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, 
             Tcl_GetDouble(interp, argv[i+1], &friction);
         } else if (strcmp(argv[i], "-density") == 0) {
             Tcl_GetDouble(interp, argv[i+1], &density);
+        } else if (strcmp(argv[i], "-restitution") == 0) {
+            Tcl_GetDouble(interp, argv[i+1], &restitution);
+        } else if (strcmp(argv[i], "-sensor") == 0) {
+            Tcl_GetInt(interp, argv[i+1], &is_sensor);
         }
     }
     
@@ -809,8 +912,12 @@ static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, 
     b2Polygon box = b2MakeBox(sp->w * 0.5f, sp->h * 0.5f);
     b2ShapeDef sd = b2DefaultShapeDef();
     sd.density = (float)density;
+    sd.isSensor = is_sensor ? true : false;
+    sd.enableContactEvents = !is_sensor;  /* regular contacts for non-sensors */
+    sd.enableSensorEvents = true;  /* all shapes can trigger/detect sensor events */
     b2ShapeId shape = b2CreatePolygonShape(sp->body, &sd, &box);
     b2Shape_SetFriction(shape, (float)friction);
+    b2Shape_SetRestitution(shape, (float)restitution);
     sp->has_body = 1;
     
     int newentry;
@@ -969,6 +1076,22 @@ static int tilemapSetOffsetCmd(ClientData cd, Tcl_Interp *interp, int argc, char
         }
     }
     tm->tiles_dirty = 1;
+    return TCL_OK;
+}
+
+/* tilemapSetSpriteVisible - show/hide a sprite */
+static int tilemapSetSpriteVisibleCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 4) { Tcl_AppendResult(interp, "usage: ", argv[0], " tm sprite visible(0/1)", NULL); return TCL_ERROR; }
+    int id, sid, visible;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) return TCL_ERROR;
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
+    if (sid < 0 || sid >= tm->sprite_count) return TCL_ERROR;
+    if (Tcl_GetInt(interp, argv[3], &visible) != TCL_OK) return TCL_ERROR;
+    
+    tm->sprites[sid].visible = visible;
     return TCL_OK;
 }
 
@@ -1239,6 +1362,7 @@ int Tilemap_Init(Tcl_Interp *interp)
     Tcl_CreateCommand(interp, "tilemapPlayAnimation", (Tcl_CmdProc*)tilemapPlayAnimationCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapSetCollisionCallback", (Tcl_CmdProc*)tilemapSetCollisionCallbackCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapSetAutoCenter", (Tcl_CmdProc*)tilemapSetAutoCenterCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapSetSpriteVisible", (Tcl_CmdProc*)tilemapSetSpriteVisibleCmd, (ClientData)OBJList, NULL);
     
     return TCL_OK;
 }
