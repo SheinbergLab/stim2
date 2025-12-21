@@ -201,6 +201,7 @@ proc reset_puzzle {} {
 }
 
 proc start_puzzle {} {
+    set ::goal_reached 0
     glistInit 1
     resetObjList
     load_puzzle
