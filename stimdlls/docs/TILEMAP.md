@@ -9,6 +9,7 @@ The tilemap module combines:
 - **Batched tile rendering** - Efficient single-draw-call rendering of static tiles
 - **Sprite system** - Dynamic entities with position, rotation, and animation
 - **Box2D physics** - Collision detection, rigid body dynamics, forces/impulses
+- **Sensors** - Invisible trigger zones for goals, checkpoints, etc.
 - **Tcl integration** - Full scripting control for experimental paradigms
 
 ## Quick Start
@@ -36,10 +37,28 @@ foreach obj [tilemapGetObjects $tm "spawn"] {
     tilemapSpriteAddBody $tm $player dynamic
 }
 
+# Set up collision callback for goals/triggers
+proc on_collision {bodyA bodyB} {
+    if {$bodyA eq "goal" || $bodyB eq "goal"} {
+        puts "Goal reached!"
+    }
+}
+tilemapSetCollisionCallback $tm on_collision
+
 # Add to display
 glistAddObject $tm 0
 glistSetDynamic 0 1
 ```
+
+## Concepts: Bodies vs Sprites
+
+**Body (Physics)** - Lives in Box2D, has mass/velocity/collision shape, identified by name in callbacks
+**Sprite (Visual)** - Rendered to screen, has texture/tile, can be shown/hidden
+
+Three scenarios:
+1. **Sprite + Body**: Player, pushable blocks (physics moves the visual)
+2. **Body only**: Invisible sensors for triggers/goals
+3. **Sprite only**: Decorations, visual feedback markers
 
 ## TMX File Structure
 
@@ -58,6 +77,7 @@ Objects define spawn points, goals, triggers, and dynamic entities:
     <point/>
   </object>
   <object name="goal" type="goal" x="416" y="160" width="32" height="32"/>
+  <object name="checkpoint" type="trigger" x="256" y="160" width="32" height="32"/>
   <object name="pushable" type="pushable" x="224" y="128" width="32" height="32">
     <properties>
       <property name="tile_id" type="int" value="3"/>
@@ -67,12 +87,16 @@ Objects define spawn points, goals, triggers, and dynamic entities:
 </objectgroup>
 ```
 
+### Automatic Sensor Creation
+Objects with `type="goal"` or `type="trigger"` automatically become invisible sensor bodies. They detect collisions but don't block movement. You can also add a custom property `sensor=true` to any object.
+
 ### Custom Properties
 Objects can have custom properties (set in Tiled's Properties panel):
 - `tile_id` (int) - Which tile to use for the sprite
 - `density` (float) - Physics body density
 - `friction` (float) - Surface friction
 - `damping` (float) - Linear damping (slowdown)
+- `sensor` (bool) - Make this object a sensor trigger
 
 These are accessible via `tilemapGetObjects` and can drive sprite creation.
 
@@ -105,6 +129,8 @@ tilemapLoadTMX $tm "file.tmx" ?-pixels_per_meter N? ?-collision_layer NAME?
 
 Returns: dict with `tiles`, `bodies`, `objects`, `atlases` counts
 
+Note: Objects with `type="goal"` or `type="trigger"` automatically create sensor bodies.
+
 #### tilemapSetGravity
 Set world gravity.
 ```tcl
@@ -135,11 +161,11 @@ set info [tilemapGetMapInfo $tm]
 ### Sprites
 
 #### tilemapCreateSprite
-Create a dynamic sprite.
+Create a sprite (visual entity).
 ```tcl
 set sprite [tilemapCreateSprite $tm name tile_id x y width height ?atlas_id?]
 ```
-- `name` - Unique identifier (used in collision callbacks)
+- `name` - Unique identifier (used in collision callbacks if body added)
 - `tile_id` - Tile index in the atlas
 - `x y` - World position
 - `width height` - Size in world units
@@ -159,14 +185,22 @@ Options:
 - `-damping N` - Linear damping (default: 5.0)
 - `-friction N` - Surface friction (default: 0.5)
 - `-density N` - Body density (default: 1.0)
+- `-restitution N` - Bounciness, 0=none, 1=full bounce (default: 0.0)
+- `-sensor 0|1` - Make this a sensor/trigger (default: 0)
 
-Example:
+Examples:
 ```tcl
 # Heavy pushable block
 tilemapSpriteAddBody $tm $block dynamic -density 3.0 -damping 8.0
 
 # Light nimble player
 tilemapSpriteAddBody $tm $player dynamic -density 0.5 -damping 3.0
+
+# Bouncy ball
+tilemapSpriteAddBody $tm $ball dynamic -restitution 0.8 -damping 0.1
+
+# Visible sensor (detects collision but doesn't block)
+tilemapSpriteAddBody $tm $trigger static -sensor 1
 ```
 
 #### tilemapSetSpritePosition
@@ -180,6 +214,13 @@ Change which tile the sprite displays.
 ```tcl
 tilemapSetSpriteTile $tm sprite_id tile_id
 ```
+
+#### tilemapSetSpriteVisible
+Show or hide a sprite.
+```tcl
+tilemapSetSpriteVisible $tm sprite_id 0|1
+```
+Useful for hiding collected coins, showing goal feedback, etc.
 
 #### tilemapGetSpriteInfo
 Get sprite state for debugging.
@@ -264,6 +305,8 @@ proc on_collision {bodyA bodyB} {
 }
 tilemapSetCollisionCallback $tm on_collision
 ```
+
+The callback fires on **begin** contact (when bodies first touch). Both regular bodies and sensors trigger callbacks.
 
 ## Physics Modes
 
@@ -362,6 +405,32 @@ Dependencies:
 ### Tile Atlas
 Create a PNG with tiles arranged in a grid. Reference it in Tiled as a tileset. Tile index 0 is typically empty/transparent.
 
+### Sensors in Tiled
+1. Create a rectangle object in an object layer
+2. Set Type to `goal` or `trigger` (or add property `sensor=true`)
+3. Give it a unique Name (used in collision callbacks)
+4. The sensor body is created automatically on load
+
+### Visual Feedback for Sensors
+Sensors are invisible by default. To show feedback:
+```tcl
+# Create visible marker at goal position
+foreach obj [tilemapGetObjects $tm "goal"] {
+    set gx [dict get $obj x]
+    set gy [dict get $obj y]
+    set goal_marker [tilemapCreateSprite $tm "goal_visual" 5 $gx $gy 1.0 1.0]
+}
+
+# Hide when reached
+proc on_collision {a b} {
+    global tm goal_marker
+    if {$a eq "goal" || $b eq "goal"} {
+        tilemapSetSpriteVisible $tm $goal_marker 0
+        puts "Goal reached!"
+    }
+}
+```
+
 ### Procedural Levels
 TMX files are XML - generate them programmatically:
 ```tcl
@@ -384,7 +453,7 @@ Commercial sprite sheets (e.g., from gameart2d.com) work well. Import into Tiled
 
 ## Example: Two-Room Puzzle
 
-A complete example with pushable blocks:
+A complete example with pushable blocks and goal detection:
 
 ```tcl
 # Load module and create tilemap
@@ -392,11 +461,12 @@ load tilemap
 set tm [tilemapCreate]
 tilemapSetGravity $tm 0 0
 
-# Load level
+# Load level (goals/triggers auto-create sensors)
 tilemapLoadTMX $tm "two_rooms.tmx" -pixels_per_meter 32
 
 # Create sprites from objects
 foreach obj [tilemapGetObjects $tm] {
+    set name [dict get $obj name]
     set type [dict get $obj type]
     set x [dict get $obj x]
     set y [dict get $obj y]
@@ -407,13 +477,18 @@ foreach obj [tilemapGetObjects $tm] {
     } elseif {$type eq "pushable"} {
         set block [tilemapCreateSprite $tm "pushable" 3 $x $y 1.0 1.0]
         tilemapSpriteAddBody $tm $block dynamic -density 2.0
+    } elseif {$type eq "goal"} {
+        # Add visible marker for the goal (sensor already created)
+        set goal_marker [tilemapCreateSprite $tm "goal_visual" 5 $x $y 1.0 1.0]
     }
 }
 
 # Collision callback
 proc on_collision {a b} {
-    if {($a eq "player" && $b eq "goal") || ($a eq "goal" && $b eq "player")} {
+    global tm goal_marker
+    if {$a eq "goal" || $b eq "goal"} {
         puts "*** GOAL REACHED! ***"
+        tilemapSetSpriteVisible $tm $goal_marker 0
     }
 }
 tilemapSetCollisionCallback $tm on_collision
@@ -423,7 +498,38 @@ glistAddObject $tm 0
 glistSetDynamic 0 1
 ```
 
+## Command Summary
+
+| Command | Description |
+|---------|-------------|
+| `tilemapCreate` | Create tilemap object |
+| `tilemapLoadTMX` | Load TMX file |
+| `tilemapSetGravity` | Set world gravity |
+| `tilemapSetAutoCenter` | Enable/disable auto-centering |
+| `tilemapSetOffset` | Offset all entities |
+| `tilemapGetMapInfo` | Get map dimensions |
+| `tilemapCreateSprite` | Create visual sprite |
+| `tilemapSpriteAddBody` | Add physics body to sprite |
+| `tilemapSetSpritePosition` | Teleport sprite |
+| `tilemapSetSpriteTile` | Change sprite tile |
+| `tilemapSetSpriteVisible` | Show/hide sprite |
+| `tilemapGetSpriteInfo` | Get sprite state |
+| `tilemapApplyImpulse` | Apply instant impulse |
+| `tilemapSetLinearVelocity` | Set velocity |
+| `tilemapApplyForce` | Apply force |
+| `tilemapSetSpriteAnimation` | Configure animation |
+| `tilemapPlayAnimation` | Start/stop animation |
+| `tilemapGetObjects` | Get TMX objects |
+| `tilemapGetContacts` | Get collision events |
+| `tilemapSetCollisionCallback` | Register collision handler |
+
 ## Version History
+
+- **1.1** - Sensors and visibility
+  - Auto-create sensor bodies from `type="goal"` or `type="trigger"` objects
+  - `-sensor` option for `tilemapSpriteAddBody`
+  - `tilemapSetSpriteVisible` command
+  - Improved collision callback name resolution
 
 - **1.0** - Initial release
   - TMX loading with tinyxml2 wrapper
