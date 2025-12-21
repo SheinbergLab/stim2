@@ -2615,7 +2615,7 @@ void key_callback(GLFWwindow *window, int key,
       if (!Tcl_FindCommand(OurInterp, procname, NULL, 0)) return;
       break;
     default:
-      if (!Tcl_FindCommand(OurInterp, "onKeyProess", NULL, 0)) return;
+      if (!Tcl_FindCommand(OurInterp, "onKeyPress", NULL, 0)) return;
       snprintf(procname, 63, "onKeyPress %d", key);  break;
     }
     if (procname[0]) {
