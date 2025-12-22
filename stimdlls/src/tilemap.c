@@ -1213,6 +1213,21 @@ static int tilemapGetSpriteByNameCmd(ClientData cd, Tcl_Interp *interp, int argc
     return TCL_ERROR;
 }
 
+static int tilemapGetSpriteCountCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " tm", NULL);
+        return TCL_ERROR;
+    }
+    int id;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) return TCL_ERROR;
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(tm->sprite_count));
+    return TCL_OK;
+}
+
 /* tilemapGetSpriteInfo - get sprite position, angle, etc. for debugging */
 static int tilemapGetSpriteInfoCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
@@ -1922,6 +1937,7 @@ int Tilemap_Init(Tcl_Interp *interp)
     Tcl_CreateCommand(interp, "tilemapSetSpriteTile", (Tcl_CmdProc*)tilemapSetSpriteTileCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapGetObjects", (Tcl_CmdProc*)tilemapGetObjectsCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapGetContacts", (Tcl_CmdProc*)tilemapGetContactsCmd, (ClientData)OBJList, NULL);
+        Tcl_CreateCommand(interp, "tilemapGetSpriteCount", (Tcl_CmdProc*)tilemapGetSpriteCountCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapGetSpriteInfo", (Tcl_CmdProc*)tilemapGetSpriteInfoCmd, (ClientData)OBJList, NULL);
         Tcl_CreateCommand(interp, "tilemapGetSpriteByName", (Tcl_CmdProc*)tilemapGetSpriteByNameCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapSetOffset", (Tcl_CmdProc*)tilemapSetOffsetCmd, (ClientData)OBJList, NULL);
