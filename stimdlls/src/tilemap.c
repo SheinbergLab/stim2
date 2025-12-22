@@ -781,53 +781,78 @@ static int tilemapLoadTMXCmd(ClientData cd, Tcl_Interp *interp, int argc, char *
         }
     }
     
-    /* Process tile layers */
-    for (void *layer = tmx_xml_first_layer(map); layer; layer = tmx_xml_next_layer(layer)) {
-        const char *name = tmx_xml_layer_get_name(layer);
-        int is_collision = (name && strcmp(name, collision_layer) == 0);
-        int lw = tmx_xml_layer_get_int(layer, "width");
-        int lh = tmx_xml_layer_get_int(layer, "height");
-        void *data = tmx_xml_layer_get_data(layer);
-        if (!data) continue;
-        const char *enc = tmx_xml_data_get_encoding(data);
-        if (!enc || strcmp(enc, "csv") != 0) continue;
-        
-        int *tiles = parse_csv(tmx_xml_data_get_text(data), lw, lh);
-        if (!tiles) continue;
-        
-        for (int ty = 0; ty < lh; ty++) {
-            for (int tx = 0; tx < lw; tx++) {
-                int gid = tiles[ty * lw + tx];
-                if (gid == 0 || tm->tile_count >= MAX_TILES) continue;
-                ATLAS *atlas = find_atlas_for_gid(tm, gid);
-                if (!atlas) continue;
+/* Process tile layers */
+for (void *layer = tmx_xml_first_layer(map); layer; layer = tmx_xml_next_layer(layer)) {
+    const char *name = tmx_xml_layer_get_name(layer);
+    int is_collision = (name && strcmp(name, collision_layer) == 0);
+    int lw = tmx_xml_layer_get_int(layer, "width");
+    int lh = tmx_xml_layer_get_int(layer, "height");
+    void *data = tmx_xml_layer_get_data(layer);
+    if (!data) continue;
+    const char *enc = tmx_xml_data_get_encoding(data);
+    if (!enc || strcmp(enc, "csv") != 0) continue;
+    
+    int *tiles = parse_csv(tmx_xml_data_get_text(data), lw, lh);
+    if (!tiles) continue;
+    
+    for (int ty = 0; ty < lh; ty++) {
+        for (int tx = 0; tx < lw; tx++) {
+            int gid = tiles[ty * lw + tx];
+            if (gid == 0 || tm->tile_count >= MAX_TILES) continue;
+            ATLAS *atlas = find_atlas_for_gid(tm, gid);
+            if (!atlas) continue;
+            
+            /* ALWAYS create visual tile */
+            TILE_INSTANCE *t = &tm->tiles[tm->tile_count++];
+            float px = (tx + 0.5f) * tm->tile_pixel_width;
+            float py = (ty + 0.5f) * tm->tile_pixel_height;
+            t->x = px / ppm;
+            t->y = (tm->map_height * tm->tile_pixel_height - py) / ppm;
+            t->w = t->h = tm->tile_size;
+            t->atlas_id = (int)(atlas - tm->atlases);
+            get_tile_uvs(atlas, gid, &t->u0, &t->v0, &t->u1, &t->v1);
+            t->has_body = 0;
+            
+            /* Create collision bodies - only for first tile in each run */
+            if (is_collision) {
+                /* Check if this is the start of a new run */
+                int is_run_start = (tx == 0 || tiles[ty * lw + tx - 1] == 0);
                 
-                TILE_INSTANCE *t = &tm->tiles[tm->tile_count++];
-                float px = (tx + 0.5f) * tm->tile_pixel_width;
-                float py = (ty + 0.5f) * tm->tile_pixel_height;
-                t->x = px / ppm;
-                t->y = (tm->map_height * tm->tile_pixel_height - py) / ppm;
-                t->w = t->h = tm->tile_size;
-                t->atlas_id = (int)(atlas - tm->atlases);
-                get_tile_uvs(atlas, gid, &t->u0, &t->v0, &t->u1, &t->v1);
-                
-                if (is_collision) {
+                if (is_run_start) {
+                    /* Find run length */
+                    int run_length = 1;
+                    while (tx + run_length < lw && 
+                           tiles[ty * lw + tx + run_length] != 0) {
+                        run_length++;
+                    }
+                    
+                    /* Create merged body for the run */
                     snprintf(t->name, sizeof(t->name), "tile_%d_%d", tx, ty);
+                    
+                    float run_width = run_length * tm->tile_size;
+// First tile starts at tx, last tile is at tx + run_length - 1
+// Center is at tx + (run_length - 1) / 2.0
+float center_tile_x = tx + (run_length - 1) * 0.5f;
+float center_px = (center_tile_x + 0.5f) * tm->tile_pixel_width;
+float center_x = center_px / ppm;
+float center_y = t->y;
+                    
                     b2BodyDef bd = b2DefaultBodyDef();
                     bd.type = b2_staticBody;
-                    bd.position = (b2Vec2){t->x, t->y};
+                    bd.position = (b2Vec2){center_x, center_y};
                     b2BodyId body = b2CreateBody(tm->world_id, &bd);
-                    b2Polygon box = b2MakeBox(t->w * 0.5f, t->h * 0.5f);
+                    
+                    b2Polygon box = b2MakeBox(run_width * 0.5f, tm->tile_size * 0.5f);
                     b2ShapeDef sd = b2DefaultShapeDef();
                     sd.density = 1.0f;
-                    sd.userData = (void *) t->name;
+                    sd.userData = (void *)t->name;
                     b2ShapeId shape = b2CreatePolygonShape(body, &sd, &box);
                     b2Shape_SetFriction(shape, 0.3f);
                     t->has_body = 1;
                     
                     int newentry;
                     Tcl_HashEntry *e = Tcl_CreateHashEntry(&tm->body_table, 
-                    							t->name, &newentry);
+                                                            t->name, &newentry);
                     b2BodyId *stored = malloc(sizeof(b2BodyId));
                     *stored = body;
                     Tcl_SetHashValue(e, stored);
@@ -835,9 +860,9 @@ static int tilemapLoadTMXCmd(ClientData cd, Tcl_Interp *interp, int argc, char *
                 }
             }
         }
-        free(tiles);
     }
-    
+    free(tiles);  // <-- YES, still need this! Free the parsed CSV data
+}
     /* Process object layers */
     for (void *og = tmx_xml_first_objectgroup(map); og; og = tmx_xml_next_objectgroup(og)) {
         for (void *obj = tmx_xml_first_object(og); obj; obj = tmx_xml_next_object(obj)) {
