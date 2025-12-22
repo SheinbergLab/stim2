@@ -19,7 +19,7 @@
  *   glistAddObject $tm 0
  *   glistSetDynamic 0 1
  *
- * Author: DLS 2024
+ * Author: DLS 2025
  */
 
 #ifdef WIN32
@@ -95,6 +95,7 @@ const char* tmx_xml_property_get_type(void* prop);
 #define MAX_PATH_LEN 512
 
 typedef struct {
+	char name[64];
     float x, y, w, h;
     float u0, v0, u1, v1;
     int layer, atlas_id, has_body;
@@ -139,6 +140,35 @@ typedef struct {
     float tile_u, tile_v;
 } ATLAS;
 
+typedef enum {
+    CAM_LOCKED,           /* Camera doesn't move */
+    CAM_FIXED_SCROLL,     /* Camera moves at constant velocity (for auto-scrollers) */
+    CAM_FOLLOW,           /* Camera follows sprite directly (centered) */
+    CAM_FOLLOW_DEADZONE,  /* Camera follows when sprite exits deadzone */
+    CAM_FOLLOW_LOOKAHEAD  /* Camera leads in direction of movement */
+} CameraMode;
+
+typedef struct {
+    float x, y;                  /* current camera center in world coords */
+    float target_x, target_y;    /* where camera wants to be */
+    float smooth_speed;          /* interpolation rate (0=instant, higher=smoother) */
+    
+    CameraMode mode;
+    
+    /* Fixed scroll params */
+    float scroll_vx, scroll_vy;  /* constant velocity (world units/sec) */
+    
+    /* Follow params */
+    int follow_sprite;           /* sprite index to track, -1 if none */
+    float deadzone_w, deadzone_h;/* agent can move this far before camera follows */
+    float lookahead_x, lookahead_y; /* how far ahead to look in movement direction */
+    
+    /* Bounds (optional) - camera center won't go beyond these */
+    float min_x, max_x;
+    float min_y, max_y;
+    int use_bounds;
+} CAMERA;
+
 typedef struct {
     TILE_INSTANCE tiles[MAX_TILES];
     int tile_count;
@@ -150,6 +180,7 @@ typedef struct {
     int object_count;
     ATLAS atlases[MAX_ATLASES];
     int atlas_count;
+    CAMERA camera;              /* camera system */
     GLuint shader_program, vao, vbo, sprite_vao, sprite_vbo;
     GLint u_texture, u_modelview, u_projection;
     b2WorldId world_id;
@@ -308,6 +339,106 @@ static void build_sprite_verts(SPRITE *sp, float *v) {
     v[vi++]=r[3][0]; v[vi++]=r[3][1]; v[vi++]=sp->u0; v[vi++]=sp->v0;
 }
 
+static void camera_init(CAMERA *cam) {
+    cam->x = 0;
+    cam->y = 0;
+    cam->target_x = 0;
+    cam->target_y = 0;
+    cam->smooth_speed = 0;  /* instant by default */
+    cam->mode = CAM_LOCKED;
+    cam->scroll_vx = 0;
+    cam->scroll_vy = 0;
+    cam->follow_sprite = -1;
+    cam->deadzone_w = 2.0f;
+    cam->deadzone_h = 1.5f;
+    cam->lookahead_x = 2.0f;
+    cam->lookahead_y = 1.0f;
+    cam->min_x = 0;
+    cam->max_x = 0;
+    cam->min_y = 0;
+    cam->max_y = 0;
+    cam->use_bounds = 0;
+}
+
+static void camera_update(TILEMAP *tm, float dt) {
+    CAMERA *cam = &tm->camera;
+    
+    switch (cam->mode) {
+        case CAM_LOCKED:
+            /* target stays where it is */
+            break;
+            
+        case CAM_FIXED_SCROLL:
+            cam->target_x += cam->scroll_vx * dt;
+            cam->target_y += cam->scroll_vy * dt;
+            break;
+            
+        case CAM_FOLLOW:
+            if (cam->follow_sprite >= 0 && cam->follow_sprite < tm->sprite_count) {
+                SPRITE *sp = &tm->sprites[cam->follow_sprite];
+                cam->target_x = sp->x;
+                cam->target_y = sp->y;
+            }
+            break;
+            
+        case CAM_FOLLOW_DEADZONE:
+            if (cam->follow_sprite >= 0 && cam->follow_sprite < tm->sprite_count) {
+                SPRITE *sp = &tm->sprites[cam->follow_sprite];
+                /* Only update target if sprite outside deadzone */
+                float dx = sp->x - cam->target_x;
+                float dy = sp->y - cam->target_y;
+                float hw = cam->deadzone_w * 0.5f;
+                float hh = cam->deadzone_h * 0.5f;
+                if (dx > hw)
+                    cam->target_x = sp->x - hw;
+                else if (dx < -hw)
+                    cam->target_x = sp->x + hw;
+                if (dy > hh)
+                    cam->target_y = sp->y - hh;
+                else if (dy < -hh)
+                    cam->target_y = sp->y + hh;
+            }
+            break;
+            
+        case CAM_FOLLOW_LOOKAHEAD:
+            if (cam->follow_sprite >= 0 && cam->follow_sprite < tm->sprite_count) {
+                SPRITE *sp = &tm->sprites[cam->follow_sprite];
+                /* Get velocity direction for lookahead */
+                float look_offset_x = 0, look_offset_y = 0;
+                if (sp->has_body && b2Body_IsValid(sp->body)) {
+                    b2Vec2 vel = b2Body_GetLinearVelocity(sp->body);
+                    /* Gradual lookahead based on velocity magnitude */
+                    if (vel.x > 0.5f) look_offset_x = cam->lookahead_x;
+                    else if (vel.x < -0.5f) look_offset_x = -cam->lookahead_x;
+                    if (vel.y > 0.5f) look_offset_y = cam->lookahead_y;
+                    else if (vel.y < -0.5f) look_offset_y = -cam->lookahead_y;
+                }
+                cam->target_x = sp->x + look_offset_x;
+                cam->target_y = sp->y + look_offset_y;
+            }
+            break;
+    }
+    
+    /* Clamp to bounds */
+    if (cam->use_bounds) {
+        if (cam->target_x < cam->min_x) cam->target_x = cam->min_x;
+        if (cam->target_x > cam->max_x) cam->target_x = cam->max_x;
+        if (cam->target_y < cam->min_y) cam->target_y = cam->min_y;
+        if (cam->target_y > cam->max_y) cam->target_y = cam->max_y;
+    }
+    
+    /* Smooth interpolation toward target */
+    if (cam->smooth_speed <= 0) {
+        cam->x = cam->target_x;
+        cam->y = cam->target_y;
+    } else {
+        /* Exponential smoothing - feels natural */
+        float t = 1.0f - expf(-cam->smooth_speed * dt);
+        cam->x += (cam->target_x - cam->x) * t;
+        cam->y += (cam->target_y - cam->y) * t;
+    }
+}
+
 static void tilemap_draw(GR_OBJ *obj) {
     TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(obj);
     if (tm->tile_count == 0 && tm->sprite_count == 0) return;
@@ -319,6 +450,11 @@ static void tilemap_draw(GR_OBJ *obj) {
     glUseProgram(tm->shader_program);
     stimGetMatrix(STIM_MODELVIEW_MATRIX, mv);
     stimGetMatrix(STIM_PROJECTION_MATRIX, pr);
+    
+    /* Apply camera offset to modelview matrix */
+    mv[12] -= tm->camera.x;
+    mv[13] -= tm->camera.y;
+    
     glUniformMatrix4fv(tm->u_modelview, 1, GL_FALSE, mv);
     glUniformMatrix4fv(tm->u_projection, 1, GL_FALSE, pr);
     
@@ -335,17 +471,48 @@ static void tilemap_draw(GR_OBJ *obj) {
         glBindVertexArray(tm->sprite_vao);
         for (int i = 0; i < tm->sprite_count; i++) {
             SPRITE *sp = &tm->sprites[i];
-            if (!sp->visible) continue;
+            // NOTE: originally we just continue'd here if not visible
+            //       but this actually slowed down our render loop so we
+            //       do the next binds and then just skip the DrawArrays call
+            //if (!sp->visible) continue;
             if (sp->atlas_id >= 0 && sp->atlas_id < tm->atlas_count)
                 glBindTexture(GL_TEXTURE_2D, tm->atlases[sp->atlas_id].texture);
             build_sprite_verts(sp, sv);
             glBindBuffer(GL_ARRAY_BUFFER, tm->sprite_vbo);
             glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(sv), sv);
-            glDrawArrays(GL_TRIANGLES, 0, 6);
+            if (sp->visible) glDrawArrays(GL_TRIANGLES, 0, 6);
         }
     }
     glBindVertexArray(0);
     glUseProgram(0);
+}
+
+static const char* find_name_from_body(TILEMAP *tm, b2BodyId bodyId) {
+    if (bodyId.index1 == 0) return "invalid"; // index1 is 1-based in Box2D v3
+
+    /* 1. Check Sprites (The Player, NPCs, etc) */
+    for (int i = 0; i < tm->sprite_count; i++) {
+        if (tm->sprites[i].has_body) {
+            b2BodyId spriteBody = tm->sprites[i].body;
+            if (spriteBody.index1 == bodyId.index1 && 
+                spriteBody.generation == bodyId.generation) {
+                return tm->sprites[i].name;
+            }
+        }
+    }
+
+    /* 2. Check Static Tile/Object Table */
+    Tcl_HashEntry *e;
+    Tcl_HashSearch s;
+    for (e = Tcl_FirstHashEntry(&tm->body_table, &s); e; e = Tcl_NextHashEntry(&s)) {
+        b2BodyId *stored = (b2BodyId *)Tcl_GetHashValue(e);
+        if (stored->index1 == bodyId.index1 && 
+            stored->generation == bodyId.generation) {
+            return Tcl_GetHashKey(&tm->body_table, e);
+        }
+    }
+
+    return "unknown";
 }
 
 static void tilemap_update(GR_OBJ *obj) {
@@ -353,12 +520,15 @@ static void tilemap_update(GR_OBJ *obj) {
     if (!tm->has_world) return;
     float dt = getFrameDuration() / 1000.0f;
     if (dt > 0.1f) dt = 0.016f;
-    
+
+    /* Update camera */
+    camera_update(tm, dt);
+
     b2World_Step(tm->world_id, dt, tm->substep_count);
     
     /* Update sprites from physics and handle animation */
     for (int i = 0; i < tm->sprite_count; i++) {
-        SPRITE *sp = &tm->sprites[i];
+        SPRITE *sp = &tm->sprites[i];  
         
         /* Update position from physics body */
         if (sp->has_body && b2Body_IsValid(sp->body)) {
@@ -395,88 +565,44 @@ static void tilemap_update(GR_OBJ *obj) {
     
     /* Process collision callbacks */
     if (tm->collision_callback[0] != '\0') {
-        /* Process regular contact events */
+        
+        // --- 1. Process Regular Contact Events ---
         b2ContactEvents ev = b2World_GetContactEvents(tm->world_id);
         for (int i = 0; i < ev.beginCount; i++) {
-            /* Find body names from shapes */
-            b2BodyId bodyA = b2Shape_GetBody(ev.beginEvents[i].shapeIdA);
-            b2BodyId bodyB = b2Shape_GetBody(ev.beginEvents[i].shapeIdB);
+            // Box2D v3.1: Get names directly from Shape UserData
+            const char *nameA = (const char*)b2Shape_GetUserData(ev.beginEvents[i].shapeIdA);
+            const char *nameB = (const char*)b2Shape_GetUserData(ev.beginEvents[i].shapeIdB);
             
-            /* Find names by searching sprites first */
-            const char *nameA = NULL;
-            const char *nameB = NULL;
+            // Fallback to searching if UserData wasn't set (e.g., dynamic bodies without names)
+            if (!nameA) nameA = find_name_from_body(tm, b2Shape_GetBody(ev.beginEvents[i].shapeIdA));
+            if (!nameB) nameB = find_name_from_body(tm, b2Shape_GetBody(ev.beginEvents[i].shapeIdB));
             
-            for (int j = 0; j < tm->sprite_count; j++) {
-                if (tm->sprites[j].has_body) {
-                    if (tm->sprites[j].body.index1 == bodyA.index1)
-                        nameA = tm->sprites[j].name;
-                    if (tm->sprites[j].body.index1 == bodyB.index1)
-                        nameB = tm->sprites[j].name;
-                }
-            }
-            
-            /* Also search body_table for sensor bodies and tile bodies */
-            Tcl_HashEntry *e; Tcl_HashSearch s;
-            for (e = Tcl_FirstHashEntry(&tm->body_table, &s); e; e = Tcl_NextHashEntry(&s)) {
-                b2BodyId *body = Tcl_GetHashValue(e);
-                const char *bname = Tcl_GetHashKey(&tm->body_table, e);
-                if (body->index1 == bodyA.index1 && !nameA)
-                    nameA = bname;
-                if (body->index1 == bodyB.index1 && !nameB)
-                    nameB = bname;
-            }
-            
-            if (!nameA) nameA = "unknown";
-            if (!nameB) nameB = "unknown";
-            
-            /* Call the Tcl callback: callback bodyA bodyB */
             char script[512];
             snprintf(script, sizeof(script), "%s {%s} {%s}",
                      tm->collision_callback, nameA, nameB);
             Tcl_Eval(tm->interp, script);
         }
         
-        /* Process sensor events (Box2D v3 has separate sensor event system) */
+        // --- 2. Process Sensor Events (Triggers/Goals) ---
         b2SensorEvents sev = b2World_GetSensorEvents(tm->world_id);
-        
         for (int i = 0; i < sev.beginCount; i++) {
-            b2ShapeId sensorShape = sev.beginEvents[i].sensorShapeId;
-            b2ShapeId visitorShape = sev.beginEvents[i].visitorShapeId;
+            // The sensorShapeId is the 'goal'/'trigger' object
+            // The visitorShapeId is usually the player or an NPC
+            const char *sensorName = (const char*)b2Shape_GetUserData(sev.beginEvents[i].sensorShapeId);
+            const char *visitorName = (const char*)b2Shape_GetUserData(sev.beginEvents[i].visitorShapeId);
             
-            b2BodyId sensorBody = b2Shape_GetBody(sensorShape);
-            b2BodyId visitorBody = b2Shape_GetBody(visitorShape);
-            
-            /* Find names */
-            const char *sensorName = NULL;
-            const char *visitorName = NULL;
-            
-            /* Search sprites for visitor */
-            for (int j = 0; j < tm->sprite_count; j++) {
-                if (tm->sprites[j].has_body) {
-                    if (tm->sprites[j].body.index1 == visitorBody.index1)
-                        visitorName = tm->sprites[j].name;
-                }
+            // If visitor is NULL (common if the player is a sprite with a generic name), find it
+            if (!visitorName) {
+                visitorName = find_name_from_body(tm, b2Shape_GetBody(sev.beginEvents[i].visitorShapeId));
             }
             
-            /* Search body_table for sensor name */
-            Tcl_HashEntry *e; Tcl_HashSearch s;
-            for (e = Tcl_FirstHashEntry(&tm->body_table, &s); e; e = Tcl_NextHashEntry(&s)) {
-                b2BodyId *body = Tcl_GetHashValue(e);
-                const char *bname = Tcl_GetHashKey(&tm->body_table, e);
-                if (body->index1 == sensorBody.index1)
-                    sensorName = bname;
-                if (body->index1 == visitorBody.index1 && !visitorName)
-                    visitorName = bname;
+            // Ensure we have valid names before calling Tcl
+            if (sensorName && visitorName) {
+                char script[512];
+                snprintf(script, sizeof(script), "%s {%s} {%s}",
+                         tm->collision_callback, visitorName, sensorName);
+                Tcl_Eval(tm->interp, script);
             }
-            
-            if (!sensorName) sensorName = "unknown_sensor";
-            if (!visitorName) visitorName = "unknown_visitor";
-            
-            /* Call the Tcl callback: callback visitorName sensorName */
-            char script[512];
-            snprintf(script, sizeof(script), "%s {%s} {%s}",
-                     tm->collision_callback, visitorName, sensorName);
-            Tcl_Eval(tm->interp, script);
         }
     }
 }
@@ -541,6 +667,30 @@ static int* parse_csv(const char *csv, int w, int h) {
     return tiles;
 }
 
+/* Callback context for point query */
+typedef struct {
+    int hit;
+    b2BodyId ignore_body;  /* optional body to ignore (e.g., the player) */
+    int use_ignore;
+} PointQueryContext;
+
+/* Box2D query callback - called for each overlapping shape */
+static bool point_query_callback(b2ShapeId shapeId, void *context) {
+    PointQueryContext *ctx = (PointQueryContext *)context;
+    
+    /* Optionally ignore a specific body (like the player itself) */
+    if (ctx->use_ignore) {
+        b2BodyId body = b2Shape_GetBody(shapeId);
+        if (body.index1 == ctx->ignore_body.index1) {
+            return true;  /* continue searching */
+        }
+    }
+    
+    /* Found a hit */
+    ctx->hit = 1;
+    return false;  /* stop searching */
+}
+
 /*========================================================================
  * Tcl Commands
  *========================================================================*/
@@ -560,6 +710,7 @@ static int tilemapCreateCmd(ClientData cd, Tcl_Interp *interp, int argc, char *a
     tm->auto_center = 1;  /* default to auto-center */
     tm->collision_callback[0] = '\0';
     Tcl_InitHashTable(&tm->body_table, TCL_STRING_KEYS);
+    camera_init(&tm->camera);
     if (tilemap_init_gl(tm) < 0) { free(tm); return TCL_ERROR; }
     GR_CLIENTDATA(obj) = tm;
     GR_ACTIONFUNCP(obj) = tilemap_draw;
@@ -661,8 +812,7 @@ static int tilemapLoadTMXCmd(ClientData cd, Tcl_Interp *interp, int argc, char *
                 get_tile_uvs(atlas, gid, &t->u0, &t->v0, &t->u1, &t->v1);
                 
                 if (is_collision) {
-                    char bname[64];
-                    snprintf(bname, sizeof(bname), "tile_%d_%d", tx, ty);
+                    snprintf(t->name, sizeof(t->name), "tile_%d_%d", tx, ty);
                     b2BodyDef bd = b2DefaultBodyDef();
                     bd.type = b2_staticBody;
                     bd.position = (b2Vec2){t->x, t->y};
@@ -670,12 +820,14 @@ static int tilemapLoadTMXCmd(ClientData cd, Tcl_Interp *interp, int argc, char *
                     b2Polygon box = b2MakeBox(t->w * 0.5f, t->h * 0.5f);
                     b2ShapeDef sd = b2DefaultShapeDef();
                     sd.density = 1.0f;
+                    sd.userData = (void *) t->name;
                     b2ShapeId shape = b2CreatePolygonShape(body, &sd, &box);
                     b2Shape_SetFriction(shape, 0.3f);
                     t->has_body = 1;
                     
                     int newentry;
-                    Tcl_HashEntry *e = Tcl_CreateHashEntry(&tm->body_table, bname, &newentry);
+                    Tcl_HashEntry *e = Tcl_CreateHashEntry(&tm->body_table, 
+                    							t->name, &newentry);
                     b2BodyId *stored = malloc(sizeof(b2BodyId));
                     *stored = body;
                     Tcl_SetHashValue(e, stored);
@@ -727,36 +879,6 @@ static int tilemapLoadTMXCmd(ClientData cd, Tcl_Interp *interp, int argc, char *
                         has_sensor_prop = 1;
                     }
                 }
-            }
-            
-            /* Auto-create sensor bodies for trigger/goal types or objects with sensor=true */
-            int is_trigger = (t && (strcmp(t, "trigger") == 0 || strcmp(t, "goal") == 0));
-            if ((is_trigger || has_sensor_prop) && ow > 0 && oh > 0 && n && strlen(n) > 0) {
-                /* Create invisible sensor body */
-                /* Note: to->x, to->y are already in world units from earlier conversion */
-                /* width/height are still in pixels, need to convert */
-                float hw = (ow / ppm) * 0.5f;
-                float hh = (oh / ppm) * 0.5f;
-                
-                b2BodyDef bd = b2DefaultBodyDef();
-                bd.type = b2_staticBody;
-                bd.position = (b2Vec2){to->x, to->y};
-                b2BodyId body = b2CreateBody(tm->world_id, &bd);
-                
-                b2Polygon box = b2MakeBox(hw, hh);
-                b2ShapeDef sd = b2DefaultShapeDef();
-                sd.isSensor = true;
-                sd.enableSensorEvents = true;  /* Box2D v3 requires this for sensor events */
-                sd.enableContactEvents = true; /* Try enabling both */
-                b2CreatePolygonShape(body, &sd, &box);
-                
-                /* Store body in table for auto-center offset and name lookup */
-                int newentry;
-                Tcl_HashEntry *e = Tcl_CreateHashEntry(&tm->body_table, to->name, &newentry);
-                b2BodyId *stored = malloc(sizeof(b2BodyId));
-                *stored = body;
-                Tcl_SetHashValue(e, stored);
-                tm->body_count++;
             }
         }
     }
@@ -871,7 +993,7 @@ static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, 
     double friction = 0.5;       /* surface friction */
     double density = 1.0;
     double restitution = 0.0;    /* bounciness (0=none, 1=full) */
-    int is_sensor = 0;
+    int is_sensor = 0;    
     
     /* Parse arguments */
     int i = 3;
@@ -912,6 +1034,7 @@ static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, 
     b2Polygon box = b2MakeBox(sp->w * 0.5f, sp->h * 0.5f);
     b2ShapeDef sd = b2DefaultShapeDef();
     sd.density = (float)density;
+    sd.userData = (void *) sp->name;
     sd.isSensor = is_sensor ? true : false;
     sd.enableContactEvents = !is_sensor;  /* regular contacts for non-sensors */
     sd.enableSensorEvents = true;  /* all shapes can trigger/detect sensor events */
@@ -929,6 +1052,40 @@ static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, 
     return TCL_OK;
 }
 
+static int tilemapRemoveSpriteCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 3) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " tm sprite_id", NULL);
+        return TCL_ERROR;
+    }
+    int id, sid;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) return TCL_ERROR;
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
+    if (sid < 0 || sid >= tm->sprite_count) return TCL_ERROR;
+    
+    SPRITE *sp = &tm->sprites[sid];
+    
+    /* Destroy the physics body if it exists */
+    if (sp->has_body && b2Body_IsValid(sp->body)) {
+        /* Remove from hash table */
+        Tcl_HashEntry *e = Tcl_FindHashEntry(&tm->body_table, sp->name);
+        if (e) {
+            free(Tcl_GetHashValue(e));
+            Tcl_DeleteHashEntry(e);
+            tm->body_count--;
+        }
+        /* Destroy the Box2D body */
+        b2DestroyBody(sp->body);
+        sp->has_body = 0;
+    }
+    
+    /* Mark sprite as invisible - don't remove from array to keep indices stable */
+    sp->visible = 0;
+    
+    return TCL_OK;
+}
 static int tilemapGetObjectsCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 2) { Tcl_AppendResult(interp, "usage: ", argv[0], " tm ?type?", NULL); return TCL_ERROR; }
@@ -1004,6 +1161,31 @@ static int tilemapGetContactsCmd(ClientData cd, Tcl_Interp *interp, int argc, ch
     Tcl_DictObjPut(interp, result, Tcl_NewStringObj("end",-1), ends);
     Tcl_SetObjResult(interp, result);
     return TCL_OK;
+}
+
+static int tilemapGetSpriteByNameCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 3) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " tm sprite_name", NULL);
+        return TCL_ERROR;
+    }
+    int id;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) return TCL_ERROR;
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    const char *name = argv[2];
+    
+    // Search for sprite by name
+    for (int i = 0; i < tm->sprite_count; i++) {
+        if (strcmp(tm->sprites[i].name, name) == 0) {
+            Tcl_SetObjResult(interp, Tcl_NewIntObj(i));
+            return TCL_OK;
+        }
+    }
+    
+    Tcl_AppendResult(interp, "sprite not found: ", name, NULL);
+    return TCL_ERROR;
 }
 
 /* tilemapGetSpriteInfo - get sprite position, angle, etc. for debugging */
@@ -1133,6 +1315,33 @@ static int tilemapSetSpritePositionCmd(ClientData cd, Tcl_Interp *interp, int ar
     if (sp->has_body && b2Body_IsValid(sp->body)) {
         b2Body_SetTransform(sp->body, (b2Vec2){sp->x, sp->y}, b2Body_GetRotation(sp->body));
     }
+    return TCL_OK;
+}
+
+static int tilemapSetSpriteRotationCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 4) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " tm sprite_id angle_radians", NULL);
+        return TCL_ERROR;
+    }
+    int id, sid;
+    double angle;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) return TCL_ERROR;
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
+    if (sid < 0 || sid >= tm->sprite_count) return TCL_ERROR;
+    if (Tcl_GetDouble(interp, argv[3], &angle) != TCL_OK) return TCL_ERROR;
+    
+    SPRITE *sp = &tm->sprites[sid];
+    sp->angle = (float)angle;
+    
+    // If sprite has a body, rotate the body too
+    if (sp->has_body && b2Body_IsValid(sp->body)) {
+        b2Vec2 pos = b2Body_GetPosition(sp->body);
+        b2Body_SetTransform(sp->body, pos, b2MakeRot((float)angle));
+    }
+    
     return TCL_OK;
 }
 
@@ -1322,6 +1531,338 @@ static int tilemapSetAutoCenterCmd(ClientData cd, Tcl_Interp *interp, int argc, 
     return TCL_OK;
 }
 
+/* tilemapSetCameraMode - set camera mode and parameters
+ * Usage:
+ *   tilemapSetCameraMode $tm locked
+ *   tilemapSetCameraMode $tm scroll $vx $vy
+ *   tilemapSetCameraMode $tm follow $sprite_id
+ *   tilemapSetCameraMode $tm deadzone $sprite_id $width $height
+ *   tilemapSetCameraMode $tm lookahead $sprite_id $look_x $look_y
+ */
+static int tilemapSetCameraModeCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 3) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], 
+            " tm mode ?args?\n"
+            "  modes: locked, scroll vx vy, follow sprite, deadzone sprite w h, lookahead sprite lx ly",
+            NULL);
+        return TCL_ERROR;
+    }
+    int id;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) return TCL_ERROR;
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    CAMERA *cam = &tm->camera;
+    
+    const char *mode = argv[2];
+    
+    if (strcmp(mode, "locked") == 0) {
+        cam->mode = CAM_LOCKED;
+    }
+    else if (strcmp(mode, "scroll") == 0) {
+        if (argc < 5) {
+            Tcl_AppendResult(interp, "scroll mode requires: vx vy", NULL);
+            return TCL_ERROR;
+        }
+        double vx, vy;
+        if (Tcl_GetDouble(interp, argv[3], &vx) != TCL_OK) return TCL_ERROR;
+        if (Tcl_GetDouble(interp, argv[4], &vy) != TCL_OK) return TCL_ERROR;
+        cam->mode = CAM_FIXED_SCROLL;
+        cam->scroll_vx = (float)vx;
+        cam->scroll_vy = (float)vy;
+    }
+    else if (strcmp(mode, "follow") == 0) {
+        if (argc < 4) {
+            Tcl_AppendResult(interp, "follow mode requires: sprite_id", NULL);
+            return TCL_ERROR;
+        }
+        int sid;
+        if (Tcl_GetInt(interp, argv[3], &sid) != TCL_OK) return TCL_ERROR;
+        cam->mode = CAM_FOLLOW;
+        cam->follow_sprite = sid;
+    }
+    else if (strcmp(mode, "deadzone") == 0) {
+        if (argc < 6) {
+            Tcl_AppendResult(interp, "deadzone mode requires: sprite_id width height", NULL);
+            return TCL_ERROR;
+        }
+        int sid;
+        double w, h;
+        if (Tcl_GetInt(interp, argv[3], &sid) != TCL_OK) return TCL_ERROR;
+        if (Tcl_GetDouble(interp, argv[4], &w) != TCL_OK) return TCL_ERROR;
+        if (Tcl_GetDouble(interp, argv[5], &h) != TCL_OK) return TCL_ERROR;
+        cam->mode = CAM_FOLLOW_DEADZONE;
+        cam->follow_sprite = sid;
+        cam->deadzone_w = (float)w;
+        cam->deadzone_h = (float)h;
+    }
+    else if (strcmp(mode, "lookahead") == 0) {
+        if (argc < 6) {
+            Tcl_AppendResult(interp, "lookahead mode requires: sprite_id look_x look_y", NULL);
+            return TCL_ERROR;
+        }
+        int sid;
+        double lx, ly;
+        if (Tcl_GetInt(interp, argv[3], &sid) != TCL_OK) return TCL_ERROR;
+        if (Tcl_GetDouble(interp, argv[4], &lx) != TCL_OK) return TCL_ERROR;
+        if (Tcl_GetDouble(interp, argv[5], &ly) != TCL_OK) return TCL_ERROR;
+        cam->mode = CAM_FOLLOW_LOOKAHEAD;
+        cam->follow_sprite = sid;
+        cam->lookahead_x = (float)lx;
+        cam->lookahead_y = (float)ly;
+    }
+    else {
+        Tcl_AppendResult(interp, "unknown mode: ", mode, NULL);
+        return TCL_ERROR;
+    }
+    
+    return TCL_OK;
+}
+
+/* tilemapSetCameraSmooth - set camera smoothing factor */
+static int tilemapSetCameraSmoothCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 3) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " tm smooth_speed (0=instant, higher=smoother)", NULL);
+        return TCL_ERROR;
+    }
+    int id;
+    double smooth;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) return TCL_ERROR;
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    if (Tcl_GetDouble(interp, argv[2], &smooth) != TCL_OK) return TCL_ERROR;
+    
+    tm->camera.smooth_speed = (float)smooth;
+    return TCL_OK;
+}
+
+/* tilemapSetCameraBounds - set camera movement bounds */
+static int tilemapSetCameraBoundsCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 6) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " tm min_x max_x min_y max_y", NULL);
+        return TCL_ERROR;
+    }
+    int id;
+    double minx, maxx, miny, maxy;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) return TCL_ERROR;
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    if (Tcl_GetDouble(interp, argv[2], &minx) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetDouble(interp, argv[3], &maxx) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetDouble(interp, argv[4], &miny) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetDouble(interp, argv[5], &maxy) != TCL_OK) return TCL_ERROR;
+    
+    tm->camera.min_x = (float)minx;
+    tm->camera.max_x = (float)maxx;
+    tm->camera.min_y = (float)miny;
+    tm->camera.max_y = (float)maxy;
+    tm->camera.use_bounds = 1;
+    return TCL_OK;
+}
+
+/* tilemapClearCameraBounds - disable camera bounds */
+static int tilemapClearCameraBoundsCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " tm", NULL);
+        return TCL_ERROR;
+    }
+    int id;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) return TCL_ERROR;
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    tm->camera.use_bounds = 0;
+    return TCL_OK;
+}
+
+/* tilemapSetCameraPos - manually set camera position */
+static int tilemapSetCameraPosCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 4) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " tm x y", NULL);
+        return TCL_ERROR;
+    }
+    int id;
+    double x, y;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) return TCL_ERROR;
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    if (Tcl_GetDouble(interp, argv[2], &x) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetDouble(interp, argv[3], &y) != TCL_OK) return TCL_ERROR;
+    
+    tm->camera.x = (float)x;
+    tm->camera.y = (float)y;
+    tm->camera.target_x = (float)x;
+    tm->camera.target_y = (float)y;
+    return TCL_OK;
+}
+
+/* tilemapGetCameraInfo - get current camera state */
+static int tilemapGetCameraInfoCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " tm", NULL);
+        return TCL_ERROR;
+    }
+    int id;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) return TCL_ERROR;
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    CAMERA *cam = &tm->camera;
+    
+    const char *mode_str = "locked";
+    switch (cam->mode) {
+        case CAM_LOCKED: mode_str = "locked"; break;
+        case CAM_FIXED_SCROLL: mode_str = "scroll"; break;
+        case CAM_FOLLOW: mode_str = "follow"; break;
+        case CAM_FOLLOW_DEADZONE: mode_str = "deadzone"; break;
+        case CAM_FOLLOW_LOOKAHEAD: mode_str = "lookahead"; break;
+    }
+    
+    Tcl_Obj *result = Tcl_NewDictObj();
+    Tcl_DictObjPut(interp, result, Tcl_NewStringObj("x",-1), Tcl_NewDoubleObj(cam->x));
+    Tcl_DictObjPut(interp, result, Tcl_NewStringObj("y",-1), Tcl_NewDoubleObj(cam->y));
+    Tcl_DictObjPut(interp, result, Tcl_NewStringObj("target_x",-1), Tcl_NewDoubleObj(cam->target_x));
+    Tcl_DictObjPut(interp, result, Tcl_NewStringObj("target_y",-1), Tcl_NewDoubleObj(cam->target_y));
+    Tcl_DictObjPut(interp, result, Tcl_NewStringObj("mode",-1), Tcl_NewStringObj(mode_str,-1));
+    Tcl_DictObjPut(interp, result, Tcl_NewStringObj("follow_sprite",-1), Tcl_NewIntObj(cam->follow_sprite));
+    Tcl_DictObjPut(interp, result, Tcl_NewStringObj("scroll_vx",-1), Tcl_NewDoubleObj(cam->scroll_vx));
+    Tcl_DictObjPut(interp, result, Tcl_NewStringObj("scroll_vy",-1), Tcl_NewDoubleObj(cam->scroll_vy));
+    Tcl_SetObjResult(interp, result);
+    return TCL_OK;
+}
+
+/* tilemapQueryPoint - check if a point overlaps any collision body
+ * 
+ * Usage: tilemapQueryPoint $tm $x $y ?-ignore $sprite_id?
+ * 
+ * Returns: 1 if point overlaps a solid body, 0 if clear
+ * 
+ * The optional -ignore flag excludes a sprite's body from the query,
+ * useful when checking if the player can move somewhere without
+ * detecting collision with themselves.
+ * 
+ * Note: Uses a tiny AABB around the point since Box2D v3 doesn't have
+ * a direct point query - uses b2World_OverlapAABB instead.
+ */
+static int tilemapQueryPointCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 4) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " tm x y ?-ignore sprite_id?", NULL);
+        return TCL_ERROR;
+    }
+    
+    int id;
+    double x, y;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) {
+        Tcl_AppendResult(interp, "invalid tilemap", NULL);
+        return TCL_ERROR;
+    }
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    if (!tm->has_world) {
+        Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
+        return TCL_OK;
+    }
+    
+    if (Tcl_GetDouble(interp, argv[2], &x) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetDouble(interp, argv[3], &y) != TCL_OK) return TCL_ERROR;
+    
+    /* Set up query context */
+    PointQueryContext ctx = {0, {0}, 0};
+    
+    /* Parse optional -ignore flag */
+    for (int i = 4; i < argc - 1; i++) {
+        if (strcmp(argv[i], "-ignore") == 0) {
+            int sid;
+            if (Tcl_GetInt(interp, argv[i+1], &sid) != TCL_OK) return TCL_ERROR;
+            if (sid >= 0 && sid < tm->sprite_count && tm->sprites[sid].has_body) {
+                ctx.ignore_body = tm->sprites[sid].body;
+                ctx.use_ignore = 1;
+            }
+        }
+    }
+    
+    /* Create a tiny AABB around the point for query */
+    float epsilon = 0.01f;
+    b2AABB aabb;
+    aabb.lowerBound = (b2Vec2){(float)x - epsilon, (float)y - epsilon};
+    aabb.upperBound = (b2Vec2){(float)x + epsilon, (float)y + epsilon};
+    
+    /* Query the world using Box2D v3 API */
+    b2QueryFilter filter = b2DefaultQueryFilter();
+    b2World_OverlapAABB(tm->world_id, aabb, filter, point_query_callback, &ctx);
+    
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(ctx.hit));
+    return TCL_OK;
+}
+
+/* tilemapQueryAABB - check if any collision body overlaps a rectangle
+ * 
+ * Usage: tilemapQueryAABB $tm $x1 $y1 $x2 $y2 ?-ignore $sprite_id?
+ * 
+ * Returns: 1 if any body overlaps the rectangle, 0 if clear
+ * 
+ * Useful for checking if a larger area is clear (e.g., can a player fit here?)
+ */
+static int tilemapQueryAABBCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 6) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " tm x1 y1 x2 y2 ?-ignore sprite_id?", NULL);
+        return TCL_ERROR;
+    }
+    
+    int id;
+    double x1, y1, x2, y2;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) {
+        Tcl_AppendResult(interp, "invalid tilemap", NULL);
+        return TCL_ERROR;
+    }
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    if (!tm->has_world) {
+        Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
+        return TCL_OK;
+    }
+    
+    if (Tcl_GetDouble(interp, argv[2], &x1) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetDouble(interp, argv[3], &y1) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetDouble(interp, argv[4], &x2) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetDouble(interp, argv[5], &y2) != TCL_OK) return TCL_ERROR;
+    
+    /* Set up query context */
+    PointQueryContext ctx = {0, {0}, 0};
+    
+    /* Parse optional -ignore flag */
+    for (int i = 6; i < argc - 1; i++) {
+        if (strcmp(argv[i], "-ignore") == 0) {
+            int sid;
+            if (Tcl_GetInt(interp, argv[i+1], &sid) != TCL_OK) return TCL_ERROR;
+            if (sid >= 0 && sid < tm->sprite_count && tm->sprites[sid].has_body) {
+                ctx.ignore_body = tm->sprites[sid].body;
+                ctx.use_ignore = 1;
+            }
+        }
+    }
+    
+    /* Create AABB - ensure min/max are correct */
+    b2AABB aabb;
+    aabb.lowerBound = (b2Vec2){(float)(x1 < x2 ? x1 : x2), (float)(y1 < y2 ? y1 : y2)};
+    aabb.upperBound = (b2Vec2){(float)(x1 > x2 ? x1 : x2), (float)(y1 > y2 ? y1 : y2)};
+    
+    /* Query the world */
+    b2QueryFilter filter = b2DefaultQueryFilter();
+    b2World_OverlapAABB(tm->world_id, aabb, filter, point_query_callback, &ctx);
+    
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(ctx.hit));
+    return TCL_OK;
+}
+
 /*========================================================================
  * Module Init
  *========================================================================*/
@@ -1346,13 +1887,18 @@ int Tilemap_Init(Tcl_Interp *interp)
     Tcl_CreateCommand(interp, "tilemapCreate", (Tcl_CmdProc*)tilemapCreateCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapLoadTMX", (Tcl_CmdProc*)tilemapLoadTMXCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapSetGravity", (Tcl_CmdProc*)tilemapSetGravityCmd, (ClientData)OBJList, NULL);
-    Tcl_CreateCommand(interp, "tilemapCreateSprite", (Tcl_CmdProc*)tilemapCreateSpriteCmd, (ClientData)OBJList, NULL);
-    Tcl_CreateCommand(interp, "tilemapSpriteAddBody", (Tcl_CmdProc*)tilemapSpriteAddBodyCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapCreateSprite", 
+(Tcl_CmdProc*)tilemapCreateSpriteCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapRemoveSprite", 
+(Tcl_CmdProc*)tilemapRemoveSpriteCmd, (ClientData) OBJList, NULL);
+	Tcl_CreateCommand(interp, "tilemapSpriteAddBody", (Tcl_CmdProc*)tilemapSpriteAddBodyCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapSetSpritePosition", (Tcl_CmdProc*)tilemapSetSpritePositionCmd, (ClientData)OBJList, NULL);
+        Tcl_CreateCommand(interp, "tilemapSetSpriteRotation", (Tcl_CmdProc*)tilemapSetSpriteRotationCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapSetSpriteTile", (Tcl_CmdProc*)tilemapSetSpriteTileCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapGetObjects", (Tcl_CmdProc*)tilemapGetObjectsCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapGetContacts", (Tcl_CmdProc*)tilemapGetContactsCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapGetSpriteInfo", (Tcl_CmdProc*)tilemapGetSpriteInfoCmd, (ClientData)OBJList, NULL);
+        Tcl_CreateCommand(interp, "tilemapGetSpriteByName", (Tcl_CmdProc*)tilemapGetSpriteByNameCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapSetOffset", (Tcl_CmdProc*)tilemapSetOffsetCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapGetMapInfo", (Tcl_CmdProc*)tilemapGetMapInfoCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapApplyImpulse", (Tcl_CmdProc*)tilemapApplyImpulseCmd, (ClientData)OBJList, NULL);
@@ -1363,6 +1909,15 @@ int Tilemap_Init(Tcl_Interp *interp)
     Tcl_CreateCommand(interp, "tilemapSetCollisionCallback", (Tcl_CmdProc*)tilemapSetCollisionCallbackCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapSetAutoCenter", (Tcl_CmdProc*)tilemapSetAutoCenterCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapSetSpriteVisible", (Tcl_CmdProc*)tilemapSetSpriteVisibleCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapSetCameraMode", (Tcl_CmdProc*)tilemapSetCameraModeCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapSetCameraSmooth", (Tcl_CmdProc*)tilemapSetCameraSmoothCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapSetCameraBounds", (Tcl_CmdProc*)tilemapSetCameraBoundsCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapClearCameraBounds", (Tcl_CmdProc*)tilemapClearCameraBoundsCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapSetCameraPos", (Tcl_CmdProc*)tilemapSetCameraPosCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapGetCameraInfo", (Tcl_CmdProc*)tilemapGetCameraInfoCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapQueryPoint", (Tcl_CmdProc*)tilemapQueryPointCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapQueryAABB", (Tcl_CmdProc*)tilemapQueryAABBCmd, (ClientData)OBJList, NULL);
+
     
     return TCL_OK;
 }
