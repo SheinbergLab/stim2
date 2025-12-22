@@ -59,7 +59,8 @@ proc load_sidescroll {} {
     tilemapSetAutoCenter $tm 0
     
     # Load the TMX
-    set result [tilemapLoadTMX $tm "test_sidescroll.tmx" -pixels_per_meter 32]
+    set ppm 32
+    set result [tilemapLoadTMX $tm "test_sidescroll.tmx" -pixels_per_meter $ppm]
     puts "Loaded: $result"
     
     # Get map info
@@ -84,16 +85,16 @@ proc load_sidescroll {} {
 		set y [dict get $obj y]
 		
 		if {$type eq "spawn"} {
-			set gw [expr {[dict get $obj width] / 32.0}]
-			set gh [expr {[dict get $obj height] / 32.0}]
+			set gw [expr {[dict get $obj width] / double($ppm)}]
+			set gh [expr {[dict get $obj height] / double($ppm)}]
 			set spawn_x [expr {$x + ($gw / 2.0)}]
 			set spawn_y [expr {$y + ($gh / 2.0)}]
 			puts "Spawn at: $spawn_x, $spawn_y"
 		} elseif {$type eq "goal"} {
 			puts "Goal at: $x, $y"
 			# Create goal as a sensor sprite
-			set gw [expr {[dict get $obj width] / 32.0}]
-			set gh [expr {[dict get $obj height] / 32.0}]
+			set gw [expr {[dict get $obj width] / double($ppm)}]
+			set gh [expr {[dict get $obj height] / double($ppm)}]
 			 puts "Goal size: gw=$gw, gh=$gh"
 
 			set cx [expr {$x + ($gw / 2.0)}]
@@ -354,9 +355,23 @@ proc onKeyPress {keycode} {
 #============================================================
 
 proc reset_sidescroll {} {
-    global tm player trial_active trial_result scroll_speed current_lane
-    
+    global tm player trial_active trial_result scroll_speed current_lane collected_goals
+        
     if {$tm eq ""} return
+    
+    # Clear collected goals tracking
+    array unset collected_goals
+    array set collected_goals {}
+    
+    # Make all goal sprites visible again
+    set sprite_count [tilemapGetSpriteCount $tm]  ;# Need to add this command
+    for {set i 0} {$i < $sprite_count} {incr i} {
+        set info [tilemapGetSpriteInfo $tm $i]
+        set name [dict get $info name]
+        if {[string match "goal_*" $name]} {
+            tilemapSetSpriteVisible $tm $i 1
+        }
+    }
     
     set trial_active 1
     set trial_result ""
