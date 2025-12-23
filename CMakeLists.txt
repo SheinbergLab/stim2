@@ -277,7 +277,7 @@ else()
         set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
     endif()
     
-    set(CPACK_DEBIAN_PACKAGE_DEPENDS "zlib1g, libc6, libdecor-0-0, libegl1, libglx0, libopengl0, libwayland-client0, libwayland-cursor0, libwayland-egl1, libx11-6, libx11-xcb1, libxcursor1, libxext6, libxi6, libxinerama1, libxkbcommon0, libxrandr2, libxrender1, mesa-utils, libgl1-mesa-dri, libegl-mesa0, libopenal1, libfreetype6, mpv")
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS "zlib1g, libc6, libdecor-0-0, libegl1, libglx0, libopengl0, libwayland-client0, libwayland-cursor0, libwayland-egl1, libx11-6, libx11-xcb1, libxcursor1, libxext6, libxi6, libxinerama1, libxkbcommon0, libxrandr2, libxrender1, mesa-utils, libgl1-mesa-dri, libegl-mesa0, libopenal1, libfreetype6, cage, mpv")
     set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA ${CMAKE_CURRENT_SOURCE_DIR}/dpkg/postinst)
 
     install(TARGETS stim2 DESTINATION "/usr/local/stim2")
@@ -306,6 +306,15 @@ else()
     install(
         FILES ${CONFIG_SCRIPT}
         DESTINATION /usr/local/stim2/config
+        COMPONENT stim2
+    )
+    
+    # Add the Linux config script.
+    set(SYSTEMD_SCRIPT systemd/stim2.service)
+    message("Bundling systemd service: ${SYSTEMD_SCRIPT}")
+    install(
+        FILES ${SYSTEMD_SCRIPT}
+        DESTINATION /usr/local/stim2/systemd
         COMPONENT stim2
     )
 endif()
