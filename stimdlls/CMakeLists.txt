@@ -127,6 +127,7 @@ else()
     find_library(BOX2D_LIB NAMES "libbox2d.a")
     find_library(LIBDL dl)
     find_library(LIBPTHREAD pthread)
+    find_library(FREETYPE freetype)    
 endif()
 
 # Common link libraries
@@ -167,7 +168,7 @@ add_stim_module(metagroup SOURCES ${SRC_DIR}/metagroup.c)
 # Shader module with image support
 add_stim_module(shader
     SOURCES ${SRC_DIR}/shader.c
-    LIBS stimimage
+    LIBS stimimage ${DLSH}
 )
 
 # Mesh module with image support
