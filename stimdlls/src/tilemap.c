@@ -580,7 +580,13 @@ static void tilemap_update(GR_OBJ *obj) {
             char script[512];
             snprintf(script, sizeof(script), "%s {%s} {%s}",
                      tm->collision_callback, nameA, nameB);
-            Tcl_Eval(tm->interp, script);
+			int result = Tcl_Eval(tm->interp, script);
+			if (result != TCL_OK) {
+				fprintf(stderr, "Collision callback error: %s\n", 
+						Tcl_GetStringResult(tm->interp));
+				// Optionally disable callback to prevent error spam
+				// tm->collision_callback[0] = '\0';
+			}
         }
         
         // --- 2. Process Sensor Events (Triggers/Goals) ---
@@ -601,8 +607,14 @@ static void tilemap_update(GR_OBJ *obj) {
                 char script[512];
                 snprintf(script, sizeof(script), "%s {%s} {%s}",
                          tm->collision_callback, visitorName, sensorName);
-                Tcl_Eval(tm->interp, script);
-            }
+			   int result = Tcl_Eval(tm->interp, script);
+				if (result != TCL_OK) {
+					fprintf(stderr, "Sensor callback error: %s\n", 
+							Tcl_GetStringResult(tm->interp));
+					// Optionally disable callback to prevent error spam
+					// tm->collision_callback[0] = '\0';
+				}
+			}
         }
     }
 }
