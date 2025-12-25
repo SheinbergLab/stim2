@@ -85,23 +85,23 @@ proc load_sidescroll {} {
 		set y [dict get $obj y]
 		
 		if {$type eq "spawn"} {
-			set gw [expr {[dict get $obj width] / double($ppm)}]
-			set gh [expr {[dict get $obj height] / double($ppm)}]
+			set gw [expr {[dict get $obj width]}]
+			set gh [expr {[dict get $obj height]}]
 			set spawn_x [expr {$x + ($gw / 2.0)}]
 			set spawn_y [expr {$y + ($gh / 2.0)}]
 			puts "Spawn at: $spawn_x, $spawn_y"
 		} elseif {$type eq "goal"} {
 			puts "Goal at: $x, $y"
 			# Create goal as a sensor sprite
-			set gw [expr {[dict get $obj width] / double($ppm)}]
-			set gh [expr {[dict get $obj height] / double($ppm)}]
+			set gw [expr {[dict get $obj width]}]
+			set gh [expr {[dict get $obj height]}]
 			 puts "Goal size: gw=$gw, gh=$gh"
 
 			set cx [expr {$x + ($gw / 2.0)}]
 			set cy [expr {$y - ($gh / 2.0)}]
 			       puts "Calculated center: cx=$cx, cy=$cy"
 
-			set goal_sprite [tilemapCreateSprite $tm goal_[incr gcount] 3 $cx $cy $gw $gh]
+			set goal_sprite [tilemapCreateSprite $tm goal_[incr gcount] 4 $cx $cy $gw $gh]
 			        puts "Created sprite: $goal_sprite"
 
 			tilemapSpriteAddBody $tm $goal_sprite static -sensor 1
@@ -111,13 +111,13 @@ proc load_sidescroll {} {
 	}
     
     # Create player sprite at spawn point
-    set player [tilemapCreateSprite $tm "player" 4 $spawn_x $spawn_y 0.8 0.8]
+    set player [tilemapCreateSprite $tm "player" 5 $spawn_x $spawn_y 0.8 0.8]
 
     tilemapSpriteAddBody $tm $player dynamic -fixedrotation 1 -damping 0.1 -friction 0.5
     puts "Created player sprite: $player at $spawn_x, $spawn_y"
     
     # Set up run animation
-    tilemapSetSpriteAnimation $tm $player $anim_fps {4 5 6 7} 1
+    tilemapSetSpriteAnimation $tm $player $anim_fps {5 6 7 8} 1
     tilemapPlayAnimation $tm $player 1
     
     # Set initial horizontal velocity to match scroll speed
