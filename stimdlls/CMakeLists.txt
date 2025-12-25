@@ -198,7 +198,7 @@ else()
 endif()
 
 # Tilemap with integrated Box2D and TMX loading
-add_library(tilemap SHARED ${SRC_DIR}/tilemap.c ${SRC_DIR}/tmx_xml.cpp ${APP_DIR}/glad.c)
+add_library(tilemap SHARED ${SRC_DIR}/tilemap.c ${SRC_DIR}/tmx_xml.cpp ${SRC_DIR}/aseprite_json.cpp ${APP_DIR}/glad.c)
 set_target_properties(tilemap PROPERTIES PREFIX "")
 target_link_libraries(tilemap ${COMMON_LIBS} ${BOX2D_LIB})
 # tinyxml2 - either find package or include source
