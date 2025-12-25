@@ -32,12 +32,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <ctype.h>
 #include <tcl.h>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
 #include <stim2.h>
+#include "aseprite_json.h"
 #include "box2d/box2d.h"
 
 /* stb_image - define implementation here for tilemap's use */
@@ -69,6 +71,7 @@ int tmx_xml_layer_get_int(void* layer, const char* attr);
 void* tmx_xml_layer_get_data(void* layer);
 const char* tmx_xml_data_get_text(void* data);
 const char* tmx_xml_data_get_encoding(void* data);
+const char* tmx_xml_data_get_compression(void* data);
 void* tmx_xml_first_objectgroup(void* map);
 void* tmx_xml_next_objectgroup(void* objgroup);
 const char* tmx_xml_objectgroup_get_name(void* objgroup);
@@ -84,6 +87,23 @@ void* tmx_xml_next_property(void* prop);
 const char* tmx_xml_property_get_name(void* prop);
 const char* tmx_xml_property_get_value(void* prop);
 const char* tmx_xml_property_get_type(void* prop);
+void tmx_xml_set_base_path(const char* path);
+const char* tmx_xml_tileset_get_name(void* tileset);
+void* tmx_xml_tileset_get_properties(void* tileset);
+const char* tmx_xml_tileset_get_property(void* tileset, const char* prop_name);
+
+/* Tile collision shape iteration */
+void* tmx_xml_tileset_first_tile(void* tileset);
+void* tmx_xml_tileset_next_tile(void* tile);
+int   tmx_xml_tile_get_id(void* tile);
+void* tmx_xml_tile_get_objectgroup(void* tile);
+
+/* Polygon/polyline support for collision objects */
+int         tmx_xml_object_has_polygon(void* obj);
+const char* tmx_xml_object_get_polygon_points(void* obj);
+int         tmx_xml_object_has_polyline(void* obj);
+const char* tmx_xml_object_get_polyline_points(void* obj);
+
 #ifdef __cplusplus
 }
 #endif
@@ -93,6 +113,36 @@ const char* tmx_xml_property_get_type(void* prop);
 #define MAX_ATLASES 4
 #define MAX_OBJECTS 256
 #define MAX_PATH_LEN 512
+#define MAX_COLLISION_VERTS 8    /* Box2D limit for polygon vertices */
+#define MAX_SHAPES_PER_TILE 4       /* Max collision shapes per tile */
+#define MAX_TILE_COLLISIONS 256  /* Max tiles with custom collision per tileset */
+
+/* Collision shape types */
+typedef enum {
+    SHAPE_NONE = 0,
+    SHAPE_BOX,
+    SHAPE_POLYGON
+} CollisionShapeType;
+
+/* Single collision shape within a tile */
+typedef struct {
+    CollisionShapeType type;
+    
+    /* For BOX type: offset and size as fraction of tile (0.0-1.0) */
+    float box_x, box_y;      /* top-left corner */
+    float box_w, box_h;      /* width/height */
+    
+    /* For POLYGON type: vertices as fraction of tile */
+    float verts_x[MAX_COLLISION_VERTS];
+    float verts_y[MAX_COLLISION_VERTS];
+    int vert_count;
+} COLLISION_SHAPE;
+
+/* All collision shapes for a single tile */
+typedef struct {
+    COLLISION_SHAPE shapes[MAX_SHAPES_PER_TILE];
+    int shape_count;
+} TILE_COLLISION;
 
 typedef struct {
 	char name[64];
@@ -107,6 +157,14 @@ typedef struct {
     float u0, v0, u1, v1;
     int atlas_id, tile_id, visible, has_body;
     b2BodyId body;
+    float body_offset_x;  /* hitbox offset from sprite center, world units */
+    float body_offset_y;
+    /* Hitbox data from Aseprite */
+    int has_hitbox_data;
+    float hitbox_w_ratio;
+    float hitbox_h_ratio;
+    float hitbox_offset_x;
+    float hitbox_offset_y;
     /* Animation support */
     int anim_frames[32];    /* tile IDs for animation */
     int anim_frame_count;
@@ -169,12 +227,28 @@ typedef struct {
     int use_bounds;
 } CAMERA;
 
+
+#define MAX_SPRITE_TILESETS 8
+typedef struct {
+    char name[64];                              /* tileset name e.g. "PinkStar" */
+    int firstgid;
+    int tile_width, tile_height;
+    int atlas_id;                               /* index into tm->atlases[] */
+    AsepriteData aseprite;                      /* parsed animation data */
+    int has_aseprite;                           /* 1 if aseprite data loaded */
+
+    TILE_COLLISION tile_collisions[MAX_TILE_COLLISIONS];
+    int tile_collision_count;
+} SPRITE_TILESET;
+
 typedef struct {
     TILE_INSTANCE tiles[MAX_TILES];
     int tile_count;
     int layer_counts[8];    /* tiles per layer for z-order rendering */
     int num_layers;
     SPRITE sprites[MAX_SPRITES];
+    SPRITE_TILESET sprite_tilesets[MAX_SPRITE_TILESETS];
+    int sprite_tileset_count;
     int sprite_count;
     TMX_OBJECT objects[MAX_OBJECTS];
     int object_count;
@@ -195,9 +269,12 @@ typedef struct {
     char base_path[MAX_PATH_LEN];
     int tiles_dirty;
     int auto_center;            /* auto-center on load */
+    int normalize;               /* normalize to unit square on load */
+    float norm_scale;            /* scale factor used for normalization */
     char collision_callback[256]; /* Tcl script to call on collision */
     Tcl_Interp *interp;
 } TILEMAP;
+
 
 static int TilemapID = -1;
 
@@ -530,10 +607,10 @@ static void tilemap_update(GR_OBJ *obj) {
     for (int i = 0; i < tm->sprite_count; i++) {
         SPRITE *sp = &tm->sprites[i];  
         
-        /* Update position from physics body */
         if (sp->has_body && b2Body_IsValid(sp->body)) {
             b2Vec2 pos = b2Body_GetPosition(sp->body);
-            sp->x = pos.x; sp->y = pos.y;
+            sp->x = pos.x - sp->body_offset_x;
+            sp->y = pos.y - sp->body_offset_y;
             sp->angle = b2Rot_GetAngle(b2Body_GetRotation(sp->body));
         }
         
@@ -556,7 +633,7 @@ static void tilemap_update(GR_OBJ *obj) {
                 sp->tile_id = sp->anim_frames[sp->anim_current_frame];
                 if (sp->atlas_id < tm->atlas_count) {
                     ATLAS *a = &tm->atlases[sp->atlas_id];
-                    get_tile_uvs(a, sp->tile_id + a->firstgid,
+                    get_tile_uvs(a, sp->tile_id,
                                  &sp->u0, &sp->v0, &sp->u1, &sp->v1);
                 }
             }
@@ -703,6 +780,242 @@ static bool point_query_callback(b2ShapeId shapeId, void *context) {
     return false;  /* stop searching */
 }
 
+/* ============================================================
+ * Helper function to find sprite tileset by name
+ * ============================================================ */
+
+static SPRITE_TILESET* find_sprite_tileset(TILEMAP *tm, const char *name) {
+    if (!tm || !name) return NULL;
+    for (int i = 0; i < tm->sprite_tileset_count; i++) {
+        if (strcmp(tm->sprite_tilesets[i].name, name) == 0) {
+            return &tm->sprite_tilesets[i];
+        }
+    }
+    return NULL;
+}
+
+static SPRITE_TILESET* find_sprite_tileset_by_firstgid(TILEMAP *tm, int gid) {
+    SPRITE_TILESET *best = NULL;
+    for (int i = 0; i < tm->sprite_tileset_count; i++) {
+        if (tm->sprite_tilesets[i].firstgid <= gid) {
+            if (!best || tm->sprite_tilesets[i].firstgid > best->firstgid) {
+                best = &tm->sprite_tilesets[i];
+            }
+        }
+    }
+    return best;
+}
+
+/*
+ * Parse polygon points string "x1,y1 x2,y2 x3,y3 ..."
+ * obj_x, obj_y: object position within tile (pixels)
+ * Returns number of vertices parsed
+ */
+static int parse_polygon_points(const char *points_str, 
+                                float obj_x, float obj_y,
+                                int tile_w, int tile_h,
+                                float *out_x, float *out_y, 
+                                int max_verts)
+{
+    if (!points_str) return 0;
+    
+    int count = 0;
+    const char *p = points_str;
+    
+    while (*p && count < max_verts) {
+        float x, y;
+        char *end;
+        
+        /* Parse x */
+        x = strtof(p, &end);
+        if (end == p) break;
+        p = end;
+        
+        if (*p == ',') p++;
+        
+        /* Parse y */
+        y = strtof(p, &end);
+        if (end == p) break;
+        p = end;
+        
+        /* Skip whitespace */
+        while (*p == ' ' || *p == '\t') p++;
+        
+        /* Normalize to 0.0-1.0 range */
+        out_x[count] = (obj_x + x) / tile_w;
+        out_y[count] = (obj_y + y) / tile_h;
+        count++;
+    }
+    
+    return count;
+}
+
+/*
+ * Load all collision shapes for all tiles in a tileset
+ */
+static void load_tile_collisions(void *tileset_xml, SPRITE_TILESET *sts)
+{
+    sts->tile_collision_count = 0;
+    
+    /* Initialize all tiles to no collision */
+    for (int i = 0; i < MAX_TILE_COLLISIONS; i++) {
+        sts->tile_collisions[i].shape_count = 0;
+    }
+    
+    /* Iterate through <tile> elements */
+    for (void *tile = tmx_xml_tileset_first_tile(tileset_xml);
+         tile != NULL;
+         tile = tmx_xml_tileset_next_tile(tile)) {
+        
+        int tile_id = tmx_xml_tile_get_id(tile);
+        if (tile_id < 0 || tile_id >= MAX_TILE_COLLISIONS) continue;
+        
+        void *objgroup = tmx_xml_tile_get_objectgroup(tile);
+        if (!objgroup) continue;
+        
+        TILE_COLLISION *tc = &sts->tile_collisions[tile_id];
+        tc->shape_count = 0;
+        
+        /* Iterate through all collision objects in this tile */
+        for (void *obj = tmx_xml_first_object(objgroup);
+             obj != NULL && tc->shape_count < MAX_SHAPES_PER_TILE;
+             obj = tmx_xml_next_object(obj)) {
+            
+            COLLISION_SHAPE *shape = &tc->shapes[tc->shape_count];
+            
+            float obj_x = tmx_xml_object_get_float(obj, "x", 0);
+            float obj_y = tmx_xml_object_get_float(obj, "y", 0);
+            
+            if (tmx_xml_object_has_polygon(obj)) {
+                /* Polygon shape */
+                const char *points = tmx_xml_object_get_polygon_points(obj);
+                shape->vert_count = parse_polygon_points(points, obj_x, obj_y,
+                                                         sts->tile_width, sts->tile_height,
+                                                         shape->verts_x, shape->verts_y,
+                                                         MAX_COLLISION_VERTS);
+                if (shape->vert_count >= 3) {
+                    shape->type = SHAPE_POLYGON;
+                    tc->shape_count++;
+                }
+            } else {
+                /* Rectangle shape */
+                float w = tmx_xml_object_get_float(obj, "width", sts->tile_width);
+                float h = tmx_xml_object_get_float(obj, "height", sts->tile_height);
+                
+                shape->type = SHAPE_BOX;
+                shape->box_x = obj_x / sts->tile_width;
+                shape->box_y = obj_y / sts->tile_height;
+                shape->box_w = w / sts->tile_width;
+                shape->box_h = h / sts->tile_height;
+                tc->shape_count++;
+            }
+        }
+        
+        if (tc->shape_count > 0) {
+            sts->tile_collision_count++;
+        }
+    }
+    
+    if (sts->tile_collision_count > 0) {
+        fprintf(stderr, "tilemap: loaded collision shapes for %d tiles in '%s'\n",
+                sts->tile_collision_count, sts->name);
+    }
+}
+
+/*
+ * Look up collision data for a GID
+ * Returns pointer to TILE_COLLISION or NULL if no custom collision
+ */
+static TILE_COLLISION* get_tile_collision(TILEMAP *tm, int gid)
+{
+    /* Find which tileset this GID belongs to */
+    SPRITE_TILESET *best_sts = NULL;
+    for (int i = 0; i < tm->sprite_tileset_count; i++) {
+        SPRITE_TILESET *sts = &tm->sprite_tilesets[i];
+        if (sts->firstgid <= gid) {
+            if (!best_sts || sts->firstgid > best_sts->firstgid) {
+                best_sts = sts;
+            }
+        }
+    }
+    
+    if (!best_sts) return NULL;
+    
+    int local_id = gid - best_sts->firstgid;
+    if (local_id < 0 || local_id >= MAX_TILE_COLLISIONS) return NULL;
+    
+    TILE_COLLISION *tc = &best_sts->tile_collisions[local_id];
+    if (tc->shape_count == 0) return NULL;
+    
+    return tc;
+}
+
+/*============================================================================
+ * COLLISION SHAPE CREATION
+ *============================================================================*/
+
+/*
+ * Create all collision shapes for a tile on a body
+ * Returns number of shapes created
+ */
+static int create_tile_collision_shapes(TILEMAP *tm, b2BodyId body,
+                                        float tile_w, float tile_h,
+                                        int gid, const char *name)
+{
+    TILE_COLLISION *tc = get_tile_collision(tm, gid);
+    
+    b2ShapeDef sd = b2DefaultShapeDef();
+    sd.density = 1.0f;
+    sd.userData = (void *)name;
+    
+    if (!tc) {
+        /* No custom collision - create default full-tile box */
+        b2Polygon box = b2MakeBox(tile_w * 0.5f, tile_h * 0.5f);
+        b2ShapeId shape = b2CreatePolygonShape(body, &sd, &box);
+        b2Shape_SetFriction(shape, 0.3f);
+        return 1;
+    }
+    
+    /* Create each shape defined for this tile */
+    int created = 0;
+    for (int i = 0; i < tc->shape_count; i++) {
+        COLLISION_SHAPE *cs = &tc->shapes[i];
+        b2ShapeId shape;
+        
+        if (cs->type == SHAPE_POLYGON) {
+            b2Vec2 points[MAX_COLLISION_VERTS];
+            for (int v = 0; v < cs->vert_count; v++) {
+                float nx = cs->verts_x[v] - 0.5f;
+                float ny = 0.5f - cs->verts_y[v];
+                points[v].x = nx * tile_w;
+                points[v].y = ny * tile_h;
+            }
+            
+            b2Hull hull = b2ComputeHull(points, cs->vert_count);
+            b2Polygon poly = b2MakePolygon(&hull, 0.0f);
+            shape = b2CreatePolygonShape(body, &sd, &poly);
+            
+        } else if (cs->type == SHAPE_BOX) {
+            float cx = (cs->box_x + cs->box_w * 0.5f - 0.5f) * tile_w;
+            float cy = (0.5f - (cs->box_y + cs->box_h * 0.5f)) * tile_h;
+            float hw = cs->box_w * tile_w * 0.5f;
+            float hh = cs->box_h * tile_h * 0.5f;
+            
+            b2Polygon box = b2MakeOffsetBox(hw, hh, (b2Vec2){cx, cy}, b2Rot_identity);
+            shape = b2CreatePolygonShape(body, &sd, &box);
+            
+        } else {
+            continue;
+        }
+        
+        b2Shape_SetFriction(shape, 0.3f);
+        b2Shape_SetRestitution(shape, 0.0f);
+        created++;
+    }
+    
+    return created;
+}
+
 /*========================================================================
  * Tcl Commands
  *========================================================================*/
@@ -715,6 +1028,7 @@ static int tilemapCreateCmd(ClientData cd, Tcl_Interp *interp, int argc, char *a
     strcpy(GR_NAME(obj), "Tilemap");
     TILEMAP *tm = (TILEMAP *)calloc(1, sizeof(TILEMAP));
     tm->interp = interp;
+    tm->sprite_tileset_count = 0;
     tm->tile_size = 1.0f;
     tm->pixels_per_meter = 32.0f;
     tm->gravity = (b2Vec2){0, -10};
@@ -731,6 +1045,53 @@ static int tilemapCreateCmd(ClientData cd, Tcl_Interp *interp, int argc, char *a
     GR_RESETFUNCP(obj) = (RESET_FUNC)tilemap_reset;
     Tcl_SetObjResult(interp, Tcl_NewIntObj(gobjAddObj(olist, obj)));
     return TCL_OK;
+}
+
+static int *decode_base64_tiles(const char *text, int width, int height) {
+    /* Skip whitespace and get clean base64 string */
+    size_t len = strlen(text);
+    char *clean = malloc(len + 1);
+    size_t clean_len = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (!isspace(text[i])) clean[clean_len++] = text[i];
+    }
+    clean[clean_len] = '\0';
+    
+    /* Decode base64 - each tile is 4 bytes (little-endian uint32) */
+    size_t decoded_size = (clean_len * 3) / 4;
+    unsigned char *decoded = malloc(decoded_size);
+    
+    static const int b64_table[256] = {
+        ['A']=0,['B']=1,['C']=2,['D']=3,['E']=4,['F']=5,['G']=6,['H']=7,
+        ['I']=8,['J']=9,['K']=10,['L']=11,['M']=12,['N']=13,['O']=14,['P']=15,
+        ['Q']=16,['R']=17,['S']=18,['T']=19,['U']=20,['V']=21,['W']=22,['X']=23,
+        ['Y']=24,['Z']=25,['a']=26,['b']=27,['c']=28,['d']=29,['e']=30,['f']=31,
+        ['g']=32,['h']=33,['i']=34,['j']=35,['k']=36,['l']=37,['m']=38,['n']=39,
+        ['o']=40,['p']=41,['q']=42,['r']=43,['s']=44,['t']=45,['u']=46,['v']=47,
+        ['w']=48,['x']=49,['y']=50,['z']=51,['0']=52,['1']=53,['2']=54,['3']=55,
+        ['4']=56,['5']=57,['6']=58,['7']=59,['+']=60,['/']=61
+    };
+    
+    size_t j = 0;
+    for (size_t i = 0; i < clean_len; i += 4) {
+        uint32_t n = (b64_table[(int)clean[i]] << 18) |
+                     (b64_table[(int)clean[i+1]] << 12) |
+                     (b64_table[(int)clean[i+2]] << 6) |
+                      b64_table[(int)clean[i+3]];
+        if (j < decoded_size) decoded[j++] = (n >> 16) & 0xFF;
+        if (j < decoded_size && clean[i+2] != '=') decoded[j++] = (n >> 8) & 0xFF;
+        if (j < decoded_size && clean[i+3] != '=') decoded[j++] = n & 0xFF;
+    }
+    free(clean);
+    
+    /* Convert to tile array (little-endian uint32) */
+    int *tiles = malloc(width * height * sizeof(int));
+    for (int i = 0; i < width * height; i++) {
+        tiles[i] = decoded[i*4] | (decoded[i*4+1] << 8) | 
+                   (decoded[i*4+2] << 16) | (decoded[i*4+3] << 24);
+    }
+    free(decoded);
+    return tiles;
 }
 
 static int tilemapLoadTMXCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
@@ -750,16 +1111,25 @@ static int tilemapLoadTMXCmd(ClientData cd, Tcl_Interp *interp, int argc, char *
     
     float ppm = 32.0f;
     const char *collision_layer = "Collision";
+    int normalize = 0;
+    float load_scale = 1.0f;
+    
     for (int i = 3; i < argc - 1; i += 2) {
         if (strcmp(argv[i], "-pixels_per_meter") == 0) {
             double d; Tcl_GetDouble(interp, argv[i+1], &d); ppm = (float)d;
         } else if (strcmp(argv[i], "-collision_layer") == 0) {
             collision_layer = argv[i+1];
+        } else if (strcmp(argv[i], "-normalize") == 0) {
+            int n; Tcl_GetInt(interp, argv[i+1], &n); normalize = n;
+        } else if (strcmp(argv[i], "-scale") == 0) {
+            double d; Tcl_GetDouble(interp, argv[i+1], &d); load_scale = (float)d;
         }
     }
     tm->pixels_per_meter = ppm;
+    tm->normalize = normalize;
     get_directory(argv[2], tm->base_path, MAX_PATH_LEN);
-    
+    tmx_xml_set_base_path(tm->base_path);
+
     void *doc = tmx_xml_load(argv[2]);
     if (!doc) { Tcl_AppendResult(interp, "can't load ", argv[2], NULL); return TCL_ERROR; }
     void *map = tmx_xml_get_map(doc);
@@ -770,6 +1140,15 @@ static int tilemapLoadTMXCmd(ClientData cd, Tcl_Interp *interp, int argc, char *
     tm->tile_pixel_width = tmx_xml_map_get_int(map, "tilewidth");
     tm->tile_pixel_height = tmx_xml_map_get_int(map, "tileheight");
     tm->tile_size = tm->tile_pixel_width / ppm;
+    
+    /* Compute normalization scale factor if requested */
+    float norm_scale = 1.0f;
+    float world_w = tm->map_width * tm->tile_size;
+    float world_h = tm->map_height * tm->tile_size;
+    if (normalize) {
+        norm_scale = load_scale / world_w;  /* normalize width to load_scale (e.g., degrees) */
+        tm->norm_scale = norm_scale;
+    }
     
     /* Create physics world */
     if (!tm->has_world) {
@@ -784,97 +1163,193 @@ static int tilemapLoadTMXCmd(ClientData cd, Tcl_Interp *interp, int argc, char *
         int firstgid = tmx_xml_tileset_get_int(ts, "firstgid");
         int tw = tmx_xml_tileset_get_int(ts, "tilewidth");
         int th = tmx_xml_tileset_get_int(ts, "tileheight");
-        /* tmx_xml_tileset_get_string handles nested <image source="..."> */
+        const char *name = tmx_xml_tileset_get_name(ts);
         const char *src = tmx_xml_tileset_get_string(ts, "source");
+        const char *aseprite_json = tmx_xml_tileset_get_property(ts, "aseprite_json");
+        
+        int atlas_id = -1;
         if (src) {
-            if (load_atlas(tm, src, tw, th, firstgid) < 0) {
+            atlas_id = load_atlas(tm, src, tw, th, firstgid);
+            if (atlas_id < 0) {
                 fprintf(stderr, "tilemap: failed to load atlas '%s'\n", src);
             }
         }
-    }
-    
-/* Process tile layers */
-for (void *layer = tmx_xml_first_layer(map); layer; layer = tmx_xml_next_layer(layer)) {
-    const char *name = tmx_xml_layer_get_name(layer);
-    int is_collision = (name && strcmp(name, collision_layer) == 0);
-    int lw = tmx_xml_layer_get_int(layer, "width");
-    int lh = tmx_xml_layer_get_int(layer, "height");
-    void *data = tmx_xml_layer_get_data(layer);
-    if (!data) continue;
-    const char *enc = tmx_xml_data_get_encoding(data);
-    if (!enc || strcmp(enc, "csv") != 0) continue;
-    
-    int *tiles = parse_csv(tmx_xml_data_get_text(data), lw, lh);
-    if (!tiles) continue;
-    
-    for (int ty = 0; ty < lh; ty++) {
-        for (int tx = 0; tx < lw; tx++) {
-            int gid = tiles[ty * lw + tx];
-            if (gid == 0 || tm->tile_count >= MAX_TILES) continue;
-            ATLAS *atlas = find_atlas_for_gid(tm, gid);
-            if (!atlas) continue;
+        
+        // Register as sprite tileset if it has a name
+        if (name && tm->sprite_tileset_count < MAX_SPRITE_TILESETS) {
+            SPRITE_TILESET *sts = &tm->sprite_tilesets[tm->sprite_tileset_count];
+            strncpy(sts->name, name, 63);
+            sts->name[63] = '\0';
+            sts->firstgid = firstgid;
+            sts->tile_width = tw;
+            sts->tile_height = th;
+            sts->atlas_id = atlas_id;
+            sts->has_aseprite = 0;
+            sts->tile_collision_count = 0; 
             
-            /* ALWAYS create visual tile */
-            TILE_INSTANCE *t = &tm->tiles[tm->tile_count++];
-            float px = (tx + 0.5f) * tm->tile_pixel_width;
-            float py = (ty + 0.5f) * tm->tile_pixel_height;
-            t->x = px / ppm;
-            t->y = (tm->map_height * tm->tile_pixel_height - py) / ppm;
-            t->w = t->h = tm->tile_size;
-            t->atlas_id = (int)(atlas - tm->atlases);
-            get_tile_uvs(atlas, gid, &t->u0, &t->v0, &t->u1, &t->v1);
-            t->has_body = 0;
-            
-            /* Create collision bodies - only for first tile in each run */
-            if (is_collision) {
-                /* Check if this is the start of a new run */
-                int is_run_start = (tx == 0 || tiles[ty * lw + tx - 1] == 0);
-                
-                if (is_run_start) {
-                    /* Find run length */
-                    int run_length = 1;
-                    while (tx + run_length < lw && 
-                           tiles[ty * lw + tx + run_length] != 0) {
-                        run_length++;
-                    }
-                    
-                    /* Create merged body for the run */
-                    snprintf(t->name, sizeof(t->name), "tile_%d_%d", tx, ty);
-                    
-                    float run_width = run_length * tm->tile_size;
-// First tile starts at tx, last tile is at tx + run_length - 1
-// Center is at tx + (run_length - 1) / 2.0
-float center_tile_x = tx + (run_length - 1) * 0.5f;
-float center_px = (center_tile_x + 0.5f) * tm->tile_pixel_width;
-float center_x = center_px / ppm;
-float center_y = t->y;
-                    
-                    b2BodyDef bd = b2DefaultBodyDef();
-                    bd.type = b2_staticBody;
-                    bd.position = (b2Vec2){center_x, center_y};
-                    b2BodyId body = b2CreateBody(tm->world_id, &bd);
-                    
-                    b2Polygon box = b2MakeBox(run_width * 0.5f, tm->tile_size * 0.5f);
-                    b2ShapeDef sd = b2DefaultShapeDef();
-                    sd.density = 1.0f;
-                    sd.userData = (void *)t->name;
-                    b2ShapeId shape = b2CreatePolygonShape(body, &sd, &box);
-                    b2Shape_SetFriction(shape, 0.3f);
-                    t->has_body = 1;
-                    
-                    int newentry;
-                    Tcl_HashEntry *e = Tcl_CreateHashEntry(&tm->body_table, 
-                                                            t->name, &newentry);
-                    b2BodyId *stored = malloc(sizeof(b2BodyId));
-                    *stored = body;
-                    Tcl_SetHashValue(e, stored);
-                    tm->body_count++;
+            /* Load tile collision shapes - ADD THIS */
+            load_tile_collisions(ts, sts);
+
+            // Load Aseprite JSON if specified
+            if (aseprite_json) {
+                char json_path[MAX_PATH_LEN];
+                join_path(json_path, MAX_PATH_LEN, tm->base_path, aseprite_json);
+                if (aseprite_load(json_path, firstgid, &sts->aseprite) == 0) {
+                    sts->has_aseprite = 1;
+                    fprintf(stderr, "tilemap: loaded %d animations from '%s'\n", 
+                            sts->aseprite.animation_count, aseprite_json);
                 }
             }
+            
+            tm->sprite_tileset_count++;
         }
     }
-    free(tiles);  // <-- YES, still need this! Free the parsed CSV data
-}
+    
+    /* Process tile layers */
+    for (void *layer = tmx_xml_first_layer(map); layer; layer = tmx_xml_next_layer(layer)) {
+        const char *name = tmx_xml_layer_get_name(layer);
+        int is_collision = (name && strcmp(name, collision_layer) == 0);
+        int lw = tmx_xml_layer_get_int(layer, "width");
+        int lh = tmx_xml_layer_get_int(layer, "height");
+        void *data = tmx_xml_layer_get_data(layer);
+        if (!data) continue;
+        const char *enc = tmx_xml_data_get_encoding(data);
+
+        int *tiles = NULL;
+        if (strcmp(enc, "csv") == 0) {
+            tiles = parse_csv(tmx_xml_data_get_text(data), lw, lh);
+        } else if (strcmp(enc, "base64") == 0) {
+            const char *comp = tmx_xml_data_get_compression(data);
+            if (comp) {
+                fprintf(stderr, "tilemap: base64+%s compression not supported\n", comp);
+                continue;
+            }
+            tiles = decode_base64_tiles(tmx_xml_data_get_text(data), lw, lh);
+        }
+        if (!tiles) continue;
+        
+        for (int ty = 0; ty < lh; ty++) {
+            for (int tx = 0; tx < lw; tx++) {
+                int gid = tiles[ty * lw + tx];
+                if (gid == 0 || tm->tile_count >= MAX_TILES) continue;
+                ATLAS *atlas = find_atlas_for_gid(tm, gid);
+                if (!atlas) continue;
+                
+                /* Compute tile position in world coords */
+                float px = (tx + 0.5f) * tm->tile_pixel_width;
+                float py = (ty + 0.5f) * tm->tile_pixel_height;
+                float tile_x = px / ppm;
+                float tile_y = (tm->map_height * tm->tile_pixel_height - py) / ppm;
+                float tile_w = tm->tile_size;
+                float tile_h = tm->tile_size;
+                
+                /* Apply normalization: center then scale */
+                if (normalize) {
+                    tile_x = (tile_x - world_w * 0.5f) * norm_scale;
+                    tile_y = (tile_y - world_h * 0.5f) * norm_scale;
+                    tile_w *= norm_scale;
+                    tile_h *= norm_scale;
+                }
+                
+                /* Create visual tile */
+                TILE_INSTANCE *t = &tm->tiles[tm->tile_count++];
+                t->x = tile_x;
+                t->y = tile_y;
+                t->w = tile_w;
+                t->h = tile_h;
+                t->atlas_id = (int)(atlas - tm->atlases);
+                get_tile_uvs(atlas, gid, &t->u0, &t->v0, &t->u1, &t->v1);
+                t->has_body = 0;
+                
+                /* Create collision bodies */
+                if (is_collision) {
+                    TILE_COLLISION *tc_debug = get_tile_collision(tm, gid);
+
+                    int has_custom = (get_tile_collision(tm, gid) != NULL);
+                    
+                    if (has_custom) {
+                        /* Custom collision - create individual body with all shapes */
+                        snprintf(t->name, sizeof(t->name), "tile_%d_%d", tx, ty);
+                        
+                        b2BodyDef bd = b2DefaultBodyDef();
+                        bd.type = b2_staticBody;
+                        bd.position = (b2Vec2){tile_x, tile_y};
+                        b2BodyId body = b2CreateBody(tm->world_id, &bd);
+                        
+                        create_tile_collision_shapes(tm, body, tile_w, tile_h, gid, t->name);
+                        t->has_body = 1;
+                        
+                        /* Store in body table */
+                        int newentry;
+                        Tcl_HashEntry *e = Tcl_CreateHashEntry(&tm->body_table, t->name, &newentry);
+                        b2BodyId *stored = malloc(sizeof(b2BodyId));
+                        *stored = body;
+                        Tcl_SetHashValue(e, stored);
+                        tm->body_count++;                        
+                    } else {
+                        /* Default collision - use run-length optimization */
+                        /* A run starts if previous tile is empty OR has custom collision */
+                        int prev_gid = (tx > 0) ? tiles[ty * lw + tx - 1] : 0;
+                        int prev_has_custom = (prev_gid != 0 && get_tile_collision(tm, prev_gid) != NULL);
+                        int is_run_start = (tx == 0 || prev_gid == 0 || prev_has_custom);
+                        
+                        if (is_run_start) {
+                            /* Count run length - only include tiles without custom collision */
+                            int run_length = 1;
+                            while (tx + run_length < lw) {
+                                int next_gid = tiles[ty * lw + tx + run_length];
+                                if (next_gid == 0) break;
+                                if (get_tile_collision(tm, next_gid) != NULL) break;
+                                run_length++;
+                            }
+                            
+                            snprintf(t->name, sizeof(t->name), "tile_%d_%d", tx, ty);
+                            
+                            /* Compute body center and size in world coords */
+                            float center_tile_x = tx + (run_length - 1) * 0.5f;
+                            float center_px = (center_tile_x + 0.5f) * tm->tile_pixel_width;
+                            float body_x = center_px / ppm;
+                            float body_y = (tm->map_height * tm->tile_pixel_height -
+                                           (ty + 0.5f) * tm->tile_pixel_height) / ppm;
+                            float body_hw = (run_length * tm->tile_size) * 0.5f;
+                            float body_hh = tm->tile_size * 0.5f;
+                            
+                            /* Apply normalization */
+                            if (normalize) {
+                                body_x = (body_x - world_w * 0.5f) * norm_scale;
+                                body_y = (body_y - world_h * 0.5f) * norm_scale;
+                                body_hw *= norm_scale;
+                                body_hh *= norm_scale;
+                            }
+                            
+                            b2BodyDef bd = b2DefaultBodyDef();
+                            bd.type = b2_staticBody;
+                            bd.position = (b2Vec2){body_x, body_y};
+                            b2BodyId body = b2CreateBody(tm->world_id, &bd);
+                            
+                            b2Polygon box = b2MakeBox(body_hw, body_hh);
+                            b2ShapeDef sd = b2DefaultShapeDef();
+                            sd.density = 1.0f;
+                            sd.userData = (void *)t->name;
+                            b2ShapeId shape = b2CreatePolygonShape(body, &sd, &box);
+                            b2Shape_SetFriction(shape, 0.3f);
+                            t->has_body = 1;
+                            
+                            int newentry;
+                            Tcl_HashEntry *e = Tcl_CreateHashEntry(&tm->body_table,
+                                                                    t->name, &newentry);
+                            b2BodyId *stored = malloc(sizeof(b2BodyId));
+                            *stored = body;
+                            Tcl_SetHashValue(e, stored);
+                            tm->body_count++;
+                        }
+                    }
+                }            
+            }
+        }
+        free(tiles);
+    }
+    
     /* Process object layers */
     for (void *og = tmx_xml_first_objectgroup(map); og; og = tmx_xml_next_objectgroup(og)) {
         for (void *obj = tmx_xml_first_object(og); obj; obj = tmx_xml_next_object(obj)) {
@@ -883,7 +1358,7 @@ float center_y = t->y;
             const char *n = tmx_xml_object_get_string(obj, "name");
             const char *t = tmx_xml_object_get_string(obj, "type");
             if (!t || strlen(t) == 0) {
-                t = tmx_xml_object_get_string(obj, "class");  /* Tiled 1.9+ uses "class" instead of "type" */
+                t = tmx_xml_object_get_string(obj, "class");
             }
             strncpy(to->name, n ? n : "", 63);
             strncpy(to->type, t ? t : "", 63);
@@ -891,15 +1366,29 @@ float center_y = t->y;
             float py = tmx_xml_object_get_float(obj, "y", 0);
             float ow = tmx_xml_object_get_float(obj, "width", 0);
             float oh = tmx_xml_object_get_float(obj, "height", 0);
-            to->width = ow;
-            to->height = oh;
-            to->x = px / ppm;
-            to->y = (tm->map_height * tm->tile_pixel_height - py) / ppm;
+            
+            /* Convert to world coords */
+            float obj_x = px / ppm;
+            float obj_y = (tm->map_height * tm->tile_pixel_height - py) / ppm;
+            float obj_w = ow / ppm;
+            float obj_h = oh / ppm;
+            
+            /* Apply normalization */
+            if (normalize) {
+                obj_x = (obj_x - world_w * 0.5f) * norm_scale;
+                obj_y = (obj_y - world_h * 0.5f) * norm_scale;
+                obj_w *= norm_scale;
+                obj_h *= norm_scale;
+            }
+            
+            to->x = obj_x;
+            to->y = obj_y;
+            to->width = obj_w;
+            to->height = obj_h;
             to->is_point = tmx_xml_object_is_point(obj);
             
             /* Parse custom properties */
             to->prop_count = 0;
-            int has_sensor_prop = 0;
             void *props = tmx_xml_first_properties(obj);
             if (props) {
                 for (void *prop = tmx_xml_first_property(props); 
@@ -912,9 +1401,6 @@ float center_y = t->y;
                     strncpy(p->name, pn ? pn : "", 31);
                     strncpy(p->value, pv ? pv : "", 255);
                     strncpy(p->type, pt ? pt : "string", 15);
-                    if (pn && strcmp(pn, "sensor") == 0 && pv && strcmp(pv, "true") == 0) {
-                        has_sensor_prop = 1;
-                    }
                 }
             }
         }
@@ -923,18 +1409,16 @@ float center_y = t->y;
     tmx_xml_free(doc);
     tm->tiles_dirty = 1;
     
-    /* Auto-center the map */
-    if (tm->auto_center) {
+    /* Apply auto_center if not normalizing (legacy behavior) */
+    if (!normalize && tm->auto_center) {
         float ox = -(tm->map_width * tm->tile_size) / 2.0f;
         float oy = -(tm->map_height * tm->tile_size) / 2.0f;
         tm->offset_x = ox;
         tm->offset_y = oy;
-        /* Offset all tiles */
         for (int i = 0; i < tm->tile_count; i++) {
             tm->tiles[i].x += ox;
             tm->tiles[i].y += oy;
         }
-        /* Offset all static bodies */
         Tcl_HashEntry *e; Tcl_HashSearch s;
         for (e = Tcl_FirstHashEntry(&tm->body_table, &s); e; e = Tcl_NextHashEntry(&s)) {
             b2BodyId *body = Tcl_GetHashValue(e);
@@ -943,11 +1427,17 @@ float center_y = t->y;
             pos.y += oy;
             b2Body_SetTransform(*body, pos, b2Body_GetRotation(*body));
         }
-        /* Offset objects */
         for (int i = 0; i < tm->object_count; i++) {
             tm->objects[i].x += ox;
             tm->objects[i].y += oy;
         }
+    }
+    
+    /* Update tile_size for sprite creation consistency */
+    if (normalize) {
+        tm->tile_size *= norm_scale;
+        tm->offset_x = 0;
+        tm->offset_y = 0;
     }
     
     Tcl_Obj *result = Tcl_NewDictObj();
@@ -999,93 +1489,211 @@ static int tilemapCreateSpriteCmd(ClientData cd, Tcl_Interp *interp, int argc, c
     sp->w = (float)w; sp->h = (float)h;
     sp->angle = 0; sp->tile_id = tile_id; sp->atlas_id = atlas_id;
     sp->visible = 1; sp->has_body = 0;
-    
+    sp->body_offset_x = 0;
+    sp->body_offset_y = 0;
+
     if (atlas_id < tm->atlas_count) {
         ATLAS *a = &tm->atlases[atlas_id];
-        get_tile_uvs(a, tile_id + a->firstgid, &sp->u0, &sp->v0, &sp->u1, &sp->v1);
+        get_tile_uvs(a, tile_id, &sp->u0, &sp->v0, &sp->u1, &sp->v1);
     }
     Tcl_SetObjResult(interp, Tcl_NewIntObj(tm->sprite_count++));
     return TCL_OK;
 }
 
+/*
+ * Create collision shapes for a sprite from tile collision data
+ */
+static void create_sprite_collision_shapes(TILEMAP *tm, SPRITE *sp, 
+                                           TILE_COLLISION *tc,
+                                           float friction, float restitution,
+                                           float density, int is_sensor)
+{
+    b2ShapeDef sd = b2DefaultShapeDef();
+    sd.density = density;
+    sd.userData = (void *)sp->name;
+    sd.isSensor = is_sensor ? true : false;
+    sd.enableContactEvents = !is_sensor;
+    sd.enableSensorEvents = true;
+    
+    for (int i = 0; i < tc->shape_count; i++) {
+        COLLISION_SHAPE *cs = &tc->shapes[i];
+        b2ShapeId shape;
+        
+        if (cs->type == SHAPE_POLYGON) {
+            b2Vec2 points[MAX_COLLISION_VERTS];
+            for (int v = 0; v < cs->vert_count; v++) {
+                /* Convert normalized coords to sprite size */
+                float nx = cs->verts_x[v] - 0.5f;
+                float ny = 0.5f - cs->verts_y[v];  /* Flip Y */
+                points[v].x = nx * sp->w;
+                points[v].y = ny * sp->h;
+            }
+            
+            b2Hull hull = b2ComputeHull(points, cs->vert_count);
+            b2Polygon poly = b2MakePolygon(&hull, 0.0f);
+            shape = b2CreatePolygonShape(sp->body, &sd, &poly);
+            
+        } else if (cs->type == SHAPE_BOX) {
+            float cx = (cs->box_x + cs->box_w * 0.5f - 0.5f) * sp->w;
+            float cy = (0.5f - (cs->box_y + cs->box_h * 0.5f)) * sp->h;
+            float hw = cs->box_w * sp->w * 0.5f;
+            float hh = cs->box_h * sp->h * 0.5f;
+            
+            b2Polygon box = b2MakeOffsetBox(hw, hh, (b2Vec2){cx, cy}, b2Rot_identity);
+            shape = b2CreatePolygonShape(sp->body, &sd, &box);
+            
+        } else {
+            continue;
+        }
+        
+        b2Shape_SetFriction(shape, friction);
+        b2Shape_SetRestitution(shape, restitution);
+    }
+}
+
 static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
-    if (argc < 3) { 
-        Tcl_AppendResult(interp, "usage: ", argv[0], 
-            " tm sprite ?type? ?-fixedrotation 0/1? ?-damping N? ?-friction N? ?-density N? ?-restitution N? ?-sensor 0/1?", NULL); 
-        return TCL_ERROR; 
+    if (argc < 3) {
+        Tcl_AppendResult(interp, "usage: ", argv[0],
+            " tm sprite ?type? ?-fixedrotation 0/1? ?-damping N? ?-friction N? ?-density N? ?-restitution N? ?-sensor 0/1? ?-hitbox_w N? ?-hitbox_h N? ?-hitbox_offset_x N? ?-hitbox_offset_y N?", NULL); 
+        return TCL_ERROR;
     }
+    
     int id, sid;
     if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
     if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) return TCL_ERROR;
     TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
-    if (!tm->has_world) { Tcl_AppendResult(interp, "no physics world", NULL); return TCL_ERROR; }
     if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
     if (sid < 0 || sid >= tm->sprite_count) return TCL_ERROR;
     
-    /* Defaults - tuned for top-down feel */
-    const char *type_str = "dynamic";
-    int fixed_rotation = 1;      /* lock rotation by default */
-    double damping = 5.0;        /* friction-like slowdown */
-    double friction = 0.5;       /* surface friction */
-    double density = 1.0;
-    double restitution = 0.0;    /* bounciness (0=none, 1=full) */
-    int is_sensor = 0;    
+    SPRITE *sp = &tm->sprites[sid];
     
-    /* Parse arguments */
-    int i = 3;
-    if (argc > 3 && argv[3][0] != '-') {
-        type_str = argv[3];
-        i = 4;
-    }
-    for (; i < argc - 1; i += 2) {
-        if (strcmp(argv[i], "-fixedrotation") == 0) {
-            Tcl_GetInt(interp, argv[i+1], &fixed_rotation);
-        } else if (strcmp(argv[i], "-damping") == 0) {
-            Tcl_GetDouble(interp, argv[i+1], &damping);
-        } else if (strcmp(argv[i], "-friction") == 0) {
-            Tcl_GetDouble(interp, argv[i+1], &friction);
-        } else if (strcmp(argv[i], "-density") == 0) {
-            Tcl_GetDouble(interp, argv[i+1], &density);
-        } else if (strcmp(argv[i], "-restitution") == 0) {
-            Tcl_GetDouble(interp, argv[i+1], &restitution);
-        } else if (strcmp(argv[i], "-sensor") == 0) {
-            Tcl_GetInt(interp, argv[i+1], &is_sensor);
+    /* Parse options */
+    b2BodyType bt = b2_dynamicBody;
+    int fixed_rotation = 0, is_sensor = 0;
+    double damping = 0, friction = 0.3, density = 1.0, restitution = 0;
+    double hitbox_w = -1, hitbox_h = -1;           /* -1 = use auto/sprite size */
+    double hitbox_offset_x = 0, hitbox_offset_y = 0;
+    int hitbox_w_set = 0, hitbox_h_set = 0;
+    int offset_x_set = 0, offset_y_set = 0;
+    double corner_radius = 0.0;
+
+    for (int i = 3; i < argc; i++) {
+        if (strcmp(argv[i], "static") == 0) bt = b2_staticBody;
+        else if (strcmp(argv[i], "dynamic") == 0) bt = b2_dynamicBody;
+        else if (strcmp(argv[i], "kinematic") == 0) bt = b2_kinematicBody;
+        else if (i + 1 < argc) {
+            if (strcmp(argv[i], "-fixedrotation") == 0) {
+                Tcl_GetInt(interp, argv[++i], &fixed_rotation);
+            } else if (strcmp(argv[i], "-damping") == 0) {
+                Tcl_GetDouble(interp, argv[++i], &damping);
+            } else if (strcmp(argv[i], "-friction") == 0) {
+                Tcl_GetDouble(interp, argv[++i], &friction);
+            } else if (strcmp(argv[i], "-density") == 0) {
+                Tcl_GetDouble(interp, argv[++i], &density);
+            } else if (strcmp(argv[i], "-restitution") == 0) {
+                Tcl_GetDouble(interp, argv[++i], &restitution);
+            } else if (strcmp(argv[i], "-sensor") == 0) {
+                Tcl_GetInt(interp, argv[++i], &is_sensor);
+            } else if (strcmp(argv[i], "-hitbox_w") == 0) {
+                Tcl_GetDouble(interp, argv[++i], &hitbox_w);
+                hitbox_w_set = 1;
+            } else if (strcmp(argv[i], "-hitbox_h") == 0) {
+                Tcl_GetDouble(interp, argv[++i], &hitbox_h);
+                hitbox_h_set = 1;
+            } else if (strcmp(argv[i], "-hitbox_offset_x") == 0) {
+                Tcl_GetDouble(interp, argv[++i], &hitbox_offset_x);
+                offset_x_set = 1;
+            } else if (strcmp(argv[i], "-hitbox_offset_y") == 0) {
+                Tcl_GetDouble(interp, argv[++i], &hitbox_offset_y);
+                offset_y_set = 1;
+            } else if (strcmp(argv[i], "-corner_radius") == 0) {
+                Tcl_GetDouble(interp, argv[++i], &corner_radius);
+            }
         }
     }
     
-    b2BodyType bt = b2_dynamicBody;
-    if (strcmp(type_str, "static") == 0) bt = b2_staticBody;
-    else if (strcmp(type_str, "kinematic") == 0) bt = b2_kinematicBody;
+    /* Determine hitbox size and offset */
+    float hw, hh, off_x, off_y;
+    int use_tile_collision = 0;
     
-    SPRITE *sp = &tm->sprites[sid];
+    /* Check for tile collision shapes (only if no manual hitbox specified) */
+TILE_COLLISION *tc = NULL;
+if (!hitbox_w_set && !hitbox_h_set) {
+    fprintf(stderr, "DEBUG: sprite '%s' tile_id=%d\n", sp->name, sp->tile_id);
+    tc = get_tile_collision(tm, sp->tile_id);
+    fprintf(stderr, "DEBUG: get_tile_collision returned %p\n", (void*)tc);
+    if (tc && tc->shape_count > 0) {
+        use_tile_collision = 1;
+        fprintf(stderr, "USING tile collision\n");
+    }
+}
+    if (use_tile_collision) {
+        /* Will create shapes from tile collision data below */
+        off_x = offset_x_set ? (float)hitbox_offset_x : 0;
+        off_y = offset_y_set ? (float)hitbox_offset_y : 0;
+    } else if (sp->has_hitbox_data && !hitbox_w_set && !hitbox_h_set) {
+        /* Use Aseprite hitbox data */
+        hw = sp->w * sp->hitbox_w_ratio * 0.5f;
+        hh = sp->h * sp->hitbox_h_ratio * 0.5f;
+        off_x = offset_x_set ? (float)hitbox_offset_x : sp->w * sp->hitbox_offset_x;
+        off_y = offset_y_set ? (float)hitbox_offset_y : sp->h * sp->hitbox_offset_y;
+    } else {
+        /* Use manual values or sprite size */
+        hw = (hitbox_w_set && hitbox_w > 0) ? (float)hitbox_w * 0.5f : sp->w * 0.5f;
+        hh = (hitbox_h_set && hitbox_h > 0) ? (float)hitbox_h * 0.5f : sp->h * 0.5f;
+        off_x = (float)hitbox_offset_x;
+        off_y = (float)hitbox_offset_y;
+    }
+
+    /* Store offset for position sync in tilemap_update */
+    sp->body_offset_x = off_x;
+    sp->body_offset_y = off_y;
+
+    /* Create body at sprite position plus offset */
     b2BodyDef bd = b2DefaultBodyDef();
     bd.type = bt;
-    bd.position = (b2Vec2){sp->x, sp->y};
+    bd.position = (b2Vec2){sp->x + off_x, sp->y + off_y};
     bd.linearDamping = (float)damping;
     bd.angularDamping = 0.05f;
     bd.motionLocks.angularZ = fixed_rotation ? true : false;
     
     sp->body = b2CreateBody(tm->world_id, &bd);
     
-    b2Polygon box = b2MakeBox(sp->w * 0.5f, sp->h * 0.5f);
-    b2ShapeDef sd = b2DefaultShapeDef();
-    sd.density = (float)density;
-    sd.userData = (void *) sp->name;
-    sd.isSensor = is_sensor ? true : false;
-    sd.enableContactEvents = !is_sensor;  /* regular contacts for non-sensors */
-    sd.enableSensorEvents = true;  /* all shapes can trigger/detect sensor events */
-    b2ShapeId shape = b2CreatePolygonShape(sp->body, &sd, &box);
-    b2Shape_SetFriction(shape, (float)friction);
-    b2Shape_SetRestitution(shape, (float)restitution);
+    if (use_tile_collision) {
+        /* Create shapes from tile collision data */
+        create_sprite_collision_shapes(tm, sp, tc, 
+                                       (float)friction, (float)restitution,
+                                       (float)density, is_sensor);
+    } else {
+        /* Create single box shape */
+        b2Polygon box;
+        if (corner_radius > 0) {
+            box = b2MakeRoundedBox(hw, hh, (float)corner_radius);
+        } else {
+            box = b2MakeBox(hw, hh);
+        }
+        b2ShapeDef sd = b2DefaultShapeDef();
+        sd.density = (float)density;
+        sd.userData = (void *)sp->name;
+        sd.isSensor = is_sensor ? true : false;
+        sd.enableContactEvents = !is_sensor;
+        sd.enableSensorEvents = true;
+        b2ShapeId shape = b2CreatePolygonShape(sp->body, &sd, &box);
+        b2Shape_SetFriction(shape, (float)friction);
+        b2Shape_SetRestitution(shape, (float)restitution);
+    }
+    
     sp->has_body = 1;
     
+    /* Store in hash table */
     int newentry;
     Tcl_HashEntry *e = Tcl_CreateHashEntry(&tm->body_table, sp->name, &newentry);
     b2BodyId *stored = malloc(sizeof(b2BodyId));
     *stored = sp->body;
     Tcl_SetHashValue(e, stored);
     tm->body_count++;
+    
     return TCL_OK;
 }
 
@@ -1329,6 +1937,285 @@ static int tilemapSetSpriteVisibleCmd(ClientData cd, Tcl_Interp *interp, int arg
     return TCL_OK;
 }
 
+
+static int tilemapGetSpriteTilesetsCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " tm", NULL);
+        return TCL_ERROR;
+    }
+    
+    int id;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) {
+        Tcl_AppendResult(interp, "invalid tilemap", NULL);
+        return TCL_ERROR;
+    }
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    Tcl_Obj *list = Tcl_NewListObj(0, NULL);
+    
+    for (int i = 0; i < tm->sprite_tileset_count; i++) {
+        SPRITE_TILESET *sts = &tm->sprite_tilesets[i];
+        Tcl_Obj *dict = Tcl_NewDictObj();
+        
+        Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("name", -1), 
+                       Tcl_NewStringObj(sts->name, -1));
+        Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("firstgid", -1), 
+                       Tcl_NewIntObj(sts->firstgid));
+        Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("tile_width", -1), 
+                       Tcl_NewIntObj(sts->tile_width));
+        Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("tile_height", -1), 
+                       Tcl_NewIntObj(sts->tile_height));
+        Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("atlas_id", -1), 
+                       Tcl_NewIntObj(sts->atlas_id));
+        
+        /* Add animation names if available */
+        if (sts->has_aseprite) {
+            Tcl_Obj *anim_list = Tcl_NewListObj(0, NULL);
+            for (int j = 0; j < sts->aseprite.animation_count; j++) {
+                Tcl_ListObjAppendElement(interp, anim_list, 
+                    Tcl_NewStringObj(sts->aseprite.animations[j].name, -1));
+            }
+            Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("animations", -1), anim_list);
+        }
+        
+        Tcl_ListObjAppendElement(interp, list, dict);
+    }
+    
+    Tcl_SetObjResult(interp, list);
+    return TCL_OK;
+}
+
+/* tilemapGetAnimationFrames - get frame GIDs for a named animation */
+static int tilemapGetAnimationFramesCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 4) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " tm tileset_name animation_name", NULL);
+        return TCL_ERROR;
+    }
+    
+    int id;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) {
+        Tcl_AppendResult(interp, "invalid tilemap", NULL);
+        return TCL_ERROR;
+    }
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    SPRITE_TILESET *sts = find_sprite_tileset(tm, argv[2]);
+    if (!sts) {
+        Tcl_AppendResult(interp, "tileset not found: ", argv[2], NULL);
+        return TCL_ERROR;
+    }
+    
+    if (!sts->has_aseprite) {
+        Tcl_AppendResult(interp, "tileset has no animation data: ", argv[2], NULL);
+        return TCL_ERROR;
+    }
+    
+    AsepriteAnimation *anim = aseprite_find_animation(&sts->aseprite, argv[3]);
+    if (!anim) {
+        Tcl_AppendResult(interp, "animation not found: ", argv[3], NULL);
+        return TCL_ERROR;
+    }
+    
+    Tcl_Obj *list = Tcl_NewListObj(0, NULL);
+    for (int i = 0; i < anim->frame_count; i++) {
+        Tcl_ListObjAppendElement(interp, list, Tcl_NewIntObj(anim->frames[i]));
+    }
+    Tcl_SetObjResult(interp, list);
+    return TCL_OK;
+}
+
+/* tilemapSetSpriteAnimationByName - set sprite animation using tileset/animation names */
+static int tilemapSetSpriteAnimationByNameCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 5) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], 
+                         " tm sprite tileset_name animation_name ?fps? ?loop?", NULL);
+        return TCL_ERROR;
+    }
+    
+    int id, sid;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) {
+        Tcl_AppendResult(interp, "invalid tilemap", NULL);
+        return TCL_ERROR;
+    }
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
+    if (sid < 0 || sid >= tm->sprite_count) {
+        Tcl_AppendResult(interp, "invalid sprite", NULL);
+        return TCL_ERROR;
+    }
+    
+    SPRITE_TILESET *sts = find_sprite_tileset(tm, argv[3]);
+    if (!sts) {
+        Tcl_AppendResult(interp, "tileset not found: ", argv[3], NULL);
+        return TCL_ERROR;
+    }
+    
+    if (!sts->has_aseprite) {
+        Tcl_AppendResult(interp, "tileset has no animation data: ", argv[3], NULL);
+        return TCL_ERROR;
+    }
+    
+    AsepriteAnimation *anim = aseprite_find_animation(&sts->aseprite, argv[4]);
+    if (!anim) {
+        Tcl_AppendResult(interp, "animation not found: ", argv[4], NULL);
+        return TCL_ERROR;
+    }
+    
+    /* Get optional fps and loop */
+    float fps = anim->default_fps;
+    int loop = 1;
+    if (argc > 5) {
+        double d;
+        if (Tcl_GetDouble(interp, argv[5], &d) == TCL_OK) fps = (float)d;
+    }
+    if (argc > 6) {
+        Tcl_GetInt(interp, argv[6], &loop);
+    }
+    
+    /* Apply to sprite */
+    SPRITE *sp = &tm->sprites[sid];
+    sp->anim_frame_count = anim->frame_count > 32 ? 32 : anim->frame_count;
+    for (int i = 0; i < sp->anim_frame_count; i++) {
+        sp->anim_frames[i] = anim->frames[i];
+    }
+    sp->anim_fps = fps;
+    sp->anim_loop = loop;
+    sp->anim_current_frame = 0;
+    sp->anim_time = 0;
+    sp->anim_playing = 1;  /* auto-start */
+    
+    /* Update sprite's atlas to match tileset */
+    sp->atlas_id = sts->atlas_id;
+    
+    /* Set initial tile */
+    if (sp->anim_frame_count > 0) {
+        int tile_id = sp->anim_frames[0];
+        sp->tile_id = tile_id;
+        ATLAS *atlas = &tm->atlases[sp->atlas_id];
+        get_tile_uvs(atlas, tile_id, &sp->u0, &sp->v0, &sp->u1, &sp->v1);
+    }
+    
+    return TCL_OK;
+}
+
+/* tilemapCreateSpriteFromTileset - create sprite using tileset name */
+static int tilemapCreateSpriteFromTilesetCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    if (argc < 8) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], 
+                         " tm name tileset_name x y w h ?animation?", NULL);
+        return TCL_ERROR;
+    }
+    
+    int id;
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) {
+        Tcl_AppendResult(interp, "invalid tilemap", NULL);
+        return TCL_ERROR;
+    }
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    if (tm->sprite_count >= MAX_SPRITES) {
+        Tcl_AppendResult(interp, "max sprites reached", NULL);
+        return TCL_ERROR;
+    }
+    
+    SPRITE_TILESET *sts = find_sprite_tileset(tm, argv[3]);
+    if (!sts) {
+        Tcl_AppendResult(interp, "tileset not found: ", argv[3], NULL);
+        return TCL_ERROR;
+    }
+    
+    double x, y, w, h;
+    if (Tcl_GetDouble(interp, argv[4], &x) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetDouble(interp, argv[5], &y) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetDouble(interp, argv[6], &w) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetDouble(interp, argv[7], &h) != TCL_OK) return TCL_ERROR;
+    
+    /* Create sprite */
+    int sid = tm->sprite_count;
+    SPRITE *sp = &tm->sprites[tm->sprite_count++];
+    memset(sp, 0, sizeof(SPRITE));
+    
+    strncpy(sp->name, argv[2], 63);
+    sp->name[63] = '\0';
+    sp->x = (float)x;
+    sp->y = (float)y;
+    sp->w = (float)w;
+    sp->h = (float)h;
+    sp->angle = 0;
+    sp->atlas_id = sts->atlas_id;
+    sp->tile_id = sts->firstgid;  /* default to first tile */
+    sp->visible = 1;
+    sp->has_body = 0;
+    sp->body_offset_x = 0;
+    sp->body_offset_y = 0;
+
+    if (sts->has_aseprite && sts->aseprite.has_hitbox) {
+        sp->has_hitbox_data = 1;
+        sp->hitbox_w_ratio = sts->aseprite.hitbox_width_ratio;
+        sp->hitbox_h_ratio = sts->aseprite.hitbox_height_ratio;
+        sp->hitbox_offset_x = sts->aseprite.hitbox_offset_x;
+        sp->hitbox_offset_y = sts->aseprite.hitbox_offset_y;
+        
+        /* Scale sprite size so hitbox portion matches requested size */
+        float old_w = sp->w;
+        float old_h = sp->h;
+        sp->w = sp->w / sp->hitbox_w_ratio;
+        sp->h = sp->h / sp->hitbox_h_ratio;
+        
+        /* Adjust position so the visible character (hitbox region) stays centered
+           at the user-specified position, not the frame center */
+        float w_increase = sp->w - old_w;  // 5.455 - 1.875 = 3.58
+        float h_increase = sp->h - old_h;  // 5.455 - 1.875 = 3.58
+        
+        /* Shift by half the increase to keep hitbox centered at original position */
+        sp->x += w_increase * 0.5f * sp->hitbox_offset_x;
+        sp->y += h_increase * 0.5f * sp->hitbox_offset_y;
+    } else {
+        sp->has_hitbox_data = 0;
+    }
+
+    /* Set initial UVs */
+    if (sts->atlas_id >= 0 && sts->atlas_id < tm->atlas_count) {
+        ATLAS *atlas = &tm->atlases[sts->atlas_id];
+        get_tile_uvs(atlas, sp->tile_id, &sp->u0, &sp->v0, &sp->u1, &sp->v1);
+    }
+    
+    /* Apply animation if specified */
+    if (argc > 8 && sts->has_aseprite) {
+        AsepriteAnimation *anim = aseprite_find_animation(&sts->aseprite, argv[8]);
+        if (anim) {
+            sp->anim_frame_count = anim->frame_count > 32 ? 32 : anim->frame_count;
+            for (int i = 0; i < sp->anim_frame_count; i++) {
+                sp->anim_frames[i] = anim->frames[i];
+            }
+            sp->anim_fps = anim->default_fps;
+            sp->anim_loop = 1;
+            sp->anim_current_frame = 0;
+            sp->anim_time = 0;
+            sp->anim_playing = 1;
+            
+            /* Set initial tile from animation */
+            if (sp->anim_frame_count > 0) {
+                sp->tile_id = sp->anim_frames[0];
+                ATLAS *atlas = &tm->atlases[sp->atlas_id];
+                get_tile_uvs(atlas, sp->tile_id, &sp->u0, &sp->v0, &sp->u1, &sp->v1);
+            }
+        }
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(sid));
+    return TCL_OK;
+}
+
 /* tilemapGetMapInfo - get map dimensions for auto-centering */
 static int tilemapGetMapInfoCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
@@ -1412,7 +2299,7 @@ static int tilemapSetSpriteTileCmd(ClientData cd, Tcl_Interp *interp, int argc, 
     sp->tile_id = tile_id;
     if (sp->atlas_id < tm->atlas_count) {
         ATLAS *a = &tm->atlases[sp->atlas_id];
-        get_tile_uvs(a, tile_id + a->firstgid, &sp->u0, &sp->v0, &sp->u1, &sp->v1);
+        get_tile_uvs(a, tile_id, &sp->u0, &sp->v0, &sp->u1, &sp->v1);
     }
     return TCL_OK;
 }
@@ -1970,6 +2857,15 @@ int Tilemap_Init(Tcl_Interp *interp)
     Tcl_CreateCommand(interp, "tilemapGetCameraInfo", (Tcl_CmdProc*)tilemapGetCameraInfoCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapQueryPoint", (Tcl_CmdProc*)tilemapQueryPointCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapQueryAABB", (Tcl_CmdProc*)tilemapQueryAABBCmd, (ClientData)OBJList, NULL);
+        Tcl_CreateCommand(interp, "tilemapGetSpriteTilesets", 
+        (Tcl_CmdProc*)tilemapGetSpriteTilesetsCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapGetAnimationFrames", 
+        (Tcl_CmdProc*)tilemapGetAnimationFramesCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapSetSpriteAnimationByName", 
+        (Tcl_CmdProc*)tilemapSetSpriteAnimationByNameCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapCreateSpriteFromTileset", 
+        (Tcl_CmdProc*)tilemapCreateSpriteFromTilesetCmd, (ClientData)OBJList, NULL);
+
 
     
     return TCL_OK;
