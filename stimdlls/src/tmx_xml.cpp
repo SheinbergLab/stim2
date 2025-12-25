@@ -95,10 +95,64 @@ void* tmx_xml_next_tileset(void* tileset)
     return ts->NextSiblingElement("tileset");
 }
 
+/*
+ * Load and cache external tileset, returns the <tileset> element from .tsx
+ * Uses a simple static cache (good enough for sequential tileset iteration)
+ */
+static char g_base_path[512] = {0};
+
+void tmx_xml_set_base_path(const char* path)
+{
+    if (path) {
+        strncpy(g_base_path, path, sizeof(g_base_path) - 1);
+    } else {
+        g_base_path[0] = '\0';
+    }
+}
+
+static XMLElement* load_external_tileset(const char* tsx_path)
+{
+    static XMLDocument tsx_doc;
+    static char loaded_path[512] = {0};
+    
+    /* Build full path */
+    char full_path[512];
+    if (g_base_path[0] && tsx_path[0] != '/') {
+        snprintf(full_path, sizeof(full_path), "%s/%s", g_base_path, tsx_path);
+    } else {
+        strncpy(full_path, tsx_path, sizeof(full_path) - 1);
+    }
+    
+    if (strcmp(loaded_path, full_path) != 0) {
+        if (tsx_doc.LoadFile(full_path) != XML_SUCCESS) {
+            fprintf(stderr, "tmx_xml: failed to load '%s': %s\n", 
+                    full_path, tsx_doc.ErrorStr());
+            loaded_path[0] = '\0';
+            return nullptr;
+        }
+        strncpy(loaded_path, full_path, sizeof(loaded_path) - 1);
+    }
+    return tsx_doc.FirstChildElement("tileset");
+}
+
 int tmx_xml_tileset_get_int(void* tileset, const char* attr)
 {
     if (!tileset) return 0;
     XMLElement* ts = static_cast<XMLElement*>(tileset);
+    
+    /* firstgid is always in the TMX, not the external TSX */
+    if (strcmp(attr, "firstgid") == 0) {
+        return ts->IntAttribute(attr, 0);
+    }
+    
+    /* Check for external tileset for other attributes */
+    const char* tsx_source = ts->Attribute("source");
+    if (tsx_source) {
+        XMLElement* ext_ts = load_external_tileset(tsx_source);
+        if (!ext_ts) return 0;
+        ts = ext_ts;
+    }
+    
     return ts->IntAttribute(attr, 0);
 }
 
@@ -107,12 +161,20 @@ const char* tmx_xml_tileset_get_string(void* tileset, const char* attr)
     if (!tileset) return nullptr;
     XMLElement* ts = static_cast<XMLElement*>(tileset);
     
-    /* Handle nested image element for "source" */
+    /* Check for external tileset */
+    const char* tsx_source = ts->Attribute("source");
+    if (tsx_source) {
+        XMLElement* ext_ts = load_external_tileset(tsx_source);
+        if (!ext_ts) return nullptr;
+        ts = ext_ts;  /* Use external tileset element from here on */
+    }
+    
+    /* Handle "source" -> get nested image source */
     if (strcmp(attr, "source") == 0) {
         XMLElement* img = ts->FirstChildElement("image");
-        if (img) return img->Attribute("source");
-        return nullptr;
+        return img ? img->Attribute("source") : nullptr;
     }
+    
     return ts->Attribute(attr);
 }
 
@@ -166,6 +228,13 @@ const char* tmx_xml_data_get_text(void* data)
     if (!data) return nullptr;
     XMLElement* d = static_cast<XMLElement*>(data);
     return d->GetText();
+}
+
+const char* tmx_xml_data_get_compression(void* data)
+{
+    if (!data) return nullptr;
+    XMLElement* d = static_cast<XMLElement*>(data);
+    return d->Attribute("compression");
 }
 
 const char* tmx_xml_data_get_encoding(void* data)
@@ -291,6 +360,167 @@ const char* tmx_xml_property_get_type(void* prop)
     XMLElement* p = static_cast<XMLElement*>(prop);
     const char* type = p->Attribute("type");
     return type ? type : "string";  /* default to string */
+}
+/*
+ * Get tileset name attribute
+ */
+const char* tmx_xml_tileset_get_name(void* tileset)
+{
+    if (!tileset) return nullptr;
+    XMLElement* ts = static_cast<XMLElement*>(tileset);
+    
+    /* Check for external tileset */
+    const char* tsx_source = ts->Attribute("source");
+    if (tsx_source) {
+        XMLElement* ext_ts = load_external_tileset(tsx_source);
+        if (ext_ts) {
+            return ext_ts->Attribute("name");
+        }
+        return nullptr;
+    }
+    
+    return ts->Attribute("name");
+}
+
+/*
+ * Get the <properties> element from a tileset (for custom properties)
+ */
+void* tmx_xml_tileset_get_properties(void* tileset)
+{
+    if (!tileset) return nullptr;
+    XMLElement* ts = static_cast<XMLElement*>(tileset);
+    
+    /* Check for external tileset */
+    const char* tsx_source = ts->Attribute("source");
+    if (tsx_source) {
+        XMLElement* ext_ts = load_external_tileset(tsx_source);
+        if (ext_ts) {
+            return ext_ts->FirstChildElement("properties");
+        }
+        return nullptr;
+    }
+    
+    return ts->FirstChildElement("properties");
+}
+
+/*
+ * Helper to get a specific property value from a tileset by property name
+ * Returns NULL if property not found
+ */
+const char* tmx_xml_tileset_get_property(void* tileset, const char* prop_name)
+{
+    if (!tileset || !prop_name) return nullptr;
+    
+    void* props = tmx_xml_tileset_get_properties(tileset);
+    if (!props) return nullptr;
+    
+    XMLElement* properties = static_cast<XMLElement*>(props);
+    for (XMLElement* prop = properties->FirstChildElement("property"); 
+         prop; 
+         prop = prop->NextSiblingElement("property")) {
+        const char* name = prop->Attribute("name");
+        if (name && strcmp(name, prop_name) == 0) {
+            return prop->Attribute("value");
+        }
+    }
+    return nullptr;
+}
+
+/*
+ * Additions to tmx_xml.cpp for tile collision shape support
+ * Add these functions to your existing tmx_xml.cpp file
+ */
+
+/*
+ * Tile iteration within a tileset (for collision shapes)
+ * Note: Must handle external tilesets (.tsx files)
+ */
+void* tmx_xml_tileset_first_tile(void* tileset)
+{
+    if (!tileset) return nullptr;
+    XMLElement* ts = static_cast<XMLElement*>(tileset);
+    
+    /* Check for external tileset */
+    const char* tsx_source = ts->Attribute("source");
+    if (tsx_source) {
+        XMLElement* ext_ts = load_external_tileset(tsx_source);
+        if (!ext_ts) return nullptr;
+        ts = ext_ts;
+    }
+    
+    return ts->FirstChildElement("tile");
+}
+
+void* tmx_xml_tileset_next_tile(void* tile)
+{
+    if (!tile) return nullptr;
+    XMLElement* t = static_cast<XMLElement*>(tile);
+    return t->NextSiblingElement("tile");
+}
+
+/*
+ * Get tile local ID (0-based index within tileset)
+ */
+int tmx_xml_tile_get_id(void* tile)
+{
+    if (!tile) return -1;
+    XMLElement* t = static_cast<XMLElement*>(tile);
+    return t->IntAttribute("id", -1);
+}
+
+/*
+ * Get the objectgroup (collision shapes) for a tile
+ */
+void* tmx_xml_tile_get_objectgroup(void* tile)
+{
+    if (!tile) return nullptr;
+    XMLElement* t = static_cast<XMLElement*>(tile);
+    return t->FirstChildElement("objectgroup");
+}
+
+/*
+ * Check if object has a polygon child element
+ */
+int tmx_xml_object_has_polygon(void* obj)
+{
+    if (!obj) return 0;
+    XMLElement* o = static_cast<XMLElement*>(obj);
+    return o->FirstChildElement("polygon") != nullptr ? 1 : 0;
+}
+
+/*
+ * Get polygon points string (format: "x1,y1 x2,y2 x3,y3 ...")
+ * Points are relative to the object's x,y position
+ */
+const char* tmx_xml_object_get_polygon_points(void* obj)
+{
+    if (!obj) return nullptr;
+    XMLElement* o = static_cast<XMLElement*>(obj);
+    XMLElement* poly = o->FirstChildElement("polygon");
+    if (!poly) return nullptr;
+    return poly->Attribute("points");
+}
+
+/*
+ * Check if object has a polyline child element
+ */
+int tmx_xml_object_has_polyline(void* obj)
+{
+    if (!obj) return 0;
+    XMLElement* o = static_cast<XMLElement*>(obj);
+    return o->FirstChildElement("polyline") != nullptr ? 1 : 0;
+}
+
+/*
+ * Get polyline points string
+ */
+const char* tmx_xml_object_get_polyline_points(void* obj)
+{
+    if (!obj) return nullptr;
+    XMLElement* o = static_cast<XMLElement*>(obj);
+    XMLElement* poly = o->FirstChildElement("polyline");
+    if (!poly) return nullptr;
+    return poly->Attribute("points");
 }
 
 } /* extern "C" */
