@@ -110,6 +110,7 @@ const char* tmx_xml_object_get_polyline_points(void* obj);
 
 #define MAX_TILES 8192
 #define MAX_SPRITES 256
+#define MAX_FRAMES 64
 #define MAX_ATLASES 4
 #define MAX_OBJECTS 256
 #define MAX_PATH_LEN 512
@@ -155,10 +156,16 @@ typedef struct {
     char name[64];
     float x, y, angle, w, h;
     float u0, v0, u1, v1;
+
+    int sprite_sheet_id;         // Index into sprite_tilesets[] (-1 if unused)
+    int current_frame;           // Current frame index
+    int uses_sprite_sheet;       // 0=old grid mode, 1=new frame mode
+
     int atlas_id, tile_id, visible, has_body;
     b2BodyId body;
     float body_offset_x;  /* hitbox offset from sprite center, world units */
     float body_offset_y;
+
     /* Hitbox data from Aseprite */
     int has_hitbox_data;
     float hitbox_w_ratio;
@@ -237,7 +244,15 @@ typedef struct {
     AsepriteData aseprite;                      /* parsed animation data */
     int has_aseprite;                           /* 1 if aseprite data loaded */
 
-    TILE_COLLISION tile_collisions[MAX_TILE_COLLISIONS];
+    struct {
+        float x, y, w, h;           // pixel rect in sprite sheet
+        float u0, v0, u1, v1;       // normalized texture coords
+    } frames[MAX_FRAMES];
+    int frame_count;
+
+    float canonical_w, canonical_h;
+
+    TILE_COLLISION frame_collisions[MAX_TILE_COLLISIONS];
     int tile_collision_count;
 } SPRITE_TILESET;
 
@@ -398,22 +413,49 @@ static void rebuild_vbo(TILEMAP *tm) {
     tm->tiles_dirty = 0;
 }
 
-static void build_sprite_verts(SPRITE *sp, float *v) {
-    float hw = sp->w*0.5f, hh = sp->h*0.5f;
+static void build_sprite_verts(TILEMAP *tm, SPRITE *sp, float *v) {
+    float w, h, u0, v0, u1, v1;
+    
+    // Check if using sprite sheet
+    if (sp->uses_sprite_sheet) {
+        SPRITE_TILESET *ts = &tm->sprite_tilesets[sp->sprite_sheet_id];
+        
+        // Use canonical size for consistent rendering across frames
+        w = ts->canonical_w / tm->pixels_per_meter; 
+        h = ts->canonical_h / tm->pixels_per_meter;
+        
+        // Get UVs for current frame
+        u0 = ts->frames[sp->current_frame].u0;
+        v0 = ts->frames[sp->current_frame].v0;
+        u1 = ts->frames[sp->current_frame].u1;
+        v1 = ts->frames[sp->current_frame].v1;
+    } else {
+        // OLD: Use sprite's direct fields (grid-based)
+        w = sp->w;
+        h = sp->h;
+        u0 = sp->u0;
+        v0 = sp->v0;
+        u1 = sp->u1;
+        v1 = sp->v1;
+    }
+    
+    float hw = w*0.5f, hh = h*0.5f;
     float c = cosf(sp->angle), s = sinf(sp->angle);
     float corners[4][2] = {{-hw,-hh},{hw,-hh},{hw,hh},{-hw,hh}};
     float r[4][2];
+    
     for (int i = 0; i < 4; i++) {
         r[i][0] = sp->x + corners[i][0]*c - corners[i][1]*s;
         r[i][1] = sp->y + corners[i][0]*s + corners[i][1]*c;
     }
+    
     int vi = 0;
-    v[vi++]=r[0][0]; v[vi++]=r[0][1]; v[vi++]=sp->u0; v[vi++]=sp->v1;
-    v[vi++]=r[1][0]; v[vi++]=r[1][1]; v[vi++]=sp->u1; v[vi++]=sp->v1;
-    v[vi++]=r[2][0]; v[vi++]=r[2][1]; v[vi++]=sp->u1; v[vi++]=sp->v0;
-    v[vi++]=r[0][0]; v[vi++]=r[0][1]; v[vi++]=sp->u0; v[vi++]=sp->v1;
-    v[vi++]=r[2][0]; v[vi++]=r[2][1]; v[vi++]=sp->u1; v[vi++]=sp->v0;
-    v[vi++]=r[3][0]; v[vi++]=r[3][1]; v[vi++]=sp->u0; v[vi++]=sp->v0;
+    v[vi++]=r[0][0]; v[vi++]=r[0][1]; v[vi++]=u0; v[vi++]=v1;
+    v[vi++]=r[1][0]; v[vi++]=r[1][1]; v[vi++]=u1; v[vi++]=v1;
+    v[vi++]=r[2][0]; v[vi++]=r[2][1]; v[vi++]=u1; v[vi++]=v0;
+    v[vi++]=r[0][0]; v[vi++]=r[0][1]; v[vi++]=u0; v[vi++]=v1;
+    v[vi++]=r[2][0]; v[vi++]=r[2][1]; v[vi++]=u1; v[vi++]=v0;
+    v[vi++]=r[3][0]; v[vi++]=r[3][1]; v[vi++]=u0; v[vi++]=v0;
 }
 
 static void camera_init(CAMERA *cam) {
@@ -554,7 +596,7 @@ static void tilemap_draw(GR_OBJ *obj) {
             //if (!sp->visible) continue;
             if (sp->atlas_id >= 0 && sp->atlas_id < tm->atlas_count)
                 glBindTexture(GL_TEXTURE_2D, tm->atlases[sp->atlas_id].texture);
-            build_sprite_verts(sp, sv);
+            build_sprite_verts(tm, sp, sv);
             glBindBuffer(GL_ARRAY_BUFFER, tm->sprite_vbo);
             glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(sv), sv);
             if (sp->visible) glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -629,13 +671,21 @@ static void tilemap_update(GR_OBJ *obj) {
                         sp->anim_playing = 0;
                     }
                 }
-                /* Update tile UVs */
-                sp->tile_id = sp->anim_frames[sp->anim_current_frame];
-                if (sp->atlas_id < tm->atlas_count) {
-                    ATLAS *a = &tm->atlases[sp->atlas_id];
-                    get_tile_uvs(a, sp->tile_id,
-                                 &sp->u0, &sp->v0, &sp->u1, &sp->v1);
+                if (sp->uses_sprite_sheet) {
+                    // Sprite sheet - update current_frame directly
+                    sp->current_frame = sp->anim_frames[sp->anim_current_frame];
+                    
+                    // Note: UVs are retrieved in build_sprite_verts() based on current_frame
+                } else {
+                    // OLD: Grid tileset - update tile_id and UVs
+                    sp->tile_id = sp->anim_frames[sp->anim_current_frame];
+                    if (sp->atlas_id < tm->atlas_count) {
+                        ATLAS *a = &tm->atlases[sp->atlas_id];
+                        get_tile_uvs(a, sp->tile_id,
+                                     &sp->u0, &sp->v0, &sp->u1, &sp->v1);
+                    }
                 }
+
             }
         }
     }
@@ -738,6 +788,50 @@ static int load_atlas(TILEMAP *tm, const char *file, int tw, int th, int firstgi
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
     stbi_image_free(data);
+    return tm->atlas_count++;
+}
+
+static int load_packed_atlas(TILEMAP *tm, const char *file) {
+    if (tm->atlas_count >= MAX_ATLASES) return -1;
+    
+    char path[MAX_PATH_LEN];
+    join_path(path, MAX_PATH_LEN, tm->base_path, file);
+    
+    int w, h, ch;
+    stbi_set_flip_vertically_on_load(0);
+    unsigned char *data = stbi_load(path, &w, &h, &ch, 4);
+    if (!data) { 
+        fprintf(stderr, "tilemap: can't load %s\n", path); 
+        return -1; 
+    }
+    
+    ATLAS *a = &tm->atlases[tm->atlas_count];
+    strncpy(a->filename, file, MAX_PATH_LEN - 1);
+    a->width = w;
+    a->height = h;
+    
+    // For packed atlases, tile size is meaningless
+    a->tile_width = 0;
+    a->tile_height = 0;
+    a->cols = 0;
+    a->rows = 0;
+    a->tile_u = 0;
+    a->tile_v = 0;
+    a->firstgid = 0;
+    
+    // Create OpenGL texture
+    glGenTextures(1, &a->texture);
+    glBindTexture(GL_TEXTURE_2D, a->texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    
+    stbi_image_free(data);
+    
+    fprintf(stderr, "Loaded packed atlas '%s' (%dx%d)\n", file, w, h);
+    
     return tm->atlas_count++;
 }
 
@@ -857,9 +951,16 @@ static void load_tile_collisions(void *tileset_xml, SPRITE_TILESET *sts)
 {
     sts->tile_collision_count = 0;
     
+    // Initialize canonical size for grid-based tilesets
+    if (sts->tile_width > 0 && sts->tile_height > 0) {
+        sts->canonical_w = sts->tile_width;
+        sts->canonical_h = sts->tile_height;
+    }
+    sts->frame_count = 0;  // Grid-based tilesets don't use frame arrays
+    
     /* Initialize all tiles to no collision */
     for (int i = 0; i < MAX_TILE_COLLISIONS; i++) {
-        sts->tile_collisions[i].shape_count = 0;
+        sts->frame_collisions[i].shape_count = 0;
     }
     
     /* Iterate through <tile> elements */
@@ -873,7 +974,7 @@ static void load_tile_collisions(void *tileset_xml, SPRITE_TILESET *sts)
         void *objgroup = tmx_xml_tile_get_objectgroup(tile);
         if (!objgroup) continue;
         
-        TILE_COLLISION *tc = &sts->tile_collisions[tile_id];
+        TILE_COLLISION *tc = &sts->frame_collisions[tile_id];  // CHANGED
         tc->shape_count = 0;
         
         /* Iterate through all collision objects in this tile */
@@ -944,7 +1045,7 @@ static TILE_COLLISION* get_tile_collision(TILEMAP *tm, int gid)
     int local_id = gid - best_sts->firstgid;
     if (local_id < 0 || local_id >= MAX_TILE_COLLISIONS) return NULL;
     
-    TILE_COLLISION *tc = &best_sts->tile_collisions[local_id];
+    TILE_COLLISION *tc = &best_sts->frame_collisions[local_id];
     if (tc->shape_count == 0) return NULL;
     
     return tc;
@@ -1033,15 +1134,22 @@ static int tilemapCreateCmd(ClientData cd, Tcl_Interp *interp, int argc, char *a
     tm->pixels_per_meter = 32.0f;
     tm->gravity = (b2Vec2){0, -10};
     tm->substep_count = 4;
-    tm->auto_center = 1;  /* default to auto-center */
+    tm->auto_center = 1;
     tm->collision_callback[0] = '\0';
     Tcl_InitHashTable(&tm->body_table, TCL_STRING_KEYS);
     camera_init(&tm->camera);
+    
+    // CREATE BOX2D WORLD IMMEDIATELY
+    b2WorldDef worldDef = b2DefaultWorldDef();
+    worldDef.gravity = tm->gravity;
+    tm->world_id = b2CreateWorld(&worldDef);
+    tm->has_world = 1;
+    
     if (tilemap_init_gl(tm) < 0) { free(tm); return TCL_ERROR; }
     GR_CLIENTDATA(obj) = tm;
     GR_ACTIONFUNCP(obj) = tilemap_draw;
     GR_UPDATEFUNCP(obj) = (UPDATE_FUNC)tilemap_update;
-    GR_DELETEFUNCP(obj) = tilemap_delete;
+    GR_DELETEFUNCP(obj) = (RESET_FUNC)tilemap_reset;
     GR_RESETFUNCP(obj) = (RESET_FUNC)tilemap_reset;
     Tcl_SetObjResult(interp, Tcl_NewIntObj(gobjAddObj(olist, obj)));
     return TCL_OK;
@@ -1515,6 +1623,20 @@ static void create_sprite_collision_shapes(TILEMAP *tm, SPRITE *sp,
     sd.enableContactEvents = !is_sensor;
     sd.enableSensorEvents = true;
     
+    // Get sprite dimensions (handle both old and new sprite systems)
+    float sprite_w, sprite_h;
+    
+    if (sp->uses_sprite_sheet) {
+        // NEW: Get from frame data
+        SPRITE_TILESET *ts = &tm->sprite_tilesets[sp->sprite_sheet_id];
+        sprite_w = ts->frames[sp->current_frame].w / tm->pixels_per_meter;
+        sprite_h = ts->frames[sp->current_frame].h / tm->pixels_per_meter;
+    } else {
+        // OLD: Use sprite's direct fields
+        sprite_w = sp->w;
+        sprite_h = sp->h;
+    }
+    
     for (int i = 0; i < tc->shape_count; i++) {
         COLLISION_SHAPE *cs = &tc->shapes[i];
         b2ShapeId shape;
@@ -1525,19 +1647,27 @@ static void create_sprite_collision_shapes(TILEMAP *tm, SPRITE *sp,
                 /* Convert normalized coords to sprite size */
                 float nx = cs->verts_x[v] - 0.5f;
                 float ny = 0.5f - cs->verts_y[v];  /* Flip Y */
-                points[v].x = nx * sp->w;
-                points[v].y = ny * sp->h;
+                points[v].x = nx * sprite_w;
+                points[v].y = ny * sprite_h;
+                
+                // DEBUG
+                fprintf(stderr, "  vert[%d]: norm=(%.3f,%.3f) → (%.3f,%.3f) world\n",
+                        v, cs->verts_x[v], cs->verts_y[v], points[v].x, points[v].y);
             }
             
+            fprintf(stderr, "  Computing hull for %d vertices (sprite %gx%g)...\n", 
+                    cs->vert_count, sprite_w, sprite_h);
             b2Hull hull = b2ComputeHull(points, cs->vert_count);
+            fprintf(stderr, "  Hull OK: %d vertices\n", hull.count);
+            
             b2Polygon poly = b2MakePolygon(&hull, 0.0f);
             shape = b2CreatePolygonShape(sp->body, &sd, &poly);
             
         } else if (cs->type == SHAPE_BOX) {
-            float cx = (cs->box_x + cs->box_w * 0.5f - 0.5f) * sp->w;
-            float cy = (0.5f - (cs->box_y + cs->box_h * 0.5f)) * sp->h;
-            float hw = cs->box_w * sp->w * 0.5f;
-            float hh = cs->box_h * sp->h * 0.5f;
+            float cx = (cs->box_x + cs->box_w * 0.5f - 0.5f) * sprite_w;
+            float cy = (0.5f - (cs->box_y + cs->box_h * 0.5f)) * sprite_h;
+            float hw = cs->box_w * sprite_w * 0.5f;
+            float hh = cs->box_h * sprite_h * 0.5f;
             
             b2Polygon box = b2MakeOffsetBox(hw, hh, (b2Vec2){cx, cy}, b2Rot_identity);
             shape = b2CreatePolygonShape(sp->body, &sd, &box);
@@ -1550,7 +1680,6 @@ static void create_sprite_collision_shapes(TILEMAP *tm, SPRITE *sp,
         b2Shape_SetRestitution(shape, restitution);
     }
 }
-
 static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 3) {
@@ -1572,7 +1701,7 @@ static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, 
     b2BodyType bt = b2_dynamicBody;
     int fixed_rotation = 0, is_sensor = 0;
     double damping = 0, friction = 0.3, density = 1.0, restitution = 0;
-    double hitbox_w = -1, hitbox_h = -1;           /* -1 = use auto/sprite size */
+    double hitbox_w = -1, hitbox_h = -1;
     double hitbox_offset_x = 0, hitbox_offset_y = 0;
     int hitbox_w_set = 0, hitbox_h_set = 0;
     int offset_x_set = 0, offset_y_set = 0;
@@ -1616,20 +1745,38 @@ static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, 
     /* Determine hitbox size and offset */
     float hw, hh, off_x, off_y;
     int use_tile_collision = 0;
+    TILE_COLLISION *tc = NULL;
     
-    /* Check for tile collision shapes (only if no manual hitbox specified) */
-TILE_COLLISION *tc = NULL;
-if (!hitbox_w_set && !hitbox_h_set) {
-    fprintf(stderr, "DEBUG: sprite '%s' tile_id=%d\n", sp->name, sp->tile_id);
-    tc = get_tile_collision(tm, sp->tile_id);
-    fprintf(stderr, "DEBUG: get_tile_collision returned %p\n", (void*)tc);
-    if (tc && tc->shape_count > 0) {
-        use_tile_collision = 1;
-        fprintf(stderr, "USING tile collision\n");
+    // ============================================================================
+    // Check sprite sheet collision first (if using sprite sheets)
+    // ============================================================================
+    if (sp->uses_sprite_sheet && !hitbox_w_set && !hitbox_h_set) {
+        SPRITE_TILESET *ts = &tm->sprite_tilesets[sp->sprite_sheet_id];
+        tc = &ts->frame_collisions[sp->current_frame];
+        if (tc->shape_count > 0) {
+            use_tile_collision = 1;
+            fprintf(stderr, "USING sprite sheet collision for '%s' frame %d (%d shapes)\n", 
+                    sp->name, sp->current_frame, tc->shape_count);
+        }
     }
-}
+    
+    // ============================================================================
+    // Check tile collision (if not using sprite sheet collision)
+    // ============================================================================
+    if (!use_tile_collision && !hitbox_w_set && !hitbox_h_set) {
+        fprintf(stderr, "DEBUG: sprite '%s' tile_id=%d\n", sp->name, sp->tile_id);
+        tc = get_tile_collision(tm, sp->tile_id);
+        fprintf(stderr, "DEBUG: get_tile_collision returned %p\n", (void*)tc);
+        if (tc && tc->shape_count > 0) {
+            use_tile_collision = 1;
+            fprintf(stderr, "USING tile collision\n");
+        }
+    }
+    
+    // ============================================================================
+    // Determine hitbox dimensions
+    // ============================================================================
     if (use_tile_collision) {
-        /* Will create shapes from tile collision data below */
         off_x = offset_x_set ? (float)hitbox_offset_x : 0;
         off_y = offset_y_set ? (float)hitbox_offset_y : 0;
     } else if (sp->has_hitbox_data && !hitbox_w_set && !hitbox_h_set) {
@@ -1646,7 +1793,6 @@ if (!hitbox_w_set && !hitbox_h_set) {
         off_y = (float)hitbox_offset_y;
     }
 
-    /* Store offset for position sync in tilemap_update */
     sp->body_offset_x = off_x;
     sp->body_offset_y = off_y;
 
@@ -1661,7 +1807,7 @@ if (!hitbox_w_set && !hitbox_h_set) {
     sp->body = b2CreateBody(tm->world_id, &bd);
     
     if (use_tile_collision) {
-        /* Create shapes from tile collision data */
+        /* Create shapes from collision data (works for both tiles AND sprite sheets!) */
         create_sprite_collision_shapes(tm, sp, tc, 
                                        (float)friction, (float)restitution,
                                        (float)density, is_sensor);
@@ -2233,6 +2379,438 @@ static int tilemapGetMapInfoCmd(ClientData cd, Tcl_Interp *interp, int argc, cha
     Tcl_DictObjPut(interp, result, Tcl_NewStringObj("world_height",-1), Tcl_NewDoubleObj(tm->map_height * tm->tile_size));
     Tcl_DictObjPut(interp, result, Tcl_NewStringObj("pixels_per_meter",-1), Tcl_NewDoubleObj(tm->pixels_per_meter));
     Tcl_SetObjResult(interp, result);
+    return TCL_OK;
+}
+
+static int tilemapAddSpriteSheetCmd(ClientData cd, Tcl_Interp *interp, 
+                                     int objc, Tcl_Obj *const objv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    
+    // Create reusable keys ONCE
+    Tcl_Obj *k_texture = Tcl_NewStringObj("_texture", -1); Tcl_IncrRefCount(k_texture);
+    Tcl_Obj *k_width   = Tcl_NewStringObj("width", -1);    Tcl_IncrRefCount(k_width);
+    Tcl_Obj *k_height  = Tcl_NewStringObj("height", -1);   Tcl_IncrRefCount(k_height);
+    Tcl_Obj *k_image   = Tcl_NewStringObj("image", -1);    Tcl_IncrRefCount(k_image);
+    Tcl_Obj *k_frame_rect = Tcl_NewStringObj("frame_rect", -1); Tcl_IncrRefCount(k_frame_rect);
+    Tcl_Obj *k_x       = Tcl_NewStringObj("x", -1);        Tcl_IncrRefCount(k_x);
+    Tcl_Obj *k_y       = Tcl_NewStringObj("y", -1);        Tcl_IncrRefCount(k_y);
+    Tcl_Obj *k_w       = Tcl_NewStringObj("w", -1);        Tcl_IncrRefCount(k_w);
+    Tcl_Obj *k_h       = Tcl_NewStringObj("h", -1);        Tcl_IncrRefCount(k_h);
+    Tcl_Obj *k_meta    = Tcl_NewStringObj("_metadata", -1);Tcl_IncrRefCount(k_meta);
+    Tcl_Obj *k_canvas  = Tcl_NewStringObj("canonical_canvas", -1); Tcl_IncrRefCount(k_canvas);
+    Tcl_Obj *k_fixtures= Tcl_NewStringObj("fixtures", -1); Tcl_IncrRefCount(k_fixtures);
+    Tcl_Obj *k_verts   = Tcl_NewStringObj("vertices", -1); Tcl_IncrRefCount(k_verts);
+    Tcl_Obj *k_tex_w   = Tcl_NewStringObj("texture_width", -1);  Tcl_IncrRefCount(k_tex_w);
+    Tcl_Obj *k_tex_h   = Tcl_NewStringObj("texture_height", -1); Tcl_IncrRefCount(k_tex_h);
+    Tcl_Obj *k_anims   = Tcl_NewStringObj("animations", -1); Tcl_IncrRefCount(k_anims);
+
+    int result = TCL_OK;
+    static char frame_names[MAX_FRAMES][64];
+
+    // CHANGED: Now expects 3 args (tm, name, sheetDict) instead of 4
+    if (objc != 4) {
+        Tcl_WrongNumArgs(interp, 1, objv, "tm name sheetDict");
+        result = TCL_ERROR;
+        goto cleanup;
+    }
+    
+    int id;
+    if (Tcl_GetIntFromObj(interp, objv[1], &id) != TCL_OK) {
+        result = TCL_ERROR;
+        goto cleanup;
+    }
+
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) {
+        result = TCL_ERROR;
+        goto cleanup;
+    }
+
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    const char *name = Tcl_GetString(objv[2]);
+    
+    if (tm->sprite_tileset_count >= MAX_SPRITE_TILESETS) {
+        Tcl_SetResult(interp, "Too many sprite tilesets", TCL_STATIC);
+        result = TCL_ERROR;
+        goto cleanup;
+    }
+    
+    SPRITE_TILESET *ts = &tm->sprite_tilesets[tm->sprite_tileset_count];
+    memset(ts, 0, sizeof(SPRITE_TILESET));
+    strncpy(ts->name, name, sizeof(ts->name) - 1);
+    
+    // ========================================================================
+    // Parse Combined Sheet Data (ONE dict with frames, metadata, collision)
+    // ========================================================================
+
+    Tcl_Obj *sheet_dict = objv[3];  // CHANGED: Single dict
+    Tcl_DictSearch search;
+    Tcl_Obj *key, *value;
+    int done;
+    
+    // Get metadata (includes texture info, animations, etc.)
+    Tcl_Obj *meta_obj = NULL;
+    int texture_width = 1024, texture_height = 1024;
+    const char *png_filename = NULL;
+    
+    if (Tcl_DictObjGet(interp, sheet_dict, k_meta, &meta_obj) == TCL_OK && meta_obj) {
+        Tcl_Obj *tw_obj = NULL, *th_obj = NULL, *img_obj = NULL;
+        
+        // Get texture dimensions
+        if (Tcl_DictObjGet(interp, meta_obj, k_tex_w, &tw_obj) == TCL_OK && tw_obj) {
+            Tcl_GetIntFromObj(interp, tw_obj, &texture_width);
+        }
+        if (Tcl_DictObjGet(interp, meta_obj, k_tex_h, &th_obj) == TCL_OK && th_obj) {
+            Tcl_GetIntFromObj(interp, th_obj, &texture_height);
+        }
+        
+        // Get PNG filename
+        if (Tcl_DictObjGet(interp, meta_obj, k_image, &img_obj) == TCL_OK && img_obj) {
+            png_filename = Tcl_GetString(img_obj);
+        }
+        
+        // Get canonical canvas size
+        Tcl_Obj *canvas_obj = NULL;
+        if (Tcl_DictObjGet(interp, meta_obj, k_canvas, &canvas_obj) == TCL_OK && canvas_obj) {
+            Tcl_Obj *cw_obj = NULL, *ch_obj = NULL;
+            Tcl_DictObjGet(interp, canvas_obj, k_w, &cw_obj);
+            Tcl_DictObjGet(interp, canvas_obj, k_h, &ch_obj);
+            
+            int cw = 0, ch = 0;
+            if (cw_obj) Tcl_GetIntFromObj(interp, cw_obj, &cw);
+            if (ch_obj) Tcl_GetIntFromObj(interp, ch_obj, &ch);
+            ts->canonical_w = cw;
+            ts->canonical_h = ch;
+        }
+        
+        // Parse animations if present
+        Tcl_Obj *anims_obj = NULL;
+        if (Tcl_DictObjGet(interp, meta_obj, k_anims, &anims_obj) == TCL_OK && anims_obj) {
+            // Mark as having animation data
+            ts->has_aseprite = 1;
+            
+            // Initialize aseprite structure
+            memset(&ts->aseprite, 0, sizeof(AsepriteData));
+            
+            // Parse each animation
+            Tcl_DictSearch anim_search;
+            Tcl_Obj *anim_key, *anim_value;
+            int anim_done;
+            
+            if (Tcl_DictObjFirst(interp, anims_obj, &anim_search, &anim_key, &anim_value, &anim_done) == TCL_OK) {
+                int anim_count = 0;
+                
+                for (; !anim_done && anim_count < 32; Tcl_DictObjNext(&anim_search, &anim_key, &anim_value, &anim_done)) {
+                    const char *anim_name = Tcl_GetString(anim_key);
+                    
+                    AsepriteAnimation *anim = &ts->aseprite.animations[anim_count];
+                    strncpy(anim->name, anim_name, sizeof(anim->name) - 1);
+                    
+                    // Get frames array
+                    Tcl_Obj *frames_obj = NULL;
+                    if (Tcl_DictObjGet(interp, anim_value, 
+                                      Tcl_NewStringObj("frames", -1), &frames_obj) == TCL_OK && frames_obj) {
+                        
+                        Tcl_Size frame_list_count;
+                        Tcl_Obj **frame_list;
+                        if (Tcl_ListObjGetElements(interp, frames_obj, &frame_list_count, &frame_list) == TCL_OK) {
+                            anim->frame_count = (frame_list_count > 32) ? 32 : frame_list_count;
+                            
+                            for (int f = 0; f < anim->frame_count; f++) {
+                                int frame_idx;
+                                Tcl_GetIntFromObj(interp, frame_list[f], &frame_idx);
+                                anim->frames[f] = frame_idx;
+                            }
+                        }
+                    }
+                    
+                    // Get FPS (optional)
+                    Tcl_Obj *fps_obj = NULL;
+                    if (Tcl_DictObjGet(interp, anim_value, 
+                                      Tcl_NewStringObj("fps", -1), &fps_obj) == TCL_OK && fps_obj) {
+                        double fps;
+                        Tcl_GetDoubleFromObj(interp, fps_obj, &fps);
+                        anim->default_fps = (float)fps;
+                    } else {
+                        anim->default_fps = 10.0f;  // Default
+                    }
+                    
+                    // Get direction (optional)
+                    Tcl_Obj *dir_obj = NULL;
+                    if (Tcl_DictObjGet(interp, anim_value, 
+                                      Tcl_NewStringObj("direction", -1), &dir_obj) == TCL_OK && dir_obj) {
+                        const char *direction = Tcl_GetString(dir_obj);
+                        if (strcmp(direction, "reverse") == 0) {
+                            anim->direction = ANIM_REVERSE;
+                        } else if (strcmp(direction, "pingpong") == 0) {
+                            anim->direction = ANIM_PINGPONG;
+                        } else {
+                            anim->direction = ANIM_FORWARD;
+                        }
+                    } else {
+                        anim->direction = ANIM_FORWARD;
+                    }
+                    
+                    anim_count++;
+                }
+                
+                ts->aseprite.animation_count = anim_count;
+                Tcl_DictObjDone(&anim_search);
+                
+                fprintf(stderr, "Loaded %d animations for '%s'\n", anim_count, name);
+            }
+        }
+    }
+
+    // Parse frames (they now include both visual AND collision data)
+    ts->frame_count = 0;
+
+    if (Tcl_DictObjFirst(interp, sheet_dict, &search, &key, &value, &done) != TCL_OK) {
+        result = TCL_ERROR;
+        goto cleanup;
+    }
+    
+    for (; !done; Tcl_DictObjNext(&search, &key, &value, &done)) {
+        const char *frame_name = Tcl_GetString(key);
+        if (frame_name[0] == '_') continue;  // Skip metadata
+        
+        if (ts->frame_count >= MAX_FRAMES) break;
+        
+        // Store frame name for collision matching
+        strncpy(frame_names[ts->frame_count], frame_name, 63);
+        frame_names[ts->frame_count][63] = '\0';
+        
+        // Get frame_rect (visual data)
+        Tcl_Obj *frame_rect_obj = NULL;
+        if (Tcl_DictObjGet(interp, value, k_frame_rect, &frame_rect_obj) == TCL_OK && frame_rect_obj) {
+            Tcl_Obj *x_obj = NULL, *y_obj = NULL, *w_obj = NULL, *h_obj = NULL;
+            
+            Tcl_DictObjGet(interp, frame_rect_obj, k_x, &x_obj);
+            Tcl_DictObjGet(interp, frame_rect_obj, k_y, &y_obj);
+            Tcl_DictObjGet(interp, frame_rect_obj, k_w, &w_obj);
+            Tcl_DictObjGet(interp, frame_rect_obj, k_h, &h_obj);
+            
+            int x = 0, y = 0, w = 0, h = 0;
+            
+            if (x_obj) Tcl_GetIntFromObj(interp, x_obj, &x);
+            if (y_obj) Tcl_GetIntFromObj(interp, y_obj, &y);
+            if (w_obj) Tcl_GetIntFromObj(interp, w_obj, &w);
+            if (h_obj) Tcl_GetIntFromObj(interp, h_obj, &h);
+            
+            ts->frames[ts->frame_count].x = x;
+            ts->frames[ts->frame_count].y = y;
+            ts->frames[ts->frame_count].w = w;
+            ts->frames[ts->frame_count].h = h;
+            
+            ts->frames[ts->frame_count].u0 = (float)x / texture_width;
+            ts->frames[ts->frame_count].v0 = (float)y / texture_height;
+            ts->frames[ts->frame_count].u1 = (float)(x + w) / texture_width;
+            ts->frames[ts->frame_count].v1 = (float)(y + h) / texture_height;
+        }
+        
+        // Parse collision fixtures
+        TILE_COLLISION *coll = &ts->frame_collisions[ts->frame_count];
+        coll->shape_count = 0;
+        
+        Tcl_Obj *fixtures_obj = NULL;
+        if (Tcl_DictObjGet(interp, value, k_fixtures, &fixtures_obj) == TCL_OK && fixtures_obj) {
+            Tcl_Size fixture_count;
+            Tcl_Obj **fixtures;
+            if (Tcl_ListObjGetElements(interp, fixtures_obj, &fixture_count, &fixtures) == TCL_OK) {
+                
+                for (int i = 0; i < fixture_count && i < MAX_SHAPES_PER_TILE; i++) {
+                    COLLISION_SHAPE *shape = &coll->shapes[coll->shape_count];
+                    
+                    Tcl_Obj *verts_obj = NULL;
+                    if (Tcl_DictObjGet(interp, fixtures[i], k_verts, &verts_obj) != TCL_OK || !verts_obj) {
+                        continue;
+                    }
+                    
+                    Tcl_Size vert_count;
+                    Tcl_Obj **verts;
+                    if (Tcl_ListObjGetElements(interp, verts_obj, &vert_count, &verts) != TCL_OK) continue;
+                    
+                    shape->type = SHAPE_POLYGON;
+                    shape->vert_count = 0;
+                    
+                    for (int v = 0; v < vert_count && v < MAX_COLLISION_VERTS; v++) {
+                        Tcl_Obj *vx_obj = NULL, *vy_obj = NULL;
+                        Tcl_DictObjGet(interp, verts[v], k_x, &vx_obj);
+                        Tcl_DictObjGet(interp, verts[v], k_y, &vy_obj);
+                        
+                        double vx = 0.0, vy = 0.0;
+                        if (vx_obj) Tcl_GetDoubleFromObj(interp, vx_obj, &vx);
+                        if (vy_obj) Tcl_GetDoubleFromObj(interp, vy_obj, &vy);
+                        
+                        if (ts->frames[ts->frame_count].w > 0)
+                            shape->verts_x[shape->vert_count] = vx / ts->frames[ts->frame_count].w;
+                        if (ts->frames[ts->frame_count].h > 0)
+                            shape->verts_y[shape->vert_count] = vy / ts->frames[ts->frame_count].h;
+                            
+                        shape->vert_count++;
+                    }
+                    
+                    if (shape->vert_count >= 3) {
+                        coll->shape_count++;
+                    }
+                }
+            }
+        }
+        
+        ts->frame_count++;
+    }
+    Tcl_DictObjDone(&search);
+    
+    // ========================================================================
+    // Load PNG Texture
+    // ========================================================================  
+
+    if (png_filename) {
+        int atlas_id = load_packed_atlas(tm, png_filename);
+        ts->atlas_id = (atlas_id >= 0) ? atlas_id : -1;
+    } else {
+        ts->atlas_id = -1;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(tm->sprite_tileset_count));
+    tm->sprite_tileset_count++;
+
+cleanup:
+    Tcl_DecrRefCount(k_texture);
+    Tcl_DecrRefCount(k_width);
+    Tcl_DecrRefCount(k_height);
+    Tcl_DecrRefCount(k_image);
+    Tcl_DecrRefCount(k_frame_rect);
+    Tcl_DecrRefCount(k_x);
+    Tcl_DecrRefCount(k_y);
+    Tcl_DecrRefCount(k_w);
+    Tcl_DecrRefCount(k_h);
+    Tcl_DecrRefCount(k_meta);
+    Tcl_DecrRefCount(k_canvas);
+    Tcl_DecrRefCount(k_fixtures);
+    Tcl_DecrRefCount(k_verts);
+    Tcl_DecrRefCount(k_tex_w);
+    Tcl_DecrRefCount(k_tex_h);
+    Tcl_DecrRefCount(k_anims);
+
+    return result;
+}
+
+static int tilemapCreateSpriteFromSheetCmd(ClientData cd, Tcl_Interp *interp,
+                                            int objc, Tcl_Obj *const objv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    
+    if (objc < 3 || objc > 6) {
+        Tcl_WrongNumArgs(interp, 1, objv, "tm sheetName ?x y? ?frameIdx?");
+        return TCL_ERROR;
+    }
+    
+    int id;
+    if (Tcl_GetIntFromObj(interp, objv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) return TCL_ERROR;
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    const char *sheet_name = Tcl_GetString(objv[2]);
+    
+    // Find sprite sheet by name
+    int sheet_id = -1;
+    for (int i = 0; i < tm->sprite_tileset_count; i++) {
+        if (strcmp(tm->sprite_tilesets[i].name, sheet_name) == 0) {
+            sheet_id = i;
+            break;
+        }
+    }
+    
+    if (sheet_id < 0) {
+        Tcl_SetResult(interp, "Sprite sheet not found", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    if (tm->sprite_count >= MAX_SPRITES) {
+        Tcl_SetResult(interp, "Too many sprites", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    SPRITE *sp = &tm->sprites[tm->sprite_count];
+    memset(sp, 0, sizeof(SPRITE));
+    
+    sp->sprite_sheet_id = sheet_id;
+    sp->uses_sprite_sheet = 1;
+    sp->current_frame = 0;
+    
+    // Parse optional position
+    if (objc >= 5) {
+        double x, y;
+        Tcl_GetDoubleFromObj(interp, objv[3], &x);
+        Tcl_GetDoubleFromObj(interp, objv[4], &y);
+        sp->x = x;
+        sp->y = y;
+    } else {
+        sp->x = 0;
+        sp->y = 0;
+    }
+    
+    // Parse optional frame index
+    if (objc >= 6) {
+        int frame_idx;
+        Tcl_GetIntFromObj(interp, objv[5], &frame_idx);
+        SPRITE_TILESET *ts = &tm->sprite_tilesets[sheet_id];
+        if (frame_idx >= 0 && frame_idx < ts->frame_count) {
+            sp->current_frame = frame_idx;
+        }
+    }
+    
+    sp->angle = 0;
+    sp->visible = 1;
+    sp->has_body = 0;
+    sp->atlas_id = tm->sprite_tilesets[sheet_id].atlas_id;
+    
+    strncpy(sp->name, sheet_name, sizeof(sp->name) - 1);
+    
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(tm->sprite_count));
+    tm->sprite_count++;
+    
+    return TCL_OK;
+}
+
+static int tilemapSetSpriteFrameCmd(ClientData cd, Tcl_Interp *interp,
+                                     int objc, Tcl_Obj *const objv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)cd;
+    
+    if (objc != 4) {
+        Tcl_WrongNumArgs(interp, 1, objv, "tm spriteIdx frameIdx");
+        return TCL_ERROR;
+    }
+    
+    int id;
+    if (Tcl_GetIntFromObj(interp, objv[1], &id) != TCL_OK) return TCL_ERROR;
+    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) return TCL_ERROR;
+    TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    int sprite_idx, frame_idx;
+    Tcl_GetIntFromObj(interp, objv[2], &sprite_idx);
+    Tcl_GetIntFromObj(interp, objv[3], &frame_idx);
+    
+    if (sprite_idx < 0 || sprite_idx >= tm->sprite_count) {
+        Tcl_SetResult(interp, "Invalid sprite index", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    SPRITE *sp = &tm->sprites[sprite_idx];
+    
+    if (!sp->uses_sprite_sheet) {
+        Tcl_SetResult(interp, "Sprite not using sprite sheet", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    SPRITE_TILESET *ts = &tm->sprite_tilesets[sp->sprite_sheet_id];
+    
+    if (frame_idx < 0 || frame_idx >= ts->frame_count) {
+        Tcl_SetResult(interp, "Invalid frame index", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    sp->current_frame = frame_idx;
+    
     return TCL_OK;
 }
 
@@ -2820,18 +3398,23 @@ int Tilemap_Init(Tcl_Interp *interp)
         Tcl_PkgRequire(interp, "Tcl", "8.5-", 0)
 #endif
         == NULL) return TCL_ERROR;
-    
+
     if (TilemapID < 0) { TilemapID = gobjRegisterType(); gladLoadGL(); }
     
-    Tcl_CreateCommand(interp, "tilemapCreate", (Tcl_CmdProc*)tilemapCreateCmd, (ClientData)OBJList, NULL);
-    Tcl_CreateCommand(interp, "tilemapLoadTMX", (Tcl_CmdProc*)tilemapLoadTMXCmd, (ClientData)OBJList, NULL);
-    Tcl_CreateCommand(interp, "tilemapSetGravity", (Tcl_CmdProc*)tilemapSetGravityCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapCreate", 
+        (Tcl_CmdProc*)tilemapCreateCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapLoadTMX", 
+        (Tcl_CmdProc*)tilemapLoadTMXCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapSetGravity", 
+        (Tcl_CmdProc*)tilemapSetGravityCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapCreateSprite", 
-(Tcl_CmdProc*)tilemapCreateSpriteCmd, (ClientData)OBJList, NULL);
+        (Tcl_CmdProc*)tilemapCreateSpriteCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapRemoveSprite", 
-(Tcl_CmdProc*)tilemapRemoveSpriteCmd, (ClientData) OBJList, NULL);
-	Tcl_CreateCommand(interp, "tilemapSpriteAddBody", (Tcl_CmdProc*)tilemapSpriteAddBodyCmd, (ClientData)OBJList, NULL);
-    Tcl_CreateCommand(interp, "tilemapSetSpritePosition", (Tcl_CmdProc*)tilemapSetSpritePositionCmd, (ClientData)OBJList, NULL);
+        (Tcl_CmdProc*)tilemapRemoveSpriteCmd, (ClientData) OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapSpriteAddBody", 
+        (Tcl_CmdProc*)tilemapSpriteAddBodyCmd, (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "tilemapSetSpritePosition", 
+        (Tcl_CmdProc*)tilemapSetSpritePositionCmd, (ClientData)OBJList, NULL);
         Tcl_CreateCommand(interp, "tilemapSetSpriteRotation", (Tcl_CmdProc*)tilemapSetSpriteRotationCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapSetSpriteTile", (Tcl_CmdProc*)tilemapSetSpriteTileCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapGetObjects", (Tcl_CmdProc*)tilemapGetObjectsCmd, (ClientData)OBJList, NULL);
@@ -2865,6 +3448,15 @@ int Tilemap_Init(Tcl_Interp *interp)
         (Tcl_CmdProc*)tilemapSetSpriteAnimationByNameCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "tilemapCreateSpriteFromTileset", 
         (Tcl_CmdProc*)tilemapCreateSpriteFromTilesetCmd, (ClientData)OBJList, NULL);
+
+Tcl_CreateObjCommand(interp, "tilemapAddSpriteSheet", 
+    tilemapAddSpriteSheetCmd, (ClientData)OBJList, NULL);
+
+Tcl_CreateObjCommand(interp, "tilemapCreateSpriteFromSheet", 
+    tilemapCreateSpriteFromSheetCmd, (ClientData)OBJList, NULL);
+
+Tcl_CreateObjCommand(interp, "tilemapSetSpriteFrame", 
+    tilemapSetSpriteFrameCmd, (ClientData)OBJList, NULL);
 
 
     
