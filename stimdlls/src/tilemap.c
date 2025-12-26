@@ -109,20 +109,22 @@ const char* tmx_xml_object_get_polyline_points(void* obj);
 #endif
 
 #define MAX_TILES 8192
-#define MAX_SPRITES 256
-#define MAX_FRAMES 64
-#define MAX_ATLASES 4
+#define MAX_SPRITES 512
+#define MAX_FRAMES 512
+#define MAX_ATLASES 16
 #define MAX_OBJECTS 256
 #define MAX_PATH_LEN 512
 #define MAX_COLLISION_VERTS 8    /* Box2D limit for polygon vertices */
-#define MAX_SHAPES_PER_TILE 4       /* Max collision shapes per tile */
+#define MAX_SHAPES_PER_TILE 8    /* Max collision shapes per tile */
 #define MAX_TILE_COLLISIONS 256  /* Max tiles with custom collision per tileset */
+#define MAX_SPRITE_TILESETS 16
 
 /* Collision shape types */
 typedef enum {
     SHAPE_NONE = 0,
     SHAPE_BOX,
-    SHAPE_POLYGON
+    SHAPE_POLYGON,
+    SHAPE_CIRCLE
 } CollisionShapeType;
 
 /* Single collision shape within a tile */
@@ -137,6 +139,11 @@ typedef struct {
     float verts_x[MAX_COLLISION_VERTS];
     float verts_y[MAX_COLLISION_VERTS];
     int vert_count;
+
+    /* For CIRCLE type */
+    float circle_x, circle_y;  // Center offset from sprite origin
+    float circle_radius;
+
 } COLLISION_SHAPE;
 
 /* All collision shapes for a single tile */
@@ -234,8 +241,6 @@ typedef struct {
     int use_bounds;
 } CAMERA;
 
-
-#define MAX_SPRITE_TILESETS 8
 typedef struct {
     char name[64];                              /* tileset name e.g. "PinkStar" */
     int firstgid;
@@ -830,8 +835,6 @@ static int load_packed_atlas(TILEMAP *tm, const char *file) {
     
     stbi_image_free(data);
     
-    fprintf(stderr, "Loaded packed atlas '%s' (%dx%d)\n", file, w, h);
-    
     return tm->atlas_count++;
 }
 
@@ -1015,11 +1018,6 @@ static void load_tile_collisions(void *tileset_xml, SPRITE_TILESET *sts)
         if (tc->shape_count > 0) {
             sts->tile_collision_count++;
         }
-    }
-    
-    if (sts->tile_collision_count > 0) {
-        fprintf(stderr, "tilemap: loaded collision shapes for %d tiles in '%s'\n",
-                sts->tile_collision_count, sts->name);
     }
 }
 
@@ -1304,8 +1302,6 @@ static int tilemapLoadTMXCmd(ClientData cd, Tcl_Interp *interp, int argc, char *
                 join_path(json_path, MAX_PATH_LEN, tm->base_path, aseprite_json);
                 if (aseprite_load(json_path, firstgid, &sts->aseprite) == 0) {
                     sts->has_aseprite = 1;
-                    fprintf(stderr, "tilemap: loaded %d animations from '%s'\n", 
-                            sts->aseprite.animation_count, aseprite_json);
                 }
             }
             
@@ -1649,16 +1645,9 @@ static void create_sprite_collision_shapes(TILEMAP *tm, SPRITE *sp,
                 float ny = 0.5f - cs->verts_y[v];  /* Flip Y */
                 points[v].x = nx * sprite_w;
                 points[v].y = ny * sprite_h;
-                
-                // DEBUG
-                fprintf(stderr, "  vert[%d]: norm=(%.3f,%.3f) → (%.3f,%.3f) world\n",
-                        v, cs->verts_x[v], cs->verts_y[v], points[v].x, points[v].y);
             }
             
-            fprintf(stderr, "  Computing hull for %d vertices (sprite %gx%g)...\n", 
-                    cs->vert_count, sprite_w, sprite_h);
             b2Hull hull = b2ComputeHull(points, cs->vert_count);
-            fprintf(stderr, "  Hull OK: %d vertices\n", hull.count);
             
             b2Polygon poly = b2MakePolygon(&hull, 0.0f);
             shape = b2CreatePolygonShape(sp->body, &sd, &poly);
@@ -1672,6 +1661,27 @@ static void create_sprite_collision_shapes(TILEMAP *tm, SPRITE *sp,
             b2Polygon box = b2MakeOffsetBox(hw, hh, (b2Vec2){cx, cy}, b2Rot_identity);
             shape = b2CreatePolygonShape(sp->body, &sd, &box);
             
+        } else if (cs->type == SHAPE_CIRCLE) {
+            // Circle data is normalized (0-1), convert to sprite space first
+            float cx = (cs->circle_x - 0.5f) * sprite_w;
+            float cy = (0.5f - cs->circle_y) * sprite_h;
+            float radius = cs->circle_radius * sprite_w;  // Already in sprite units
+            
+            b2Circle circle = {
+                .center = {cx, cy},
+                .radius = radius
+            };
+            
+            b2ShapeDef sd = b2DefaultShapeDef();
+            sd.density = density;
+            sd.userData = (void *)sp->name;
+            sd.isSensor = is_sensor ? true : false;
+            sd.enableContactEvents = !is_sensor;
+            sd.enableSensorEvents = true;
+            
+            shape = b2CreateCircleShape(sp->body, &sd, &circle);
+            b2Shape_SetFriction(shape, friction);
+            b2Shape_SetRestitution(shape, restitution);
         } else {
             continue;
         }
@@ -1684,11 +1694,12 @@ static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, 
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 3) {
         Tcl_AppendResult(interp, "usage: ", argv[0],
-            " tm sprite ?type? ?-fixedrotation 0/1? ?-damping N? ?-friction N? ?-density N? ?-restitution N? ?-sensor 0/1? ?-hitbox_w N? ?-hitbox_h N? ?-hitbox_offset_x N? ?-hitbox_offset_y N?", NULL); 
+            " tm sprite ?type? ?-fixedrotation 0/1? ?-damping N? ?-shape circle|box|polygon? ?-radius rad? ?-friction N? ?-density N? ?-restitution N? ?-sensor 0/1? ?-hitbox_w N? ?-hitbox_h N? ?-hitbox_offset_x N? ?-hitbox_offset_y N?", NULL); 
         return TCL_ERROR;
     }
     
     int id, sid;
+
     if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
     if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != TilemapID) return TCL_ERROR;
     TILEMAP *tm = (TILEMAP *)GR_CLIENTDATA(OL_OBJ(olist, id));
@@ -1699,6 +1710,7 @@ static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, 
     
     /* Parse options */
     b2BodyType bt = b2_dynamicBody;
+    const char *shape_type = NULL;
     int fixed_rotation = 0, is_sensor = 0;
     double damping = 0, friction = 0.3, density = 1.0, restitution = 0;
     double hitbox_w = -1, hitbox_h = -1;
@@ -1706,13 +1718,16 @@ static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, 
     int hitbox_w_set = 0, hitbox_h_set = 0;
     int offset_x_set = 0, offset_y_set = 0;
     double corner_radius = 0.0;
+    double circle_radius = 0.5f;
 
     for (int i = 3; i < argc; i++) {
         if (strcmp(argv[i], "static") == 0) bt = b2_staticBody;
         else if (strcmp(argv[i], "dynamic") == 0) bt = b2_dynamicBody;
         else if (strcmp(argv[i], "kinematic") == 0) bt = b2_kinematicBody;
         else if (i + 1 < argc) {
-            if (strcmp(argv[i], "-fixedrotation") == 0) {
+            if (strcmp(argv[i], "-shape") == 0) {
+               shape_type = argv[++i];  // "circle", "box", "polygon"
+            } else if (strcmp(argv[i], "-fixedrotation") == 0) {
                 Tcl_GetInt(interp, argv[++i], &fixed_rotation);
             } else if (strcmp(argv[i], "-damping") == 0) {
                 Tcl_GetDouble(interp, argv[++i], &damping);
@@ -1738,10 +1753,33 @@ static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, 
                 offset_y_set = 1;
             } else if (strcmp(argv[i], "-corner_radius") == 0) {
                 Tcl_GetDouble(interp, argv[++i], &corner_radius);
+            } else if (strcmp(argv[i], "-radius") == 0) {
+                Tcl_GetDouble(interp, argv[++i], &circle_radius);
             }
         }
     }
     
+    // If manual shape specified, create it
+    if (shape_type) {
+        if (strcmp(shape_type, "circle") == 0) {
+            // Create circle shape
+            b2Circle circle = {
+                .center = {0, 0},  // Centered on sprite
+                .radius = circle_radius / tm->pixels_per_meter
+            };
+            
+            b2ShapeDef sd = b2DefaultShapeDef();
+            sd.density = (float)density;
+            sd.isSensor = is_sensor ? true : false;
+            
+            b2ShapeId shape_id = b2CreateCircleShape(sp->body, &sd, &circle);
+            b2Shape_SetFriction(shape_id, (float)friction);
+            b2Shape_SetRestitution(shape_id, (float)restitution);
+            
+            return TCL_OK;
+        }
+    }
+
     /* Determine hitbox size and offset */
     float hw, hh, off_x, off_y;
     int use_tile_collision = 0;
@@ -1755,8 +1793,6 @@ static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, 
         tc = &ts->frame_collisions[sp->current_frame];
         if (tc->shape_count > 0) {
             use_tile_collision = 1;
-            fprintf(stderr, "USING sprite sheet collision for '%s' frame %d (%d shapes)\n", 
-                    sp->name, sp->current_frame, tc->shape_count);
         }
     }
     
@@ -1764,12 +1800,9 @@ static int tilemapSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, 
     // Check tile collision (if not using sprite sheet collision)
     // ============================================================================
     if (!use_tile_collision && !hitbox_w_set && !hitbox_h_set) {
-        fprintf(stderr, "DEBUG: sprite '%s' tile_id=%d\n", sp->name, sp->tile_id);
         tc = get_tile_collision(tm, sp->tile_id);
-        fprintf(stderr, "DEBUG: get_tile_collision returned %p\n", (void*)tc);
         if (tc && tc->shape_count > 0) {
             use_tile_collision = 1;
-            fprintf(stderr, "USING tile collision\n");
         }
     }
     
@@ -2407,7 +2440,7 @@ static int tilemapAddSpriteSheetCmd(ClientData cd, Tcl_Interp *interp,
     int result = TCL_OK;
     static char frame_names[MAX_FRAMES][64];
 
-    // CHANGED: Now expects 3 args (tm, name, sheetDict) instead of 4
+    // Expects 3 args (tm, name, sheetDict) instead of 4
     if (objc != 4) {
         Tcl_WrongNumArgs(interp, 1, objv, "tm name sheetDict");
         result = TCL_ERROR;
@@ -2555,8 +2588,6 @@ static int tilemapAddSpriteSheetCmd(ClientData cd, Tcl_Interp *interp,
                 
                 ts->aseprite.animation_count = anim_count;
                 Tcl_DictObjDone(&anim_search);
-                
-                fprintf(stderr, "Loaded %d animations for '%s'\n", anim_count, name);
             }
         }
     }
@@ -2615,43 +2646,123 @@ static int tilemapAddSpriteSheetCmd(ClientData cd, Tcl_Interp *interp,
         if (Tcl_DictObjGet(interp, value, k_fixtures, &fixtures_obj) == TCL_OK && fixtures_obj) {
             Tcl_Size fixture_count;
             Tcl_Obj **fixtures;
-            if (Tcl_ListObjGetElements(interp, fixtures_obj, &fixture_count, &fixtures) == TCL_OK) {
-                
-                for (int i = 0; i < fixture_count && i < MAX_SHAPES_PER_TILE; i++) {
+
+            if (Tcl_ListObjGetElements(interp, fixtures_obj, &fixture_count, &fixtures) == TCL_OK) {                
+               for (int i = 0; i < fixture_count && i < MAX_SHAPES_PER_TILE; i++) {
                     COLLISION_SHAPE *shape = &coll->shapes[coll->shape_count];
                     
-                    Tcl_Obj *verts_obj = NULL;
-                    if (Tcl_DictObjGet(interp, fixtures[i], k_verts, &verts_obj) != TCL_OK || !verts_obj) {
+                    // Get shape type (default to polygon for backward compatibility)
+                    Tcl_Obj *shape_type_obj = NULL;
+                    const char *shape_type = "polygon";
+                    Tcl_Obj *k_shape = Tcl_NewStringObj("shape", -1);
+                    Tcl_IncrRefCount(k_shape);
+                    
+                    if (Tcl_DictObjGet(interp, fixtures[i], k_shape, &shape_type_obj) == TCL_OK && shape_type_obj) {
+                        shape_type = Tcl_GetString(shape_type_obj);
+                    }
+                    
+                    // Get shape data
+                    Tcl_Obj *k_data = Tcl_NewStringObj("data", -1);
+                    Tcl_IncrRefCount(k_data);
+                    Tcl_Obj *data_obj = NULL;
+                    
+                    if (Tcl_DictObjGet(interp, fixtures[i], k_data, &data_obj) != TCL_OK || !data_obj) {
+                        Tcl_DecrRefCount(k_shape);
+                        Tcl_DecrRefCount(k_data);
                         continue;
                     }
                     
-                    Tcl_Size vert_count;
-                    Tcl_Obj **verts;
-                    if (Tcl_ListObjGetElements(interp, verts_obj, &vert_count, &verts) != TCL_OK) continue;
-                    
-                    shape->type = SHAPE_POLYGON;
-                    shape->vert_count = 0;
-                    
-                    for (int v = 0; v < vert_count && v < MAX_COLLISION_VERTS; v++) {
-                        Tcl_Obj *vx_obj = NULL, *vy_obj = NULL;
-                        Tcl_DictObjGet(interp, verts[v], k_x, &vx_obj);
-                        Tcl_DictObjGet(interp, verts[v], k_y, &vy_obj);
+                    // Parse based on shape type
+                    if (strcmp(shape_type, "circle") == 0) {
+                        // CIRCLE
+                        Tcl_Obj *k_cx = Tcl_NewStringObj("center_x", -1);
+                        Tcl_Obj *k_cy = Tcl_NewStringObj("center_y", -1);
+                        Tcl_Obj *k_r = Tcl_NewStringObj("radius", -1);
+                        Tcl_IncrRefCount(k_cx);
+                        Tcl_IncrRefCount(k_cy);
+                        Tcl_IncrRefCount(k_r);
                         
-                        double vx = 0.0, vy = 0.0;
-                        if (vx_obj) Tcl_GetDoubleFromObj(interp, vx_obj, &vx);
-                        if (vy_obj) Tcl_GetDoubleFromObj(interp, vy_obj, &vy);
+                        Tcl_Obj *cx_obj = NULL, *cy_obj = NULL, *r_obj = NULL;
+                        Tcl_DictObjGet(interp, data_obj, k_cx, &cx_obj);
+                        Tcl_DictObjGet(interp, data_obj, k_cy, &cy_obj);
+                        Tcl_DictObjGet(interp, data_obj, k_r, &r_obj);
                         
-                        if (ts->frames[ts->frame_count].w > 0)
-                            shape->verts_x[shape->vert_count] = vx / ts->frames[ts->frame_count].w;
-                        if (ts->frames[ts->frame_count].h > 0)
-                            shape->verts_y[shape->vert_count] = vy / ts->frames[ts->frame_count].h;
-                            
-                        shape->vert_count++;
-                    }
-                    
-                    if (shape->vert_count >= 3) {
+                        double cx = 0, cy = 0, radius = 0;
+                        if (cx_obj) Tcl_GetDoubleFromObj(interp, cx_obj, &cx);
+                        if (cy_obj) Tcl_GetDoubleFromObj(interp, cy_obj, &cy);
+                        if (r_obj) Tcl_GetDoubleFromObj(interp, r_obj, &radius);
+                        
+                        shape->type = SHAPE_CIRCLE;
+                        // Use ts->frame_count, not frame_idx!
+                        shape->circle_x = cx / ts->frames[ts->frame_count].w;  // Normalize to 0-1
+                        shape->circle_y = cy / ts->frames[ts->frame_count].h;
+                        shape->circle_radius = radius / ts->frames[ts->frame_count].w;
+                        
                         coll->shape_count++;
+                        
+                        Tcl_DecrRefCount(k_cx);
+                        Tcl_DecrRefCount(k_cy);
+                        Tcl_DecrRefCount(k_r);
+                        
+                    } else if (strcmp(shape_type, "box") == 0) {
+                        // BOX
+                        Tcl_Obj *x_obj = NULL, *y_obj = NULL, *w_obj = NULL, *h_obj = NULL;
+                        Tcl_DictObjGet(interp, data_obj, k_x, &x_obj);
+                        Tcl_DictObjGet(interp, data_obj, k_y, &y_obj);
+                        Tcl_DictObjGet(interp, data_obj, k_w, &w_obj);
+                        Tcl_DictObjGet(interp, data_obj, k_h, &h_obj);
+                        
+                        double bx = 0, by = 0, bw = 0, bh = 0;
+                        if (x_obj) Tcl_GetDoubleFromObj(interp, x_obj, &bx);
+                        if (y_obj) Tcl_GetDoubleFromObj(interp, y_obj, &by);
+                        if (w_obj) Tcl_GetDoubleFromObj(interp, w_obj, &bw);
+                        if (h_obj) Tcl_GetDoubleFromObj(interp, h_obj, &bh);
+                        
+                        shape->type = SHAPE_BOX;
+                        shape->box_x = bx / ts->frames[ts->frame_count].w;  // Normalize to 0-1
+                        shape->box_y = by / ts->frames[ts->frame_count].h;
+                        shape->box_w = bw / ts->frames[ts->frame_count].w;
+                        shape->box_h = bh / ts->frames[ts->frame_count].h;
+                        
+                        coll->shape_count++;
+                        
+                    } else {
+                        // POLYGON (existing code)
+                        Tcl_Size vert_count;
+                        Tcl_Obj **verts;
+                        if (Tcl_ListObjGetElements(interp, data_obj, &vert_count, &verts) != TCL_OK) {
+                            Tcl_DecrRefCount(k_shape);
+                            Tcl_DecrRefCount(k_data);
+                            continue;
+                        }
+                        
+                        shape->type = SHAPE_POLYGON;
+                        shape->vert_count = 0;
+                        
+                        for (int v = 0; v < vert_count && v < MAX_COLLISION_VERTS; v++) {
+                            Tcl_Obj *vx_obj = NULL, *vy_obj = NULL;
+                            Tcl_DictObjGet(interp, verts[v], k_x, &vx_obj);
+                            Tcl_DictObjGet(interp, verts[v], k_y, &vy_obj);
+                            
+                            double vx = 0.0, vy = 0.0;
+                            if (vx_obj) Tcl_GetDoubleFromObj(interp, vx_obj, &vx);
+                            if (vy_obj) Tcl_GetDoubleFromObj(interp, vy_obj, &vy);
+                            
+                            if (ts->frames[ts->frame_count].w > 0)
+                                shape->verts_x[shape->vert_count] = vx / ts->frames[ts->frame_count].w;
+                            if (ts->frames[ts->frame_count].h > 0)
+                                shape->verts_y[shape->vert_count] = vy / ts->frames[ts->frame_count].h;
+                                
+                            shape->vert_count++;
+                        }
+                        
+                        if (shape->vert_count >= 3) {
+                            coll->shape_count++;
+                        }
                     }
+                    
+                    Tcl_DecrRefCount(k_shape);
+                    Tcl_DecrRefCount(k_data);
                 }
             }
         }
