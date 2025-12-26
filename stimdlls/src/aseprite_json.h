@@ -16,11 +16,18 @@ extern "C" {
 #define ASE_MAX_FRAMES 32
 #define ASE_MAX_NAME_LEN 32
 
+typedef enum {
+    ANIM_FORWARD = 0,
+    ANIM_REVERSE,
+    ANIM_PINGPONG
+} AnimationDirection;
+
 typedef struct {
     char name[ASE_MAX_NAME_LEN];
     int frames[ASE_MAX_FRAMES];
     int frame_count;
     float default_fps;
+    AnimationDirection direction; 
 } AsepriteAnimation;
 
 typedef struct {
