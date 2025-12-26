@@ -197,16 +197,30 @@ else()
     target_link_libraries(box2d ${COMMON_LIBS} ${BOX2D_LIB})
 endif()
 
-# Tilemap with integrated Box2D and TMX loading
-add_library(tilemap SHARED ${SRC_DIR}/tilemap.c ${SRC_DIR}/tmx_xml.cpp ${SRC_DIR}/aseprite_json.cpp ${APP_DIR}/glad.c)
-set_target_properties(tilemap PROPERTIES PREFIX "")
-target_link_libraries(tilemap ${COMMON_LIBS} ${BOX2D_LIB})
-# tinyxml2 - either find package or include source
+# World - 2D game world system
+set(WORLD_SOURCES
+    ${SRC_DIR}/world.c
+    ${SRC_DIR}/world_camera.c
+    ${SRC_DIR}/world_atlas.c
+    ${SRC_DIR}/world_render.c
+    ${SRC_DIR}/world_sprite.c
+    ${SRC_DIR}/world_spritesheet.c    
+    ${SRC_DIR}/world_tilemap.c    
+    ${SRC_DIR}/tmx_xml.cpp
+    ${SRC_DIR}/aseprite_json.cpp
+    ${APP_DIR}/glad.c
+)
+
+add_library(world SHARED ${WORLD_SOURCES})
+set_target_properties(world PROPERTIES PREFIX "")
+target_include_directories(world PRIVATE ${SRC_DIR})
+target_link_libraries(world ${COMMON_LIBS} ${BOX2D_LIB})
+
 find_package(tinyxml2 QUIET)
 if(tinyxml2_FOUND)
-    target_link_libraries(tilemap tinyxml2::tinyxml2)
+    target_link_libraries(world tinyxml2::tinyxml2)
 else()
-    target_sources(tilemap PRIVATE ${SRC_DIR}/tinyxml2.cpp)
+    target_sources(world PRIVATE ${SRC_DIR}/tinyxml2.cpp)
 endif()
 
 ###############################
