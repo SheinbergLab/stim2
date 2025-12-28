@@ -9,6 +9,7 @@
 #include <queue>
 
 #if !defined(_WIN32)
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
