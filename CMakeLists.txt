@@ -166,6 +166,7 @@ set(STIM2_SOURCES
     src/rawapi.c
     src/imgui_console.cpp
     src/WebSocketServer.cpp
+    src/TclCompletion.cpp
     ${IMGUI_DIR}/imgui.cpp
     ${IMGUI_DIR}/imgui_demo.cpp
     ${IMGUI_DIR}/imgui_draw.cpp
