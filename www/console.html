@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>stim2 Console</title>
+    <link rel="stylesheet" href="css/TclTerminal.css">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Header */
+        .header {
+            background: #2d2d30;
+            padding: 10px 20px;
+            border-bottom: 1px solid #3e3e42;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .header h1 {
+            font-size: 16px;
+            font-weight: normal;
+            color: #cccccc;
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #a1260d;
+            transition: background 0.3s;
+        }
+
+        .status-indicator.connected {
+            background: #3fb950;
+        }
+
+        /* Main split container */
+        .split-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        /* Terminal pane (top) */
+        .terminal-pane {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 200px;
+            border-bottom: 1px solid #3e3e42;
+        }
+
+        .pane-header {
+            background: #252526;
+            padding: 8px 16px;
+            border-bottom: 1px solid #3e3e42;
+            font-size: 12px;
+            color: #8b949e;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .pane-header button {
+            padding: 4px 12px;
+            border: 1px solid #3e3e42;
+            background: #2d2d30;
+            color: #8b949e;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.2s;
+        }
+        
+        .pane-header button:hover {
+            background: #0e639c;
+            color: white;
+            border-color: #0e639c;
+        }
+
+        .status-bar {
+            display: flex;
+            gap: 16px;
+            font-size: 11px;
+        }
+
+        .status-item {
+            display: flex;
+            gap: 6px;
+        }
+
+        .status-label {
+            color: #6e7681;
+        }
+
+        .status-value {
+            color: #e6edf3;
+        }
+        
+        /* Action button bar */
+        .action-bar {
+            background: #252526;
+            padding: 8px 16px;
+            border-bottom: 1px solid #3e3e42;
+            display: flex;
+            gap: 8px;
+        }
+        
+        .action-button {
+            padding: 6px 16px;
+            border: 1px solid #3e3e42;
+            background: #2d2d30;
+            color: #d4d4d4;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+        
+        .action-button:hover {
+            background: #0e639c;
+            color: white;
+            border-color: #0e639c;
+        }
+        
+        .action-button:active {
+            background: #0c5488;
+        }
+
+        /* TclTerminal container */
+        #terminal-container {
+            flex: 1;
+            overflow-y: auto;
+            background: #1e1e1e;
+        }
+
+        /* Resize handle */
+        .resize-handle {
+            height: 5px;
+            background: #3e3e42;
+            cursor: row-resize;
+            position: relative;
+            flex-shrink: 0;
+        }
+
+        .resize-handle:hover {
+            background: #0e639c;
+        }
+
+        /* Log pane (bottom) */
+        .log-pane {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 150px;
+        }
+
+        /* Log output area */
+        .log-output {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px 16px;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .log-entry {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 4px;
+            padding: 4px 0;
+        }
+        
+        .log-entry.raw-mode {
+            display: block;
+            margin-bottom: 0;
+            padding: 0;
+        }
+
+        .log-entry.hidden {
+            display: none;
+        }
+
+        .log-timestamp {
+            color: #6e7681;
+            flex-shrink: 0;
+            user-select: none;
+        }
+
+        .log-level {
+            flex-shrink: 0;
+            font-weight: bold;
+            min-width: 50px;
+            user-select: none;
+        }
+
+        .log-level.info { color: #58a6ff; }
+        .log-level.warn { color: #d29922; }
+        .log-level.error { color: #f85149; }
+        .log-level.debug { color: #a371f7; }
+
+        .log-message {
+            color: #e6edf3;
+            flex: 1;
+            word-break: break-word;
+        }
+
+        .error-text {
+            color: #f85149;
+        }
+
+        /* Scrollbar styling */
+        .log-output::-webkit-scrollbar,
+        #terminal-container::-webkit-scrollbar {
+            width: 10px;
+        }
+
+        .log-output::-webkit-scrollbar-track,
+        #terminal-container::-webkit-scrollbar-track {
+            background: #1e1e1e;
+        }
+
+        .log-output::-webkit-scrollbar-thumb,
+        #terminal-container::-webkit-scrollbar-thumb {
+            background: #3e3e42;
+            border-radius: 5px;
+        }
+
+        .log-output::-webkit-scrollbar-thumb:hover,
+        #terminal-container::-webkit-scrollbar-thumb:hover {
+            background: #4e4e52;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>stim2 Console</h1>
+        <div class="connection-status">
+            <div class="status-indicator" id="statusIndicator"></div>
+            <span id="connectionStatus">Disconnected</span>
+        </div>
+    </div>
+
+    <div class="split-container">
+        <!-- Terminal pane (interactive I/O) -->
+        <div class="terminal-pane" id="terminalPane">
+            <div class="pane-header">
+                <span>Terminal</span>
+                <div class="status-bar">
+                    <div class="status-item">
+                        <span class="status-label">State:</span>
+                        <span class="status-value" id="stateValue">-</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">FPS:</span>
+                        <span class="status-value" id="fpsValue">-</span>
+                    </div>
+                </div>
+            </div>
+            <div class="action-bar">
+                <button class="action-button" id="stimOffButton">Stim Off</button>
+                <button class="action-button" id="stimOnButton">Stim On</button>
+            </div>
+            <div id="terminal-container"></div>
+        </div>
+
+        <!-- Resize handle -->
+        <div class="resize-handle" id="resizeHandle"></div>
+
+        <!-- Log pane (output only) -->
+        <div class="log-pane" id="logPane">
+            <div class="pane-header">
+                <span>Log Output</span>
+                <button class="filter-button" id="clearButton">Clear</button>
+            </div>
+            <div class="log-output" id="logOutput"></div>
+        </div>
+    </div>
+
+    <!-- Load TclTerminal component -->
+    <script src="js/TclTerminal.js"></script>
+
+    <script>
+        // WebSocket connection wrapper (adapts to TclTerminal interface)
+        class Stim2Connection {
+            constructor() {
+                this.ws = null;
+                this.requestId = 0;
+                this.callbacks = new Map();
+                this.onStatusUpdate = null;
+            }
+
+            connect() {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/ws`;
+                
+                this.ws = new WebSocket(wsUrl);
+                
+                this.ws.onopen = () => {
+                    updateConnectionStatus(true);
+                };
+                
+                this.ws.onclose = () => {
+                    updateConnectionStatus(false);
+                    setTimeout(() => this.connect(), 3000);
+                };
+                
+                this.ws.onmessage = (event) => {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        this.handleMessage(msg);
+                    } catch (e) {
+                        console.error('Failed to parse message:', e);
+                    }
+                };
+            }
+
+            handleMessage(msg) {
+                if (msg.type === 'response') {
+                    const callback = this.callbacks.get(msg.requestId);
+                    if (callback) {
+                        if (msg.status === 'ok') {
+                            callback.resolve(msg.result || '');
+                        } else {
+                            callback.reject(new Error(msg.error || 'Unknown error'));
+                        }
+                        this.callbacks.delete(msg.requestId);
+                    }
+                } else if (msg.type === 'log') {
+                    addLogEntry(msg.level, msg.message, getCurrentTimestamp());
+                } else if (msg.type === 'status' && this.onStatusUpdate) {
+                    this.onStatusUpdate(msg);
+                }
+            }
+
+            eval(script) {
+                return new Promise((resolve, reject) => {
+                    const reqId = `req_${++this.requestId}`;
+                    this.callbacks.set(reqId, { resolve, reject });
+                    
+                    const msg = {
+                        cmd: 'eval',
+                        script: script,
+                        requestId: reqId
+                    };
+                    
+                    this.ws.send(JSON.stringify(msg));
+                });
+            }
+            
+            // Compatibility method for TclTerminal
+            send(command, interpreter) {
+                // TclTerminal calls send(command, interpreter)
+                // For stim2, we ignore interpreter and just eval the command
+                return this.eval(command);
+            }
+        }
+
+        // UI elements
+        const statusIndicator = document.getElementById('statusIndicator');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const terminalPane = document.getElementById('terminalPane');
+        const logPane = document.getElementById('logPane');
+        const resizeHandle = document.getElementById('resizeHandle');
+        const logOutput = document.getElementById('logOutput');
+        const stateValue = document.getElementById('stateValue');
+        const fpsValue = document.getElementById('fpsValue');
+
+        // Display options - hardcoded to raw mode, auto-scroll enabled
+        const rawMode = true;
+        const showTimestamps = false;
+        const autoScroll = true;
+
+        // Connection
+        const connection = new Stim2Connection();
+        connection.onStatusUpdate = (msg) => {
+            stateValue.textContent = msg.state;
+            fpsValue.textContent = msg.fps.toFixed(1);
+        };
+        connection.connect();
+
+        // Terminal
+        const terminal = new TclTerminal('terminal-container', connection, {
+            interpreter: 'stim2',
+            welcomeMessage: 'stim2 Tcl Terminal - Connected',
+            showWelcome: true,
+            tabCompletion: false,  // Disable tab completion for now
+            useLinkedSubprocess: false
+        });
+
+        // Resize handling
+        let isResizing = false;
+        let startY = 0;
+        let startHeight = 0;
+
+        resizeHandle.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            startY = e.clientY;
+            startHeight = terminalPane.offsetHeight;
+            document.body.style.cursor = 'row-resize';
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            
+            const delta = e.clientY - startY;
+            const newHeight = startHeight + delta;
+            const minHeight = 150;
+            const maxHeight = window.innerHeight - 300;
+            
+            if (newHeight >= minHeight && newHeight <= maxHeight) {
+                terminalPane.style.flex = 'none';
+                terminalPane.style.height = newHeight + 'px';
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false;
+                document.body.style.cursor = '';
+            }
+        });
+
+        // Log functions
+        function addLogEntry(level, message, timestamp) {
+            const entry = document.createElement('div');
+            entry.className = 'log-entry raw-mode';
+            entry.dataset.level = level;
+            
+            // Raw mode always - errors in red
+            if (level === 'error') {
+                entry.className += ' error-text';
+            }
+            entry.textContent = message;
+            
+            logOutput.appendChild(entry);
+            
+            // Always auto-scroll
+            logOutput.scrollTop = logOutput.scrollHeight;
+        }
+
+        function updateConnectionStatus(connected) {
+            if (connected) {
+                statusIndicator.classList.add('connected');
+                connectionStatus.textContent = 'Connected';
+            } else {
+                statusIndicator.classList.remove('connected');
+                connectionStatus.textContent = 'Disconnected';
+            }
+        }
+
+        function formatTime(seconds) {
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+            
+            if (days > 0) {
+                return `${days}d ${hours}h`;
+            } else if (hours > 0) {
+                return `${hours}h ${mins}m`;
+            } else if (mins > 0) {
+                return `${mins}m ${secs}s`;
+            } else {
+                return `${secs}s`;
+            }
+        }
+
+        function getCurrentTimestamp() {
+            const now = new Date();
+            return now.toTimeString().split(' ')[0];
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Clear button
+        document.getElementById('clearButton').addEventListener('click', () => {
+            logOutput.innerHTML = '';
+        });
+        
+        // Stim Off button
+        document.getElementById('stimOffButton').addEventListener('click', () => {
+            connection.send('glistSetVisible 0; redraw').catch(err => {
+                console.error('Stim Off failed:', err);
+            });
+        });
+        
+        // Stim On button
+        document.getElementById('stimOnButton').addEventListener('click', () => {
+            connection.send('glistSetVisible 1; redraw').catch(err => {
+                console.error('Stim On failed:', err);
+            });
+        });
+    </script>
+</body>
+</html>
