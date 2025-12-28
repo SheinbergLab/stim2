@@ -13,6 +13,7 @@
 #endif
 
 #if defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h>
 #include <filesystem>
 #include "SleepWakeHandler.h"
 #endif
@@ -29,6 +30,9 @@
 #include <netinet/tcp.h>
 #include <netdb.h>
 #endif
+
+#include "SharedQueue.h"
+#include "WebSocketServer.h"
 
 #include "timer.h"      // for periodic timer thread
 
@@ -56,12 +60,6 @@
 #include "stim2.h"
 #include "rawapi.h"
 
-#ifdef EMBED_PYTHON
-#include <pybind11/embed.h> // everything needed for embedding
-namespace py = pybind11;
-using namespace pybind11::literals;
-#endif
-
 static int MainWin = 0;
 
 static void do_wakeup(void);
@@ -71,6 +69,8 @@ static void drawGroup(OBJ_GROUP *g);
 static void execTimerFuncs(OBJ_GROUP *g);
 
 static void free_resources(void);
+
+void log_message(const char* level, const char* fmt, ...);
 
 OBJ_LIST *OBJList = NULL;  /* main entry point to object stimuli  */
 OBJ_LIST curobjlist;
@@ -873,111 +873,6 @@ void reshape(void)
 
 using namespace std::placeholders;
 
-
-template <typename T>
-class SharedQueue
-{
-public:
-  SharedQueue();
-  ~SharedQueue();
-  
-  T& front();
-  void pop_front();
-  
-  void push_back(const T& item);
-  void push_back(T&& item);
-  
-  int size();
-  bool empty();
-  bool wait_with_timeout(int timeout_ms);
-  void clear_all();
-  
-private:
-  std::deque<T> queue_;
-  std::mutex mutex_;
-  std::condition_variable cond_;
-}; 
-
-template <typename T>
-SharedQueue<T>::SharedQueue(){}
-
-template <typename T>
-SharedQueue<T>::~SharedQueue(){}
-
-template <typename T>
-T& SharedQueue<T>::front()
-{
-  std::unique_lock<std::mutex> mlock(mutex_);
-  while (queue_.empty())
-    {
-      cond_.wait(mlock);
-    }
-  return queue_.front();
-}
-
-template <typename T>
-void SharedQueue<T>::pop_front()
-{
-  std::unique_lock<std::mutex> mlock(mutex_);
-  while (queue_.empty())
-    {
-      cond_.wait(mlock);
-    }
-  queue_.pop_front();
-}
-
-template <typename T>
-bool SharedQueue<T>::empty()
-{
-  std::unique_lock<std::mutex> mlock(mutex_);
-  return queue_.empty();
-}
-
-template <typename T>
-bool SharedQueue<T>::wait_with_timeout(int timeout_ms)
-{
-  std::unique_lock<std::mutex> mlock(mutex_);
-  if (queue_.empty()) {
-    return cond_.wait_for(mlock, std::chrono::milliseconds(timeout_ms)) == std::cv_status::no_timeout;
-  }
-  return true;
-}
-
-template <typename T>
-void SharedQueue<T>::clear_all()
-{
-  std::unique_lock<std::mutex> mlock(mutex_);
-  queue_.clear();
-}     
-
-template <typename T>
-void SharedQueue<T>::push_back(const T& item)
-{
-  std::unique_lock<std::mutex> mlock(mutex_);
-  queue_.push_back(item);
-  mlock.unlock();     // unlock before notificiation to minimize mutex con
-  cond_.notify_one(); // notify one waiting thread
-  
-}
-
-template <typename T>
-void SharedQueue<T>::push_back(T&& item)
-{
-  std::unique_lock<std::mutex> mlock(mutex_);
-  queue_.push_back(std::move(item));
-  mlock.unlock();     // unlock before notificiation to minimize mutex con
-  cond_.notify_one(); // notify one waiting thread  
-}
-
-template <typename T>
-int SharedQueue<T>::size()
-{
-  std::unique_lock<std::mutex> mlock(mutex_);
-  int size = queue_.size();
-  mlock.unlock();
-  return size;
-}
-
 SharedQueue<int> MessageQueue;
 
 /*
@@ -1150,6 +1045,77 @@ struct AppLog
     }
 };
 
+
+// =============================================================================
+// Tcl puts command override - captures script output to WebSocket
+// =============================================================================
+// Tcl puts command override - captures script output to WebSocket
+static int tcl_puts_cmd(ClientData clientData, Tcl_Interp *interp,
+                        int objc, Tcl_Obj *const objv[]) {
+    bool nonewline = false;
+    int argIdx = 1;
+    const char* channelId = NULL;
+    const char* message = NULL;
+    
+    // Parse arguments
+    if (objc < 2 || objc > 4) {
+        Tcl_WrongNumArgs(interp, 1, objv, "?-nonewline? ?channelId? string");
+        return TCL_ERROR;
+    }
+    
+    // Check for -nonewline
+    if (strcmp(Tcl_GetString(objv[argIdx]), "-nonewline") == 0) {
+        nonewline = true;
+        argIdx++;
+    }
+    
+    // Two arguments left: channelId + string
+    if (argIdx + 1 < objc) {
+        channelId = Tcl_GetString(objv[argIdx]);
+        argIdx++;
+        message = Tcl_GetString(objv[argIdx]);
+    }
+    // One argument left: just string
+    else if (argIdx < objc) {
+        message = Tcl_GetString(objv[argIdx]);
+    }
+    else {
+        Tcl_WrongNumArgs(interp, 1, objv, "?-nonewline? ?channelId? string");
+        return TCL_ERROR;
+    }
+    
+    // If writing to a file handle, delegate to original puts
+    if (channelId != NULL && 
+        strcmp(channelId, "stdout") != 0 && 
+        strcmp(channelId, "stderr") != 0) {
+        // Call original puts for file operations
+        Tcl_DString cmd;
+        Tcl_DStringInit(&cmd);
+        Tcl_DStringAppend(&cmd, "_puts", -1);
+        if (nonewline) Tcl_DStringAppend(&cmd, " -nonewline", -1);
+        Tcl_DStringAppend(&cmd, " ", -1);
+        Tcl_DStringAppend(&cmd, channelId, -1);
+        Tcl_DStringAppend(&cmd, " {", -1);
+        Tcl_DStringAppend(&cmd, message, -1);
+        Tcl_DStringAppend(&cmd, "}", -1);
+        
+        int result = Tcl_Eval(interp, Tcl_DStringValue(&cmd));
+        Tcl_DStringFree(&cmd);
+        return result;
+    }
+    
+    // Determine log level
+    const char* level = "info";
+    if (channelId && strcmp(channelId, "stderr") == 0) {
+        level = "warn";
+    }
+    
+    // Log to our system
+    log_message(level, "%s", message);
+    
+    return TCL_OK;
+}
+
 class Application
 {
   bool m_bDataLoaded;
@@ -1178,7 +1144,7 @@ class Application
   int output_pin;
   
 public:
-
+  bool isSleeping() { return systemIsSleeping; }
   void wakeup(void) { wake_queue.push_back(0); }
 
   void wait_for_wakeup(void) {
@@ -1261,26 +1227,60 @@ public:
   int dsport = 4611;
   int messageport = 4612;
 
+  // WebSocket server members
+  int websocket_port = 4613;
+  std::string www_path;
+  WebSocketServer* ws_server = nullptr;
+  
+  unsigned int last_frame_time = 0;
+  int frame_counter = 0;
+  double current_fps = 0.0;
+  int total_frames = 0;
+
   ShutdownCmds shutdown_cmds;
   
-  Application()
-  {
-#if defined(__APPLE__)
-    // Set up sleep/wake callbacks
-    sleepWakeHandler.setSleepCallback([this]() {
-      onSystemSleep();
-    });
+Application()
+{
+    // Determine www_path based on platform and install location
+    #ifdef __APPLE__
+        CFBundleRef mainBundle = CFBundleGetMainBundle();
+        if (mainBundle) {
+            CFURLRef resourcesURL = CFBundleCopyResourcesDirectoryURL(mainBundle);
+            char path[PATH_MAX];
+            if (CFURLGetFileSystemRepresentation(resourcesURL, TRUE, (UInt8 *)path, PATH_MAX)) {
+                www_path = std::string(path) + "/www";
+            }
+            CFRelease(resourcesURL);
+        }
+        // Fallback for development
+        if (www_path.empty()) {
+            www_path = "./www";
+        }
+        
+        // Set up sleep/wake callbacks (MOVED INSIDE)
+        sleepWakeHandler.setSleepCallback([this]() {
+            onSystemSleep();
+        });
+        
+        sleepWakeHandler.setWakeCallback([this]() {
+            onSystemWake();
+        });
+        
+        sleepWakeHandler.startMonitoring();
+    #else
+        // Check if running from install location
+        struct stat st;
+        if (stat("/usr/local/stim2/www", &st) == 0) {
+            www_path = "/usr/local/stim2/www";
+        } else {
+            www_path = "./www";
+        }
+    #endif
     
-    sleepWakeHandler.setWakeCallback([this]() {
-      onSystemWake();
-    });
-    
-    sleepWakeHandler.startMonitoring();
-#endif
     m_bDone = false;
     done = false;
     fullscreen = 0;
-  }
+}
 
   ~Application()
   {
@@ -1289,6 +1289,86 @@ public:
     stopTimer();
 #endif
   }
+
+  // Initialize WebSocket server (call after window creation)
+  void init_websocket() {
+      ws_server = new WebSocketServer(websocket_port, www_path);
+      if (!ws_server->start()) {
+          fprintf(stderr, "FATAL: Failed to start WebSocket server on port %d\n", websocket_port);
+          exit(1);
+      }
+      
+      log_message("info", "WebSocket console available at http://localhost:%d/console.html", websocket_port);
+  }
+
+void count_frame() {
+    frame_counter++;
+    total_frames++;  // ADD THIS
+    unsigned int elapsed = StimTime - last_frame_time;
+    if (elapsed >= 1000) {
+        current_fps = frame_counter * 1000.0 / elapsed;
+        frame_counter = 0;
+        last_frame_time = StimTime;
+    }
+}
+
+void processWebSocketCommands() {
+    if (!ws_server) return;
+    
+    while (ws_server->has_command()) {
+        CommandRequest req = ws_server->get_command();
+        
+        if (req.cmd == "eval") {
+            int result = Tcl_Eval(interp, req.script.c_str());
+            
+            if (result == TCL_OK) {
+                const char* resultStr = Tcl_GetStringResult(interp);
+                ws_server->send_response(req.requestId, true, resultStr);
+            } else {
+                const char* errorStr = Tcl_GetStringResult(interp);
+                ws_server->send_response(req.requestId, false, errorStr);
+            }
+        }
+    }
+}
+
+void update_websocket_status(double fps_val, int frame_val, int elapsed_val, const char* state_val) {
+    if (ws_server) {
+        ws_server->update_status(fps_val, frame_val, elapsed_val, state_val);
+    }
+}
+
+  // Shutdown WebSocket server
+  void shutdown_websocket() {
+      if (ws_server) {
+          ws_server->stop();
+          delete ws_server;
+          ws_server = nullptr;
+      }
+  }
+
+      // Process WebSocket commands (call in main loop)
+    void process_websocket_commands(Tcl_Interp* interp) {
+        if (!ws_server) return;
+        
+        while (ws_server->has_command()) {
+            CommandRequest req = ws_server->get_command();
+            
+            if (req.cmd == "eval") {
+                // Execute Tcl script
+                int result = Tcl_Eval(interp, req.script.c_str());
+                
+                if (result == TCL_OK) {
+                    const char* resultStr = Tcl_GetStringResult(interp);
+                    ws_server->send_response(req.requestId, true, resultStr);
+                } else {
+                    const char* errorStr = Tcl_GetStringResult(interp);
+                    ws_server->send_response(req.requestId, false, errorStr);
+                }
+            }
+        }
+    }
+    
 
   void init_gpio(int pin)
   {
@@ -1487,7 +1567,7 @@ public:
 #endif
     
     if (Tcl_Init(interp) == TCL_ERROR) return TCL_ERROR;
-    
+
     addTclCommands(interp);
 
     Tcl_VarEval(interp, 
@@ -1520,24 +1600,11 @@ public:
         "lappend auto_path [pwd]/packages",
         NULL);
 
-    /* New proc for loading dlls that looks in proper folders */
-    Tcl_VarEval(interp, 
-        "proc load_modules { args } {"
-        " set f [file dirname [file dirname [info nameofexecutable]]]\n"
-        " if { $::tcl_platform(os) == \"Darwin\" } {"
-        "  foreach m $args { load $f/stimdlls/build_macos/$m.dylib }"
-        " } elseif { $::tcl_platform(os) == \"Linux\" } {"
-        "  foreach m $args { load $f/stimdlls/build_linux/$m.so }"
-        " } else {"
-        "  if  { $::tcl_platform(machine) == \"amd64\" } {"
-        "   foreach m $args {load $f/stimdlls/build_win64/${m}.dll $m }"
-        "  } else {"
-        "    foreach m $args { load $f/stimdlls/build_win32/$m.dll }"
-        "  }"
-        " }"
-        "}\n"
-        "proc load_module { m } { return [load_modules $m] }",
-        NULL);
+
+    // Override puts command
+    Tcl_Eval(interp, "rename puts _puts");
+    Tcl_CreateObjCommand(interp, "puts", tcl_puts_cmd, NULL, NULL);
+  
     return TCL_OK;
   }
 
@@ -1791,6 +1858,24 @@ public:
 
 // Allow other functions to access
 Application app;
+
+
+// Global logging helper
+void log_message(const char* level, const char* fmt, ...) {
+  char buffer[4096];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buffer, sizeof(buffer), fmt, args);
+  va_end(args);
+  
+  // Always print to stderr
+  fprintf(stderr, "[%s] %s\n", level, buffer);
+  
+  // Also send to WebSocket if available
+  if (app.ws_server) {
+    app.ws_server->log(level, buffer);
+  }
+}
 
 static void do_wakeup(void)
 {
@@ -2626,7 +2711,6 @@ void key_callback(GLFWwindow *window, int key,
   }
 }
 
-
 void resetGraphicsState(void)
 {
   return;
@@ -2871,6 +2955,9 @@ main(int argc, char *argv[]) {
     Reshape(&app, winWidth, winHeight);
   }
 
+  // Initialize WebSocket server
+  app.init_websocket();
+
   app.setupTcl(argv[0], argc, argv);
 
 #ifdef __APPLE__
@@ -2919,6 +3006,7 @@ main(int argc, char *argv[]) {
     
     app.processTclCommands();
     app.processDSCommands();
+    app.processWebSocketCommands(); 
     app.processTimerFuncs();
 
     if (app.show_imgui)
@@ -2929,15 +3017,37 @@ main(int argc, char *argv[]) {
     
     if (!updated_display && app.doUpdate()) {
       app.updateDisplay(app.wait_for_swap);
+      app.count_frame();     
+    }
+
+    if (updated_display) {
+        app.count_frame();
     }
 
     app.processReplies();
+
+    // track status, FPS, and frame count
+    static unsigned int last_ws_update = 0;
+    if (StimTime - last_ws_update >= 1000) {
+        const char* state = app.isSleeping() ? "sleeping" : "running";
+        app.update_websocket_status(app.current_fps, app.total_frames, StimTime / 1000, state);
+        
+        if (app.ws_server) {
+            app.ws_server->flush_messages();
+        }
+        
+        last_ws_update = StimTime;
+    }
+
   }
   
   /* free allocated objects */
   setDynamicUpdate(0);
   objListReset(curobjlistp);
   
+  // Cleanup WebSocket
+  app.shutdown_websocket();
+
   /* shutdown timer thread */
   app.stopTimer();
 
