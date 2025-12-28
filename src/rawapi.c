@@ -371,7 +371,7 @@ int raw_toPS(char *filename, FILE *outfp, int options)
   int nbytes;
   FILE *infp;
   int i, j, k;
-  unsigned int w, h, d;
+  int w, h, d;
   w = h = d = 0;
   if (!raw_getImageDims(filename, &w, &h, &d, &nbytes)) return 0;
 
