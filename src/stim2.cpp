@@ -34,6 +34,7 @@
 
 #include "SharedQueue.h"
 #include "WebSocketServer.h"
+#include "TclCompletion.h"
 
 #include "timer.h"      // for periodic timer thread
 
@@ -1606,6 +1607,9 @@ public:
     Tcl_Eval(interp, "rename puts _puts");
     Tcl_CreateObjCommand(interp, "puts", tcl_puts_cmd, NULL, NULL);
   
+    // Add command completion support
+    TclCompletion::RegisterCompletionCommand(interp);
+
     return TCL_OK;
   }
 
