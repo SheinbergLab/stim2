@@ -322,6 +322,26 @@ elseif(APPLE)
         COMPONENT stim2
     )
     
+    # Add modules (Tcl modules for workspace system)
+    message("Bundling modules from modules/")
+    install(
+        DIRECTORY modules/
+        DESTINATION ${APP_BUNDLE}/Contents/Resources/modules
+        COMPONENT stim2
+        FILES_MATCHING 
+        PATTERN "*.tm"
+    )
+    
+    # Add examples
+    message("Bundling examples from examples/")
+    install(
+        DIRECTORY examples/
+        DESTINATION ${APP_BUNDLE}/Contents/Resources/examples
+        COMPONENT stim2
+        FILES_MATCHING 
+        PATTERN "*.tcl"
+    )
+    
     # Add config
     set(CONFIG_SCRIPT config/stim2.cfg)
     message("Bundling config script: ${CONFIG_SCRIPT}")
@@ -423,6 +443,26 @@ else()
         FILES ${STIM_SHADERS}
         DESTINATION "/usr/local/stim2/shaders"
         COMPONENT stim2
+    )
+    
+    # Add modules (Tcl modules for workspace system)
+    message("Bundling modules from modules/")
+    install(
+        DIRECTORY modules/
+        DESTINATION "/usr/local/stim2/modules"
+        COMPONENT stim2
+        FILES_MATCHING 
+        PATTERN "*.tm"
+    )
+    
+    # Add examples
+    message("Bundling examples from examples/")
+    install(
+        DIRECTORY examples/
+        DESTINATION "/usr/local/stim2/examples"
+        COMPONENT stim2
+        FILES_MATCHING 
+        PATTERN "*.tcl"
     )
     
     # Add www directory for WebSocket console (preserves subdirectories)
