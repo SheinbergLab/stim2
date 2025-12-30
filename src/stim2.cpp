@@ -1603,6 +1603,54 @@ public:
         NULL);
 
 
+// Setup stim2 module path and load workspace
+    Tcl_Eval(interp, R"(
+proc setup_stim2_modules {} {
+    set exe_dir [file dirname [info nameofexecutable]]
+    
+    # Platform-specific share directory
+    if {$::tcl_platform(os) eq "Darwin"} {
+        # macOS: check for app bundle Resources
+        set bundle_resources [file normalize [file join $exe_dir .. Resources]]
+        set share_dir /usr/local/stim2
+    } elseif {$::tcl_platform(platform) eq "windows"} {
+        set bundle_resources ""
+        set share_dir c:/usr/local/stim2
+    } else {
+        set bundle_resources ""
+        set share_dir /usr/local/stim2
+    }
+    
+    # Build search path
+    set search_dirs [list $exe_dir]
+    if {$bundle_resources ne "" && [file isdirectory $bundle_resources]} {
+        lappend search_dirs $bundle_resources
+    }
+    lappend search_dirs $share_dir [pwd]
+    
+    # Add module paths
+    foreach dir $search_dirs {
+        set moddir [file join $dir modules]
+        if {[file isdirectory $moddir]} {
+            ::tcl::tm::path add $moddir
+        }
+    }
+    
+    # Load workspace and find examples
+    package require workspace
+    
+    foreach dir $search_dirs {
+        set exdir [file join $dir examples]
+        if {[file isdirectory $exdir]} {
+            set ::workspace::system_examples_path $exdir
+            break
+        }
+    }
+}
+setup_stim2_modules
+)");
+    
+
     // Override puts command
     Tcl_Eval(interp, "rename puts _puts");
     Tcl_CreateObjCommand(interp, "puts", tcl_puts_cmd, NULL, NULL);
