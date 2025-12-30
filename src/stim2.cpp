@@ -11,6 +11,8 @@
 #if !defined(_WIN32)
 #include <sys/stat.h>
 #include <unistd.h>
+#include <stdlib.h>
+#include <limits.h>
 #endif
 
 #if defined(__APPLE__)
@@ -1649,7 +1651,7 @@ proc setup_stim2_modules {} {
 }
 setup_stim2_modules
 )");
-    
+
 
     // Override puts command
     Tcl_Eval(interp, "rename puts _puts");
@@ -1674,9 +1676,9 @@ setup_stim2_modules
   int setupTcl(char *name, int argc, char **argv)
   {
     int exitCode = 0;
-    
+
     Tcl_FindExecutable(name);
-    
+
     interp = Tcl_CreateInterp();
     OurInterp = interp;
 
@@ -2839,6 +2841,12 @@ main(int argc, char *argv[]) {
   int interval = 2;
   const char *startup_file = NULL;
   bool updated_display = false;
+
+  char resolved_exe[PATH_MAX];
+  char *abs_path = realpath(argv[0], resolved_exe);
+  if (abs_path) {
+      argv[0] = resolved_exe;
+  }
 
 #ifdef _MSC_VER
   // Set DPI awareness
