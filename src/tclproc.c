@@ -897,16 +897,17 @@ void delete_property_table(GR_OBJ *o)
 }
 
 static int setObjPropCmd(ClientData clientData, Tcl_Interp *interp,
-			     int argc, char *argv[])
+           int argc, char *argv[])
 {
   OBJ_LIST *olist = (OBJ_LIST *) clientData;
   Tcl_HashTable *table;
   Tcl_HashEntry *entryPtr;
+  Tcl_HashSearch search;
   GR_OBJ *o;
   int id;
-
-  if (argc < 3) {
-    Tcl_SetResult(interp, "usage: setObjProp objid property [value]", TCL_STATIC);
+  
+  if (argc < 2) {
+    Tcl_SetResult(interp, "usage: setObjProp objid [property [value]]", TCL_STATIC);
     return TCL_ERROR;
   }
   
@@ -919,29 +920,47 @@ static int setObjPropCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
+  /* argc == 2: return all properties as dict */
+  if (argc == 2) {
+    Tcl_Obj *dictObj = Tcl_NewDictObj();
+    if (GR_PROPERTY_TABLE(o)) {
+      table = (Tcl_HashTable *) GR_PROPERTY_TABLE(o);
+      entryPtr = Tcl_FirstHashEntry(table, &search);
+      while (entryPtr != NULL) {
+        const char *key = Tcl_GetHashKey(table, entryPtr);
+        const char *val = Tcl_GetHashValue(entryPtr);
+        Tcl_DictObjPut(interp, dictObj,
+                       Tcl_NewStringObj(key, -1),
+                       Tcl_NewStringObj(val, -1));
+        entryPtr = Tcl_NextHashEntry(&search);
+      }
+    }
+    Tcl_SetObjResult(interp, dictObj);
+    return TCL_OK;
+  }
+
   /* Check on table existence */
   if (!GR_PROPERTY_TABLE(o)) {
-    if (argc < 4)		/* query fails since there's no table */
+    if (argc < 4)   /* query fails since there's no table */
       goto prop_not_found;
-    else {			/* want to add new prop, need table */
+    else {      /* want to add new prop, need table */
       GR_PROPERTY_TABLE(o) = calloc(1, sizeof(Tcl_HashTable));
       Tcl_InitHashTable(GR_PROPERTY_TABLE(o), TCL_STRING_KEYS);
     }
   }
-
   table = (Tcl_HashTable *) GR_PROPERTY_TABLE(o);
   
-  if (argc < 4) {		/* lookup */
+  if (argc < 4) {   /* lookup */
     if ((entryPtr = Tcl_FindHashEntry(table, argv[2]))) {
       Tcl_SetResult(interp, Tcl_GetHashValue(entryPtr), TCL_STATIC);
       return TCL_OK;
     }
     else goto prop_not_found;
   }
-  else {			/* insert */
+  else {      /* insert */
     if ((entryPtr = Tcl_FindHashEntry(table, argv[2]))) {
       if (Tcl_GetHashValue(entryPtr)) {
-	free(Tcl_GetHashValue(entryPtr));
+  free(Tcl_GetHashValue(entryPtr));
       }
       Tcl_SetHashValue(entryPtr, strdup(argv[3]));
     }
@@ -953,10 +972,9 @@ static int setObjPropCmd(ClientData clientData, Tcl_Interp *interp,
     Tcl_SetResult(interp, Tcl_GetHashValue(entryPtr), TCL_STATIC);
     return TCL_OK;
   }
-
  prop_not_found:
   Tcl_AppendResult(interp, "setObjProp: property \"", argv[2], 
-		   "\" not found", NULL);
+       "\" not found", NULL);
   return TCL_ERROR;
 }
 
