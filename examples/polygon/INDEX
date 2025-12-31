@@ -1,0 +1,5 @@
+rectangle  "Rectangle"
+circle     "Circle"
+nsided     "n-sided polygon"
+triangle   "Triangle"
+points     "Point cloud"
