@@ -13,9 +13,19 @@
 /*
  * Shader path management
  */
-void shaderSetPath(const char *path);
-void shaderSetSuffix(const char *suffix);
-const char *shaderGetPath(void);
+void shaderClearPaths(void);
+int  shaderAddPath(const char *path);
+int  shaderPrependPath(const char *path);
+void shaderSetPath(const char *path);       /* legacy - sets single path */
+
+const char *shaderGetPaths(void);           /* colon-separated list */
+int         shaderGetPathCount(void);
+const char *shaderGetPathN(int n);          /* get Nth path (0-indexed) */
+const char *shaderGetPath(void);            /* last resolved path */
+
+void        shaderSetSuffix(const char *suffix);
+const char *shaderGetSuffix(void);
+
 void shaderReset(void);
 void shaderShutdown(void);
 
