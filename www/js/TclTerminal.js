@@ -252,6 +252,7 @@ class TclTerminal {
         } catch (e) {
             if (!isCompletion) {
                 this.showError(e.message || 'Command failed');
+                this.requestErrorInfo();
                 this.createInputLine();
             }
         }
