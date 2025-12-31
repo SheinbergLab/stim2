@@ -1,0 +1,1954 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>stim2 Development</title>
+    <link rel="stylesheet" href="css/TclTerminal.css">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        :root {
+            --bg-app: #1a1a1a;
+            --bg-panel: #252525;
+            --bg-header: #2a2a2a;
+            --bg-button: #333;
+            --bg-button-hover: #444;
+            --bg-primary: #1890ff;
+            --bg-primary-hover: #40a9ff;
+            --bg-selected: #37373d;
+            --bg-hover: #2a2d2e;
+            --border: #333;
+            --border-light: #444;
+            --text: #d4d4d4;
+            --text-muted: #999;
+            --text-header: #aaa;
+            --text-dim: #666;
+            --status-connected: #52c41a;
+            --status-error: #ff4d4f;
+            --nav-width: 220px;
+            --info-width: 280px;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            font-size: 12px;
+            background: var(--bg-app);
+            color: var(--text);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Status Bar */
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            height: 36px;
+            padding: 0 12px;
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .status-bar h1 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #fff;
+            margin-right: 8px;
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #666;
+            transition: background 0.3s;
+        }
+
+        .status-indicator.connected {
+            background: var(--status-connected);
+            box-shadow: 0 0 6px rgba(82, 196, 26, 0.5);
+        }
+
+        .status-text {
+            color: var(--text-muted);
+            font-size: 11px;
+        }
+
+        .status-spacer { flex: 1; }
+
+        .status-info {
+            display: flex;
+            gap: 12px;
+            color: var(--text-muted);
+            font-size: 11px;
+        }
+
+        .status-info span {
+            display: flex;
+            gap: 4px;
+        }
+
+        .status-info .value {
+            color: var(--text);
+            min-width: 32px;
+        }
+
+        .status-bar button {
+            padding: 4px 10px;
+            background: var(--bg-button);
+            color: #ccc;
+            border: 1px solid var(--border-light);
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+
+        .status-bar button:hover {
+            background: var(--bg-button-hover);
+            color: #fff;
+        }
+
+        /* Main 3-Column Layout */
+        .main-container {
+            display: flex;
+            flex: 1;
+            min-height: 0;
+        }
+
+        /* Left Column - Navigator */
+        .nav-column {
+            width: var(--nav-width);
+            min-width: 150px;
+            max-width: 350px;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-panel);
+            border-right: 1px solid var(--border);
+        }
+
+        /* Middle Column - Editor/Terminal */
+        .main-column {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 300px;
+        }
+
+        /* Right Column - Info/Log */
+        .info-column {
+            width: var(--info-width);
+            min-width: 200px;
+            max-width: 400px;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-panel);
+            border-left: 1px solid var(--border);
+        }
+
+        /* Vertical Resize Handles */
+        .v-resize-handle {
+            width: 4px;
+            background: var(--border);
+            cursor: col-resize;
+            flex-shrink: 0;
+        }
+
+        .v-resize-handle:hover {
+            background: var(--bg-primary);
+        }
+
+        /* Panel shared styles */
+        .panel {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 28px;
+            padding: 0 10px;
+            background: var(--bg-header);
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .panel-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-header);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .panel-actions {
+            display: flex;
+            gap: 4px;
+        }
+
+        .panel-actions button {
+            padding: 2px 6px;
+            background: transparent;
+            color: var(--text-muted);
+            border: 1px solid transparent;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 10px;
+        }
+
+        .panel-actions button:hover {
+            background: var(--bg-button-hover);
+            color: #fff;
+            border-color: var(--border-light);
+        }
+
+        .panel-actions button.primary {
+            background: var(--bg-primary);
+            border-color: var(--bg-primary);
+            color: #fff;
+        }
+
+        .panel-actions button.primary:hover {
+            background: var(--bg-primary-hover);
+        }
+
+        .panel-body {
+            flex: 1;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Left Navigator Column */
+        .nav-column {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .nav-search {
+            padding: 8px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .nav-search input {
+            width: 100%;
+            padding: 6px 10px;
+            background: var(--bg-app);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text);
+            font-size: 11px;
+        }
+
+        .nav-search input:focus {
+            outline: none;
+            border-color: var(--bg-primary);
+        }
+
+        .nav-search input::placeholder {
+            color: var(--text-dim);
+        }
+
+        .nav-tree-container {
+            flex: 1;
+            overflow-y: auto;
+            min-height: 100px;
+        }
+
+        .nav-h-resize-handle {
+            height: 4px;
+            background: var(--border);
+            cursor: row-resize;
+            flex-shrink: 0;
+        }
+
+        .nav-h-resize-handle:hover {
+            background: var(--bg-primary);
+        }
+
+        .nav-controls-container {
+            flex: 1;
+            min-height: 80px;
+            display: flex;
+            flex-direction: column;
+            border-top: 1px solid var(--border);
+        }
+
+        .nav-controls-container .panel-header {
+            flex-shrink: 0;
+        }
+
+        .controls-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+        }
+
+        .controls-placeholder {
+            color: var(--text-dim);
+            font-size: 11px;
+            font-style: italic;
+            padding: 8px;
+        }
+
+        /* Navigator / Examples Tree */
+        .examples-tree {
+            padding: 8px 0;
+        }
+
+        .tree-category {
+            margin-bottom: 4px;
+        }
+
+        .tree-category-header {
+            display: flex;
+            align-items: center;
+            padding: 4px 10px;
+            cursor: pointer;
+            user-select: none;
+            color: var(--text-header);
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .tree-category-header:hover {
+            background: var(--bg-hover);
+        }
+
+        .tree-category-icon {
+            margin-right: 6px;
+            font-size: 10px;
+            width: 12px;
+            text-align: center;
+            transition: transform 0.15s;
+        }
+
+        .tree-category.collapsed .tree-category-icon {
+            transform: rotate(-90deg);
+        }
+
+        .tree-category.collapsed .tree-items {
+            display: none;
+        }
+
+        .tree-items {
+            margin-left: 8px;
+        }
+
+        .tree-item {
+            display: flex;
+            align-items: center;
+            padding: 4px 10px 4px 20px;
+            cursor: pointer;
+            color: var(--text);
+            font-size: 12px;
+        }
+
+        .tree-item:hover {
+            background: var(--bg-hover);
+        }
+
+        .tree-item.selected {
+            background: var(--bg-selected);
+        }
+
+        .tree-item.hidden {
+            display: none;
+        }
+
+        .tree-item-icon {
+            margin-right: 8px;
+            color: var(--text-muted);
+            font-size: 11px;
+        }
+
+        .tree-loading, .tree-error, .tree-empty {
+            padding: 16px;
+            color: var(--text-dim);
+            font-size: 11px;
+            text-align: center;
+        }
+
+        .tree-error {
+            color: var(--status-error);
+        }
+
+        /* Editor Panel */
+        .editor-panel {
+            flex: 1;
+            min-height: 150px;
+        }
+
+        #editor-container {
+            height: 100%;
+            width: 100%;
+        }
+
+        /* Horizontal Resize Handle */
+        .h-resize-handle {
+            height: 4px;
+            background: var(--border);
+            cursor: row-resize;
+            flex-shrink: 0;
+        }
+
+        .h-resize-handle:hover {
+            background: var(--bg-primary);
+        }
+
+        /* Terminal Panel */
+        .terminal-panel {
+            height: 200px;
+            min-height: 80px;
+        }
+
+        #terminal-container {
+            height: 100%;
+            overflow-y: auto;
+            background: #1e1e1e;
+        }
+
+        /* Status Panel (top right) */
+        .status-panel {
+            flex-shrink: 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .status-content {
+            padding: 8px 10px;
+        }
+
+        .status-row {
+            display: flex;
+            align-items: center;
+            padding: 2px 0;
+            font-size: 11px;
+        }
+
+        .status-label {
+            color: var(--text-muted);
+            width: 70px;
+        }
+
+        .status-value {
+            flex: 1;
+            color: var(--text);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #666;
+        }
+
+        .status-dot.connected {
+            background: var(--status-connected);
+            box-shadow: 0 0 6px rgba(82, 196, 26, 0.5);
+        }
+
+        /* Info Panel (middle right) */
+        .info-panel {
+            height: 120px;
+            min-height: 60px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .info-content {
+            padding: 10px;
+            font-size: 11px;
+            overflow-y: auto;
+            height: 100%;
+        }
+
+        .info-placeholder {
+            color: var(--text-dim);
+            font-style: italic;
+        }
+
+        .info-filename {
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 6px;
+            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
+        }
+
+        .info-description {
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        .info-tags {
+            margin-top: 8px;
+        }
+
+        .info-tag {
+            display: inline-block;
+            padding: 2px 6px;
+            background: var(--bg-button);
+            border-radius: 3px;
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-right: 4px;
+            margin-bottom: 4px;
+        }
+
+        .info-section {
+            margin-bottom: 12px;
+        }
+
+        .info-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .info-label {
+            color: var(--text-muted);
+            font-size: 10px;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+
+        .info-value {
+            color: var(--text);
+            line-height: 1.4;
+        }
+
+        .info-desc {
+            color: var(--text-muted);
+            font-style: italic;
+        }
+
+        /* Controls Panel */
+        .live-update-toggle {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 10px;
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+
+        .live-update-toggle input {
+            margin: 0;
+        }
+
+        .control-group {
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .control-group:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .control-proc-name {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-header);
+            margin-bottom: 8px;
+            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
+        }
+
+        .control-param {
+            margin-bottom: 8px;
+        }
+
+        .control-param:last-child {
+            margin-bottom: 0;
+        }
+
+        .control-param label {
+            display: block;
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-bottom: 3px;
+        }
+
+        .control-param-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .control-param input[type="range"] {
+            flex: 1;
+            height: 4px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: var(--border);
+            border-radius: 2px;
+            outline: none;
+        }
+
+        .control-param input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--bg-primary);
+            cursor: pointer;
+        }
+
+        .control-param input[type="text"],
+        .control-param input[type="number"] {
+            flex: 1;
+            background: var(--bg-app);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            color: var(--text);
+            padding: 4px 6px;
+            font-size: 11px;
+        }
+
+        .control-param select {
+            flex: 1;
+            background: var(--bg-app);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            color: var(--text);
+            padding: 4px 6px;
+            font-size: 11px;
+        }
+
+        .control-param-value {
+            min-width: 50px;
+            text-align: right;
+            font-size: 10px;
+            color: var(--text);
+            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
+        }
+
+        .control-param-unit {
+            font-size: 9px;
+            color: var(--text-muted);
+        }
+
+        .control-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .control-actions button {
+            flex: 1;
+            padding: 4px 8px;
+            background: var(--bg-button);
+            color: var(--text);
+            border: 1px solid var(--border-light);
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 10px;
+        }
+
+        .control-actions button:hover {
+            background: var(--bg-button-hover);
+        }
+
+        .control-actions button.primary {
+            background: var(--bg-primary);
+            border-color: var(--bg-primary);
+            color: #fff;
+        }
+
+        .control-actions button.primary:hover {
+            background: var(--bg-primary-hover);
+        }
+
+        /* Log Panel (bottom right) */
+        .log-panel {
+            flex: 1;
+            min-height: 100px;
+        }
+
+        .log-output {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px 10px;
+            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
+            font-size: 11px;
+            line-height: 1.5;
+            background: #1e1e1e;
+            height: 100%;
+        }
+
+        .log-entry {
+            margin-bottom: 1px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .log-entry.error {
+            color: #f85149;
+        }
+
+        .log-entry.info {
+            color: #58a6ff;
+        }
+
+        .log-entry.warn {
+            color: #d29922;
+        }
+
+        /* Scrollbars */
+        .examples-tree::-webkit-scrollbar,
+        .log-output::-webkit-scrollbar,
+        .info-content::-webkit-scrollbar,
+        #terminal-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .examples-tree::-webkit-scrollbar-track,
+        .log-output::-webkit-scrollbar-track,
+        .info-content::-webkit-scrollbar-track,
+        #terminal-container::-webkit-scrollbar-track {
+            background: #1e1e1e;
+        }
+
+        .examples-tree::-webkit-scrollbar-thumb,
+        .log-output::-webkit-scrollbar-thumb,
+        .info-content::-webkit-scrollbar-thumb,
+        #terminal-container::-webkit-scrollbar-thumb {
+            background: #3e3e42;
+            border-radius: 4px;
+        }
+
+        .examples-tree::-webkit-scrollbar-thumb:hover,
+        .log-output::-webkit-scrollbar-thumb:hover,
+        .info-content::-webkit-scrollbar-thumb:hover,
+        #terminal-container::-webkit-scrollbar-thumb:hover {
+            background: #4e4e52;
+        }
+
+        /* Keyboard shortcuts footer */
+        .shortcuts-bar {
+            padding: 4px 10px;
+            background: var(--bg-header);
+            border-top: 1px solid var(--border);
+            font-size: 10px;
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+
+        .shortcuts-bar kbd {
+            background: #333;
+            padding: 1px 4px;
+            border-radius: 2px;
+            margin: 0 2px;
+            color: var(--text-muted);
+        }
+
+        /* Editor status bar */
+        .editor-status-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 10px;
+            background: var(--bg-header);
+            border-top: 1px solid var(--border);
+            font-size: 10px;
+            flex-shrink: 0;
+        }
+
+        .editor-shortcuts {
+            color: var(--text-dim);
+        }
+
+        .editor-shortcuts kbd {
+            background: #333;
+            padding: 1px 4px;
+            border-radius: 2px;
+            margin: 0 2px;
+            color: var(--text-muted);
+        }
+
+        .editor-info {
+            color: var(--text-muted);
+        }
+
+        .editor-info.has-errors {
+            color: var(--status-error);
+        }
+
+        .editor-info.has-warnings {
+            color: #d29922;
+        }
+
+        /* Lint results panel */
+        .lint-results {
+            display: none;
+            max-height: 120px;
+            overflow-y: auto;
+            background: #1a1a1a;
+            border-top: 1px solid var(--border);
+            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
+            font-size: 11px;
+            flex-shrink: 0;
+        }
+
+        .lint-results.visible {
+            display: block;
+        }
+
+        .lint-results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 10px;
+            background: var(--bg-header);
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+        }
+
+        .lint-results-title {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-header);
+            text-transform: uppercase;
+        }
+
+        .lint-results-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 14px;
+            line-height: 1;
+            padding: 0 4px;
+        }
+
+        .lint-results-close:hover {
+            color: #fff;
+        }
+
+        .lint-results-body {
+            padding: 6px 0;
+        }
+
+        .lint-item {
+            display: flex;
+            align-items: flex-start;
+            padding: 3px 10px;
+            cursor: pointer;
+        }
+
+        .lint-item:hover {
+            background: var(--bg-hover);
+        }
+
+        .lint-item-icon {
+            margin-right: 8px;
+            flex-shrink: 0;
+        }
+
+        .lint-item-icon.error {
+            color: var(--status-error);
+        }
+
+        .lint-item-icon.warning {
+            color: #d29922;
+        }
+
+        .lint-item-location {
+            color: var(--text-muted);
+            margin-right: 8px;
+            flex-shrink: 0;
+            min-width: 50px;
+        }
+
+        .lint-item-message {
+            color: var(--text);
+            flex: 1;
+        }
+
+        .lint-results-empty {
+            padding: 12px 10px;
+            color: var(--status-connected);
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <!-- Status Bar -->
+    <div class="status-bar">
+        <h1>stim2</h1>
+        <div class="status-indicator" id="statusIndicator"></div>
+        <span class="status-text" id="connectionStatus">Connecting...</span>
+        <div class="status-spacer"></div>
+        <button onclick="refreshWorkspaces()" title="Refresh workspaces">↻ Refresh</button>
+        <button onclick="reconnect()">Reconnect</button>
+    </div>
+
+    <!-- Main 3-Column Layout -->
+    <div class="main-container">
+        <!-- Left: Navigator + Controls -->
+        <div class="nav-column" id="navColumn">
+            <!-- Search -->
+            <div class="nav-search">
+                <input type="text" id="searchInput" placeholder="Search files..." oninput="onSearchInput(this.value)">
+            </div>
+            
+            <!-- Workspaces Tree -->
+            <div class="nav-tree-container" id="navTreeContainer">
+                <div class="examples-tree" id="workspacesTree">
+                    <div class="tree-loading">Loading workspaces...</div>
+                </div>
+            </div>
+            
+            <!-- Resize handle between tree and controls -->
+            <div class="nav-h-resize-handle" id="navHResizeHandle"></div>
+            
+            <!-- Controls -->
+            <div class="nav-controls-container" id="navControlsContainer">
+                <div class="panel-header">
+                    <span class="panel-title">Controls</span>
+                    <div class="panel-actions">
+                        <label class="live-update-toggle" title="Auto-run on parameter change">
+                            <input type="checkbox" id="liveUpdate" checked>
+                            Live
+                        </label>
+                    </div>
+                </div>
+                <div class="controls-content" id="controlsContent">
+                    <div class="controls-placeholder">Select a file to see controls</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="v-resize-handle" id="leftResizeHandle"></div>
+
+        <!-- Middle: Editor + Terminal -->
+        <div class="main-column">
+            <!-- Editor -->
+            <div class="panel editor-panel" id="editorPanel">
+                <div class="panel-header">
+                    <span class="panel-title">Editor</span>
+                    <div class="panel-actions">
+                        <button onclick="clearEditor()">Clear</button>
+                        <button onclick="formatCode()">Format</button>
+                        <button onclick="lintCode()">Lint</button>
+                        <button class="primary" onclick="runCode()">▶ Run</button>
+                    </div>
+                </div>
+                <div class="panel-body">
+                    <div id="editor-container"></div>
+                </div>
+                <!-- Editor status bar -->
+                <div class="editor-status-bar">
+                    <span class="editor-shortcuts">
+                        <kbd>Shift+Enter</kbd> run line
+                        <kbd>Ctrl+/</kbd> comment
+                        <kbd>Mod+Shift+F</kbd> format
+                        <kbd>Tab</kbd> complete
+                    </span>
+                    <span class="editor-info" id="editorInfo">Ready</span>
+                </div>
+                <!-- Lint results (hidden by default) -->
+                <div class="lint-results" id="lintResults"></div>
+            </div>
+
+            <!-- Horizontal Resize -->
+            <div class="h-resize-handle" id="hResizeHandle"></div>
+
+            <!-- Terminal -->
+            <div class="panel terminal-panel" id="terminalPanel">
+                <div class="panel-header">
+                    <span class="panel-title">Terminal</span>
+                    <div class="panel-actions">
+                        <button onclick="clearTerminal()">Clear</button>
+                    </div>
+                </div>
+                <div class="panel-body">
+                    <div id="terminal-container"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="v-resize-handle" id="rightResizeHandle"></div>
+
+        <!-- Right: Status + Info + Log -->
+        <div class="info-column" id="infoColumn">
+            <!-- Status Panel -->
+            <div class="panel status-panel">
+                <div class="panel-header">
+                    <span class="panel-title">Status</span>
+                </div>
+                <div class="panel-body">
+                    <div class="status-content">
+                        <div class="status-row">
+                            <span class="status-label">Connection</span>
+                            <span class="status-value" id="connectionStatusText">Connecting...</span>
+                            <span class="status-dot" id="statusDot"></span>
+                        </div>
+                        <div class="status-row">
+                            <span class="status-label">State</span>
+                            <span class="status-value" id="stateValue">-</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="status-label">FPS</span>
+                            <span class="status-value" id="fpsValue">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Info Panel -->
+            <div class="panel info-panel" id="infoPanel">
+                <div class="panel-header">
+                    <span class="panel-title">Info</span>
+                </div>
+                <div class="panel-body">
+                    <div class="info-content" id="infoContent">
+                        <div class="info-placeholder">Select a file to see info</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Log Panel -->
+            <div class="panel log-panel">
+                <div class="panel-header">
+                    <span class="panel-title">Log</span>
+                    <div class="panel-actions">
+                        <button onclick="clearLog()">Clear</button>
+                    </div>
+                </div>
+                <div class="panel-body">
+                    <div class="log-output" id="logOutput"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/TclFormatter.js"></script>
+    <script src="js/TclLinter.js"></script>
+    <script src="js/TclEditor.js"></script>
+    <script src="js/TclTerminal.js"></script>
+
+    <script>
+        // ============================================================
+        // WebSocket Connection
+        // ============================================================
+        class Stim2Connection {
+            constructor() {
+                this.ws = null;
+                this.requestId = 0;
+                this.callbacks = new Map();
+                this.onStatusUpdate = null;
+            }
+
+            connect() {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/ws`;
+                
+                this.ws = new WebSocket(wsUrl);
+                
+                this.ws.onopen = () => {
+                    updateConnectionStatus(true);
+                    // Load workspaces once connected
+                    loadWorkspaces();
+                };
+                
+                this.ws.onclose = () => {
+                    updateConnectionStatus(false);
+                    setTimeout(() => this.connect(), 3000);
+                };
+                
+                this.ws.onmessage = (event) => {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        this.handleMessage(msg);
+                    } catch (e) {
+                        console.error('Failed to parse message:', e);
+                    }
+                };
+            }
+
+            handleMessage(msg) {
+                if (msg.type === 'response') {
+                    const callback = this.callbacks.get(msg.requestId);
+                    if (callback) {
+                        if (msg.status === 'ok') {
+                            callback.resolve(msg.result || '');
+                        } else {
+                            callback.reject(new Error(msg.error || 'Unknown error'));
+                        }
+                        this.callbacks.delete(msg.requestId);
+                    }
+                } else if (msg.type === 'log') {
+                    addLogEntry(msg.level, msg.message);
+                } else if (msg.type === 'status' && this.onStatusUpdate) {
+                    this.onStatusUpdate(msg);
+                }
+            }
+
+            eval(script) {
+                return new Promise((resolve, reject) => {
+                    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                        reject(new Error('Not connected'));
+                        return;
+                    }
+                    
+                    const reqId = `req_${++this.requestId}`;
+                    this.callbacks.set(reqId, { resolve, reject });
+                    
+                    this.ws.send(JSON.stringify({
+                        cmd: 'eval',
+                        script: script,
+                        requestId: reqId
+                    }));
+                });
+            }
+            
+            send(command, interpreter) {
+                return this.eval(command);
+            }
+        }
+
+        // ============================================================
+        // UI State
+        // ============================================================
+        const statusIndicator = document.getElementById('statusIndicator');
+        const statusDot = document.getElementById('statusDot');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const connectionStatusText = document.getElementById('connectionStatusText');
+        const stateValue = document.getElementById('stateValue');
+        const fpsValue = document.getElementById('fpsValue');
+        const logOutput = document.getElementById('logOutput');
+        const workspacesTree = document.getElementById('workspacesTree');
+        const controlsContent = document.getElementById('controlsContent');
+        const infoContent = document.getElementById('infoContent');
+        const editorPanel = document.getElementById('editorPanel');
+        const terminalPanel = document.getElementById('terminalPanel');
+        const navTreeContainer = document.getElementById('navTreeContainer');
+        const navControlsContainer = document.getElementById('navControlsContainer');
+        const searchInput = document.getElementById('searchInput');
+
+        let connection = null;
+        let terminal = null;
+        let editor = null;
+        let currentWorkspace = null;
+        let currentFile = null;
+        let currentFileInfo = null;
+        let currentExports = {};
+        let workspacesData = [];  // Store full tree data for search
+        let liveUpdateTimer = null;
+
+        // ============================================================
+        // Initialization
+        // ============================================================
+        async function init() {
+            connection = new Stim2Connection();
+            connection.onStatusUpdate = (msg) => {
+                stateValue.textContent = msg.state || '-';
+                fpsValue.textContent = msg.fps ? msg.fps.toFixed(1) : '-';
+            };
+            connection.connect();
+
+            terminal = new TclTerminal('terminal-container', connection, {
+                interpreter: 'stim2',
+                welcomeMessage: 'stim2 Tcl Terminal',
+                showWelcome: true,
+                useLinkedSubprocess: false
+            });
+
+            editor = new TclEditor('editor-container', {
+                theme: 'dark',
+                fontSize: '12px',
+                tabSize: 4
+            });
+
+            document.getElementById('editor-container').addEventListener('editor-ready', () => {
+                editor.setWebSocket(connection);
+                editor.setOnExecute(executeSnippet);
+            }, { once: true });
+
+            setupResizeHandlers();
+        }
+
+        // ============================================================
+        // Resize Handlers
+        // ============================================================
+        function setupResizeHandlers() {
+            // Horizontal resize (editor/terminal split)
+            setupVerticalResize('hResizeHandle', editorPanel, terminalPanel, 'height', 100, 80);
+            
+            // Left column resize
+            setupHorizontalResize('leftResizeHandle', 'navColumn', 150, 400, 'left');
+            
+            // Right column resize
+            setupHorizontalResize('rightResizeHandle', 'infoColumn', 200, 400, 'right');
+            
+            // Nav panel internal resize (tree/controls split)
+            setupNavInternalResize();
+        }
+
+        function setupNavInternalResize() {
+            const handle = document.getElementById('navHResizeHandle');
+            const treeContainer = navTreeContainer;
+            const controlsContainer = navControlsContainer;
+            let isResizing = false;
+            let startY = 0;
+            let startTreeHeight = 0;
+
+            handle.addEventListener('mousedown', (e) => {
+                isResizing = true;
+                startY = e.clientY;
+                startTreeHeight = treeContainer.offsetHeight;
+                document.body.style.cursor = 'row-resize';
+                e.preventDefault();
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isResizing) return;
+                const delta = e.clientY - startY;
+                const navColumn = document.getElementById('navColumn');
+                const availableHeight = navColumn.offsetHeight - 44 - 4 - 32; // search, handle, controls header
+                const newTreeHeight = Math.max(80, Math.min(availableHeight - 80, startTreeHeight + delta));
+                treeContainer.style.flex = 'none';
+                treeContainer.style.height = newTreeHeight + 'px';
+            });
+
+            document.addEventListener('mouseup', () => {
+                if (isResizing) {
+                    isResizing = false;
+                    document.body.style.cursor = '';
+                }
+            });
+        }
+
+        function setupVerticalResize(handleId, topPanel, bottomPanel, prop, topMin, bottomMin) {
+            const handle = document.getElementById(handleId);
+            let isResizing = false;
+            let startY = 0;
+            let startHeight = 0;
+
+            handle.addEventListener('mousedown', (e) => {
+                isResizing = true;
+                startY = e.clientY;
+                startHeight = topPanel.offsetHeight;
+                document.body.style.cursor = 'row-resize';
+                e.preventDefault();
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isResizing) return;
+                const delta = e.clientY - startY;
+                const container = topPanel.parentElement;
+                const maxHeight = container.offsetHeight - bottomMin - 50;
+                const newHeight = Math.max(topMin, Math.min(maxHeight, startHeight + delta));
+                topPanel.style.flex = 'none';
+                topPanel.style.height = newHeight + 'px';
+            });
+
+            document.addEventListener('mouseup', () => {
+                if (isResizing) {
+                    isResizing = false;
+                    document.body.style.cursor = '';
+                }
+            });
+        }
+
+        function setupHorizontalResize(handleId, columnId, minWidth, maxWidth, side) {
+            const handle = document.getElementById(handleId);
+            const column = document.getElementById(columnId);
+            let isResizing = false;
+            let startX = 0;
+            let startWidth = 0;
+
+            handle.addEventListener('mousedown', (e) => {
+                isResizing = true;
+                startX = e.clientX;
+                startWidth = column.offsetWidth;
+                document.body.style.cursor = 'col-resize';
+                e.preventDefault();
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isResizing) return;
+                const delta = side === 'left' ? e.clientX - startX : startX - e.clientX;
+                const newWidth = Math.max(minWidth, Math.min(maxWidth, startWidth + delta));
+                column.style.width = newWidth + 'px';
+            });
+
+            document.addEventListener('mouseup', () => {
+                if (isResizing) {
+                    isResizing = false;
+                    document.body.style.cursor = '';
+                }
+            });
+        }
+
+        // ============================================================
+        // Workspaces Browser
+        // ============================================================
+        async function loadWorkspaces() {
+            workspacesTree.innerHTML = '<div class="tree-loading">Loading workspaces...</div>';
+            
+            try {
+                // Initialize workspace system
+                await connection.eval('workspace::init');
+                
+                // Get list of workspaces
+                const result = await connection.eval('workspace::list_workspaces');
+                const data = JSON.parse(result);
+                
+                if (!data.workspaces || data.workspaces.length === 0) {
+                    workspacesTree.innerHTML = '<div class="tree-empty">No workspaces available</div>';
+                    return;
+                }
+                
+                workspacesTree.innerHTML = '';
+                
+                // For each workspace, scan and render
+                for (const ws of data.workspaces) {
+                    if (!ws.exists) continue;
+                    
+                    const scanResult = await connection.eval(`workspace::scan "${ws.id}"`);
+                    const scanData = JSON.parse(scanResult);
+                    
+                    renderWorkspace(ws, scanData.items || []);
+                }
+            } catch (e) {
+                console.error('Failed to load workspaces:', e);
+                workspacesTree.innerHTML = `<div class="tree-error">Error: ${e.message}</div>`;
+            }
+        }
+
+        function renderWorkspace(workspace, items) {
+            const wsEl = document.createElement('div');
+            wsEl.className = 'tree-category';
+            
+            const header = document.createElement('div');
+            header.className = 'tree-category-header';
+            const icon = workspace.icon === 'package' ? '📦' : '📁';
+            header.innerHTML = `<span class="tree-category-icon">▼</span>${icon} ${workspace.name}`;
+            header.onclick = (e) => {
+                if (e.target === header || e.target.classList.contains('tree-category-icon')) {
+                    wsEl.classList.toggle('collapsed');
+                }
+            };
+            
+            const itemsContainer = document.createElement('div');
+            itemsContainer.className = 'tree-items';
+            
+            renderItems(itemsContainer, workspace.id, items);
+            
+            wsEl.appendChild(header);
+            wsEl.appendChild(itemsContainer);
+            workspacesTree.appendChild(wsEl);
+        }
+
+        function renderItems(container, workspaceId, items) {
+            items.forEach(item => {
+                if (item.type === 'directory') {
+                    const dirEl = document.createElement('div');
+                    dirEl.className = 'tree-category';
+                    
+                    // Use title if available, otherwise folder name
+                    const displayName = item.title || item.name;
+                    
+                    const header = document.createElement('div');
+                    header.className = 'tree-category-header';
+                    header.innerHTML = `<span class="tree-category-icon">▼</span>📁 ${displayName}`;
+                    header.title = item.name; // Show folder name on hover
+                    header.onclick = (e) => {
+                        if (e.target === header || e.target.classList.contains('tree-category-icon')) {
+                            dirEl.classList.toggle('collapsed');
+                        }
+                    };
+                    
+                    const childContainer = document.createElement('div');
+                    childContainer.className = 'tree-items';
+                    
+                    if (item.children && item.children.length > 0) {
+                        renderItems(childContainer, workspaceId, item.children);
+                    }
+                    
+                    dirEl.appendChild(header);
+                    dirEl.appendChild(childContainer);
+                    container.appendChild(dirEl);
+                } else {
+                    const fileEl = document.createElement('div');
+                    fileEl.className = 'tree-item';
+                    // Use title if available, otherwise fall back to filename
+                    const displayName = item.title || item.name;
+                    fileEl.innerHTML = `<span class="tree-item-icon">📄</span>${displayName}`;
+                    fileEl.title = item.name; // Show filename on hover
+                    fileEl.onclick = () => selectFile(workspaceId, item.path, fileEl);
+                    container.appendChild(fileEl);
+                }
+            });
+        }
+
+        async function selectFile(workspaceId, filepath, element) {
+            // Update selection UI
+            document.querySelectorAll('.tree-item.selected').forEach(el => el.classList.remove('selected'));
+            element.classList.add('selected');
+            
+            currentWorkspace = workspaceId;
+            currentFile = filepath;
+            
+            // Load file content into editor
+            try {
+                const content = await connection.eval(`workspace::load "${workspaceId}" "${filepath}"`);
+                editor.setValue(content);
+                
+                // Update info panel
+                updateInfoPanel(filepath, content);
+                
+                // Activate file and get exports
+                const exportsJson = await connection.eval(`workspace::activate "${workspaceId}" "${filepath}"`);
+                currentExports = JSON.parse(exportsJson);
+                renderControls(currentExports);
+                
+                // Auto-run first exported proc with defaults
+                const procNames = Object.keys(currentExports);
+                if (procNames.length > 0) {
+                    runProc(procNames[0]);
+                }
+            } catch (e) {
+                console.error('Failed to load file:', e);
+                addLogEntry('error', `Failed to load ${filepath}: ${e.message}`);
+            }
+        }
+
+        function renderControls(exports) {
+            if (!exports || Object.keys(exports).length === 0) {
+                controlsContent.innerHTML = '<div class="controls-placeholder">No exported controls</div>';
+                return;
+            }
+            
+            let html = '';
+            
+            for (const [procName, info] of Object.entries(exports)) {
+                html += `<div class="control-group" data-proc="${procName}">`;
+                html += `<div class="control-proc-name">${procName}</div>`;
+                
+                if (info.params && info.params.length > 0) {
+                    for (const param of info.params) {
+                        html += renderParamControl(procName, param);
+                    }
+                }
+                
+                html += `
+                    <div class="control-actions">
+                        <button class="primary" onclick="runProc('${procName}')">▶ Run</button>
+                    </div>
+                `;
+                html += '</div>';
+            }
+            
+            controlsContent.innerHTML = html;
+        }
+
+        function renderParamControl(procName, param) {
+            const inputId = `param_${procName}_${param.name}`.replace(/::/g, '_').replace(/[^a-zA-Z0-9_]/g, '_');
+            const defaultVal = param.default !== undefined ? param.default : (param.min !== undefined ? param.min : '');
+            const label = param.label || param.name;
+            const unit = param.unit || '';
+            
+            let html = `<div class="control-param" data-param="${param.name}">`;
+            html += `<label>${label}</label>`;
+            html += '<div class="control-param-row">';
+            
+            switch (param.type) {
+                case 'int':
+                case 'float':
+                    const step = param.step || (param.type === 'int' ? 1 : 0.1);
+                    const min = param.min !== undefined ? param.min : 0;
+                    const max = param.max !== undefined ? param.max : 100;
+                    html += `
+                        <input type="range" 
+                               id="${inputId}" 
+                               data-proc="${procName}"
+                               data-param="${param.name}"
+                               data-type="${param.type}"
+                               min="${min}" 
+                               max="${max}" 
+                               step="${step}" 
+                               value="${defaultVal}"
+                               oninput="onParamChange(this)">
+                        <span class="control-param-value" id="${inputId}_val">${defaultVal}</span>
+                        ${unit ? `<span class="control-param-unit">${unit}</span>` : ''}
+                    `;
+                    break;
+                    
+                case 'bool':
+                    html += `
+                        <input type="checkbox" 
+                               id="${inputId}"
+                               data-proc="${procName}"
+                               data-param="${param.name}"
+                               data-type="bool"
+                               ${defaultVal ? 'checked' : ''}
+                               onchange="onParamChange(this)">
+                    `;
+                    break;
+                    
+                case 'string':
+                    html += `
+                        <input type="text" 
+                               id="${inputId}"
+                               data-proc="${procName}"
+                               data-param="${param.name}"
+                               data-type="string"
+                               value="${defaultVal}"
+                               onkeydown="if(event.key==='Enter'){onParamChange(this);event.preventDefault();}">
+                    `;
+                    break;
+                    
+                case 'choice':
+                    const choices = param.choices || [];
+                    html += `<select id="${inputId}" 
+                                     data-proc="${procName}"
+                                     data-param="${param.name}"
+                                     data-type="choice"
+                                     onchange="onParamChange(this)">`;
+                    for (const choice of choices) {
+                        const selected = choice === defaultVal ? 'selected' : '';
+                        html += `<option value="${choice}" ${selected}>${choice}</option>`;
+                    }
+                    html += '</select>';
+                    break;
+                    
+                default:
+                    html += `<input type="text" 
+                                    id="${inputId}"
+                                    data-proc="${procName}"
+                                    data-param="${param.name}"
+                                    data-type="${param.type}"
+                                    value="${defaultVal}"
+                                    onchange="onParamChange(this)">`;
+            }
+            
+            html += '</div></div>';
+            return html;
+        }
+
+        function onParamChange(el) {
+            // Update displayed value for sliders
+            const valSpan = document.getElementById(el.id + '_val');
+            if (valSpan) {
+                valSpan.textContent = el.value;
+            }
+            
+            // Live update if enabled - immediate, no throttle
+            if (document.getElementById('liveUpdate').checked) {
+                runProc(el.dataset.proc);
+            }
+        }
+
+        function runProc(procName) {
+            const info = currentExports[procName];
+            if (!info) return;
+            
+            const args = [];
+            
+            for (const param of info.params) {
+                const inputId = `param_${procName}_${param.name}`.replace(/::/g, '_').replace(/[^a-zA-Z0-9_]/g, '_');
+                const el = document.getElementById(inputId);
+                if (!el) continue;
+                
+                let value;
+                switch (param.type) {
+                    case 'bool':
+                        value = el.checked ? '1' : '0';
+                        break;
+                    case 'string':
+                        value = `"${el.value.replace(/"/g, '\\"')}"`;
+                        break;
+                    case 'choice':
+                        value = `"${el.value}"`;
+                        break;
+                    default:
+                        value = el.value;
+                }
+                args.push(value);
+            }
+            
+            const cmd = `${procName} ${args.join(' ')}`;
+            connection.eval(cmd).then(result => {
+                if (result) {
+                    addLogEntry('', result);
+                }
+            }).catch(e => {
+                addLogEntry('error', e.message);
+            });
+        }
+
+        function refreshWorkspaces() {
+            // Clear search
+            searchInput.value = '';
+            
+            // Clear current selection
+            currentWorkspace = null;
+            currentFile = null;
+            currentExports = {};
+            
+            // Clear controls panel
+            controlsContent.innerHTML = '<div class="controls-placeholder">Select a file to see controls</div>';
+            
+            // Reload workspaces
+            loadWorkspaces();
+        }
+
+        // ============================================================
+        // Search
+        // ============================================================
+        function onSearchInput(query) {
+            const q = query.toLowerCase().trim();
+            const items = workspacesTree.querySelectorAll('.tree-item');
+            const categories = workspacesTree.querySelectorAll('.tree-category');
+            
+            if (q === '') {
+                // Show all
+                items.forEach(el => el.classList.remove('hidden'));
+                categories.forEach(el => el.classList.remove('collapsed'));
+                return;
+            }
+            
+            // Hide/show items based on match
+            items.forEach(el => {
+                const name = el.textContent.toLowerCase();
+                if (name.includes(q)) {
+                    el.classList.remove('hidden');
+                } else {
+                    el.classList.add('hidden');
+                }
+            });
+            
+            // Expand all categories to show matches, hide empty ones
+            categories.forEach(cat => {
+                cat.classList.remove('collapsed');
+                const visibleItems = cat.querySelectorAll('.tree-item:not(.hidden)');
+                const childCategories = cat.querySelectorAll(':scope > .tree-items > .tree-category');
+                let hasVisible = visibleItems.length > 0;
+                childCategories.forEach(child => {
+                    if (child.querySelectorAll('.tree-item:not(.hidden)').length > 0) {
+                        hasVisible = true;
+                    }
+                });
+                // Keep all visible for now - could hide empty containers
+            });
+        }
+
+        // ============================================================
+        // File Info
+        // ============================================================
+        function parseFileInfo(content) {
+            const lines = content.split('\n');
+            let description = '';
+            let tags = [];
+            let seeAlso = [];
+            
+            for (const line of lines) {
+                if (line.startsWith('#')) {
+                    const text = line.replace(/^#\s*/, '');
+                    if (text.toLowerCase().startsWith('demonstrates:')) {
+                        tags = text.substring(13).split(',').map(s => s.trim());
+                    } else if (text.toLowerCase().startsWith('see also:')) {
+                        seeAlso = text.substring(9).split(',').map(s => s.trim());
+                    } else if (!text.startsWith('examples/') && text.length > 0) {
+                        if (description) description += ' ';
+                        description += text;
+                    }
+                } else if (line.trim() && !line.startsWith('#')) {
+                    break;  // Stop at first non-comment line
+                }
+            }
+            
+            return { description, tags, seeAlso };
+        }
+
+        function updateInfoPanel(filepath, content) {
+            const filename = filepath.split('/').pop();
+            const info = parseFileInfo(content);
+            currentFileInfo = info;
+            
+            let html = `<div class="info-filename">${filename}</div>`;
+            
+            if (info.description) {
+                html += `<div class="info-description">${info.description}</div>`;
+            }
+            
+            if (info.tags && info.tags.length > 0) {
+                html += '<div class="info-tags">';
+                for (const tag of info.tags) {
+                    html += `<span class="info-tag">${tag}</span>`;
+                }
+                html += '</div>';
+            }
+            
+            infoContent.innerHTML = html;
+        }
+
+        // ============================================================
+        // Connection Status
+        // ============================================================
+        function updateConnectionStatus(connected) {
+            if (connected) {
+                statusIndicator.classList.add('connected');
+                statusDot.classList.add('connected');
+                connectionStatus.textContent = 'Connected';
+                if (connectionStatusText) connectionStatusText.textContent = 'Connected';
+            } else {
+                statusIndicator.classList.remove('connected');
+                statusDot.classList.remove('connected');
+                connectionStatus.textContent = 'Disconnected';
+                if (connectionStatusText) connectionStatusText.textContent = 'Disconnected';
+            }
+        }
+
+        // ============================================================
+        // Log Output
+        // ============================================================
+        function addLogEntry(level, message) {
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${level || ''}`;
+            entry.textContent = message;
+            logOutput.appendChild(entry);
+            logOutput.scrollTop = logOutput.scrollHeight;
+        }
+
+        function clearLog() {
+            logOutput.innerHTML = '';
+        }
+
+        // ============================================================
+        // Editor Actions
+        // ============================================================
+        async function runCode() {
+            if (!editor || !connection) return;
+            
+            const code = editor.getValue().trim();
+            if (!code) return;
+
+            try {
+                addLogEntry('info', '>>> Running code...');
+                const result = await connection.eval(code);
+                if (result) {
+                    addLogEntry('', result);
+                }
+            } catch (e) {
+                addLogEntry('error', `Error: ${e.message}`);
+            }
+        }
+
+        async function executeSnippet(code) {
+            if (!code.trim() || !connection) return;
+
+            const shortCode = code.split('\n')[0] + (code.includes('\n') ? ' ...' : '');
+
+            try {
+                if (terminal && typeof terminal.showCommand === 'function') {
+                    terminal.showCommand(shortCode);
+                } else {
+                    addLogEntry('info', `>>> ${shortCode}`);
+                }
+                
+                const result = await connection.eval(code);
+                
+                if (result) {
+                    if (terminal && typeof terminal.showResult === 'function') {
+                        terminal.showResult(result);
+                    } else {
+                        addLogEntry('', result);
+                    }
+                }
+            } catch (e) {
+                if (terminal && typeof terminal.showError === 'function') {
+                    terminal.showError(e.message);
+                } else {
+                    addLogEntry('error', `Error: ${e.message}`);
+                }
+            }
+        }
+
+        function clearEditor() {
+            if (editor) editor.setValue('');
+        }
+
+        function formatCode() {
+            if (editor) editor.format();
+        }
+
+        // ============================================================
+        // Linting
+        // ============================================================
+        function lintCode() {
+            if (!editor) return;
+            
+            try {
+                const results = editor.lint();
+                console.log('Lint results:', results);  // Debug
+                showLintResults(results);
+            } catch (e) {
+                console.error('Lint error:', e);
+                addLogEntry('error', `Lint error: ${e.message}`);
+            }
+        }
+
+        function showLintResults(results) {
+            const lintResults = document.getElementById('lintResults');
+            const editorInfo = document.getElementById('editorInfo');
+            
+            // TclLinter returns { isValid, errors: [], warnings: [], summary }
+            let errors = [];
+            let warnings = [];
+            
+            if (results) {
+                if (Array.isArray(results.errors)) {
+                    errors = results.errors;
+                }
+                if (Array.isArray(results.warnings)) {
+                    warnings = results.warnings;
+                }
+            }
+            
+            const allIssues = [...errors, ...warnings];
+            
+            if (allIssues.length === 0) {
+                // No issues found
+                lintResults.innerHTML = `
+                    <div class="lint-results-header">
+                        <span class="lint-results-title">Lint Results</span>
+                        <button class="lint-results-close" onclick="hideLintResults()">×</button>
+                    </div>
+                    <div class="lint-results-empty">✓ No issues found</div>
+                `;
+                lintResults.classList.add('visible');
+                editorInfo.textContent = 'No issues';
+                editorInfo.className = 'editor-info';
+                
+                // Auto-hide after 2 seconds if no issues
+                setTimeout(() => {
+                    if (lintResults.querySelector('.lint-results-empty')) {
+                        hideLintResults();
+                    }
+                }, 2000);
+                return;
+            }
+            
+            // Sort by line number
+            allIssues.sort((a, b) => (a.line || 0) - (b.line || 0));
+            
+            let html = `
+                <div class="lint-results-header">
+                    <span class="lint-results-title">Lint Results (${allIssues.length} issue${allIssues.length > 1 ? 's' : ''})</span>
+                    <button class="lint-results-close" onclick="hideLintResults()">×</button>
+                </div>
+                <div class="lint-results-body">
+            `;
+            
+            allIssues.forEach(issue => {
+                const isError = issue.severity === 'error';
+                const icon = isError ? '✖' : '⚠';
+                const iconClass = isError ? 'error' : 'warning';
+                const line = issue.line || 1;
+                const message = issue.message || 'Unknown issue';
+                html += `
+                    <div class="lint-item" onclick="goToLine(${line})">
+                        <span class="lint-item-icon ${iconClass}">${icon}</span>
+                        <span class="lint-item-location">Line ${line}</span>
+                        <span class="lint-item-message">${escapeHtml(message)}</span>
+                    </div>
+                `;
+            });
+            
+            html += '</div>';
+            lintResults.innerHTML = html;
+            lintResults.classList.add('visible');
+            
+            // Update status
+            if (errors.length > 0) {
+                editorInfo.textContent = `${errors.length} error${errors.length > 1 ? 's' : ''}, ${warnings.length} warning${warnings.length !== 1 ? 's' : ''}`;
+                editorInfo.className = 'editor-info has-errors';
+            } else if (warnings.length > 0) {
+                editorInfo.textContent = `${warnings.length} warning${warnings.length > 1 ? 's' : ''}`;
+                editorInfo.className = 'editor-info has-warnings';
+            }
+        }
+
+        function hideLintResults() {
+            const lintResults = document.getElementById('lintResults');
+            lintResults.classList.remove('visible');
+            document.getElementById('editorInfo').textContent = 'Ready';
+            document.getElementById('editorInfo').className = 'editor-info';
+        }
+
+        function goToLine(lineNumber) {
+            if (editor && editor.view) {
+                const line = editor.view.state.doc.line(lineNumber);
+                editor.view.dispatch({
+                    selection: { anchor: line.from },
+                    scrollIntoView: true
+                });
+                editor.focus();
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ============================================================
+        // Terminal Actions
+        // ============================================================
+        function clearTerminal() {
+            if (terminal) {
+                if (typeof terminal.clear === 'function') {
+                    terminal.clear();
+                } else {
+                    const container = document.getElementById('terminal-container');
+                    const terminalEl = container.querySelector('.tcl-terminal');
+                    if (terminalEl) {
+                        const inputContainer = terminalEl.querySelector('.tcl-terminal-input-container');
+                        terminalEl.innerHTML = '';
+                        if (inputContainer) terminalEl.appendChild(inputContainer);
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        // Reconnect
+        // ============================================================
+        function reconnect() {
+            if (connection && connection.ws) {
+                connection.ws.close();
+            }
+            connection = new Stim2Connection();
+            connection.onStatusUpdate = (msg) => {
+                stateValue.textContent = msg.state || '-';
+                fpsValue.textContent = msg.fps ? msg.fps.toFixed(1) : '-';
+            };
+            connection.connect();
+            
+            if (editor) {
+                editor.setWebSocket(connection);
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
