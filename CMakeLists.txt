@@ -340,8 +340,17 @@ elseif(APPLE)
         COMPONENT stim2
         FILES_MATCHING 
         PATTERN "*.tcl"
+        PATTERN "INDEX"
     )
-    
+
+    # Add assets
+    message("Bundling assets from assets/")
+    install(
+        DIRECTORY assets/
+        DESTINATION ${APP_BUNDLE}/Contents/Resources/assets
+        COMPONENT stim2
+    )
+
     # Add config
     set(CONFIG_SCRIPT config/stim2.cfg)
     message("Bundling config script: ${CONFIG_SCRIPT}")
@@ -463,6 +472,15 @@ else()
         COMPONENT stim2
         FILES_MATCHING 
         PATTERN "*.tcl"
+        PATTERN "INDEX"
+    )
+
+    # Add assets
+    message("Bundling assets from assets/")
+    install(
+        DIRECTORY assets/
+        DESTINATION "/usr/local/stim2/assets"
+        COMPONENT stim2
     )
     
     # Add www directory for WebSocket console (preserves subdirectories)
