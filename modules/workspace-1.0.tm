@@ -119,6 +119,11 @@ proc ::workspace::encode_file_item {yh item} {
     $yh string "name"
     $yh string [dict get $item name]
     
+    if {[dict exists $item title]} {
+        $yh string "title"
+        $yh string [dict get $item title]
+    }
+    
     $yh string "path"
     $yh string [dict get $item path]
     
@@ -348,6 +353,33 @@ proc ::workspace::scan {workspace_id} {
     return $json
 }
 
+proc ::workspace::parse_index {dir_path} {
+    set index_file [file join $dir_path INDEX]
+    set result {}
+    
+    if {![file exists $index_file]} {
+        return $result
+    }
+    
+    set f [open $index_file r]
+    while {[gets $f line] >= 0} {
+        set line [string trim $line]
+        # Skip empty lines and comments
+        if {$line eq "" || [string index $line 0] eq "#"} continue
+        
+        # Parse: filename "Title String"
+        if {[regexp {^(\S+)\s+"([^"]+)"} $line -> name title]} {
+            dict set result $name $title
+        } elseif {[regexp {^(\S+)} $line -> name]} {
+            # No title, just filename
+            dict set result $name ""
+        }
+    }
+    close $f
+    
+    return $result
+}
+
 proc ::workspace::scan_dir {base_path rel_path} {
     if {$rel_path eq ""} {
         set full_path $base_path
@@ -355,12 +387,20 @@ proc ::workspace::scan_dir {base_path rel_path} {
         set full_path [file join $base_path $rel_path]
     }
     
-    set items {}
+    # Parse INDEX file if present
+    set index_info [parse_index $full_path]
+    set has_index [expr {[dict size $index_info] > 0}]
     
-    foreach entry [lsort [glob -nocomplain -directory $full_path *]] {
+    # Collect all items first
+    set file_items {}
+    set dir_items {}
+    
+    foreach entry [glob -nocomplain -directory $full_path *] {
         set name [file tail $entry]
         
+        # Skip hidden files and INDEX file
         if {[string index $name 0] eq "."} continue
+        if {$name eq "INDEX"} continue
         
         if {$rel_path eq ""} {
             set entry_rel $name
@@ -371,21 +411,110 @@ proc ::workspace::scan_dir {base_path rel_path} {
         if {[file isdirectory $entry]} {
             set children [scan_dir $base_path $entry_rel]
             if {[llength $children] > 0} {
-                lappend items [dict create \
+                set dir_item [dict create \
                     type "directory" \
                     name $name \
                     path $entry_rel \
                     children $children]
+                
+                # Add title from INDEX if available (for directories too)
+                if {$has_index && [dict exists $index_info $name]} {
+                    set title [dict get $index_info $name]
+                    if {$title ne ""} {
+                        dict set dir_item title $title
+                    }
+                }
+                
+                lappend dir_items $dir_item
             }
         } elseif {[string match "*.tcl" $name]} {
-            lappend items [dict create \
+            set basename [file rootname $name]
+            set item [dict create \
                 type "file" \
                 name $name \
                 path $entry_rel]
+            
+            # Add title from INDEX if available
+            if {$has_index && [dict exists $index_info $basename]} {
+                set title [dict get $index_info $basename]
+                if {$title ne ""} {
+                    dict set item title $title
+                }
+            }
+            
+            lappend file_items $item
         }
     }
     
-    return $items
+    # Order directories according to INDEX if present
+    if {$has_index} {
+        set ordered_dirs {}
+        set indexed_dir_names {}
+        
+        # First add directories in INDEX order
+        dict for {idx_name title} $index_info {
+            foreach item $dir_items {
+                if {[dict get $item name] eq $idx_name} {
+                    lappend ordered_dirs $item
+                    lappend indexed_dir_names $idx_name
+                    break
+                }
+            }
+        }
+        
+        # Then add any directories not in INDEX (alphabetically)
+        foreach item [lsort -command {apply {{a b} {
+            string compare [dict get $a name] [dict get $b name]
+        }}} $dir_items] {
+            if {[dict get $item name] ni $indexed_dir_names} {
+                lappend ordered_dirs $item
+            }
+        }
+        
+        set dir_items $ordered_dirs
+    } else {
+        # No INDEX - sort directories alphabetically
+        set dir_items [lsort -command {apply {{a b} {
+            string compare [dict get $a name] [dict get $b name]
+        }}} $dir_items]
+    }
+    
+    # Order files according to INDEX if present
+    if {$has_index} {
+        set ordered_files {}
+        set indexed_names {}
+        
+        # First add files in INDEX order
+        dict for {basename title} $index_info {
+            set tcl_name "${basename}.tcl"
+            foreach item $file_items {
+                if {[dict get $item name] eq $tcl_name} {
+                    lappend ordered_files $item
+                    lappend indexed_names $tcl_name
+                    break
+                }
+            }
+        }
+        
+        # Then add any files not in INDEX (alphabetically)
+        foreach item [lsort -command {apply {{a b} {
+            string compare [dict get $a name] [dict get $b name]
+        }}} $file_items] {
+            if {[dict get $item name] ni $indexed_names} {
+                lappend ordered_files $item
+            }
+        }
+        
+        set file_items $ordered_files
+    } else {
+        # No INDEX - sort alphabetically
+        set file_items [lsort -command {apply {{a b} {
+            string compare [dict get $a name] [dict get $b name]
+        }}} $file_items]
+    }
+    
+    # Return directories first, then files
+    return [concat $dir_items $file_items]
 }
 
 proc ::workspace::load {workspace_id filepath} {
