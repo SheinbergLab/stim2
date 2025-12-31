@@ -499,6 +499,117 @@ static int shaderObjSetSamplerCmd(ClientData clientData, Tcl_Interp *interp,
   return(TCL_OK);
 }
 
+/********************************************************************/
+/*                    PATH MANAGEMENT COMMANDS                      */
+/********************************************************************/
+
+/*
+ * shaderAddPath ?path?
+ *   Append a path to the shader search list.
+ *   Returns: 1 on success, 0 if path list is full
+ *   With no args, returns current path count.
+ */
+static int shaderAddPathCmd(ClientData clientData, Tcl_Interp *interp,
+                            int argc, char *argv[])
+{
+    if (argc < 2) {
+        /* No args - return current count */
+        Tcl_SetObjResult(interp, Tcl_NewIntObj(shaderGetPathCount()));
+        return TCL_OK;
+    }
+
+    if (shaderAddPath(argv[1])) {
+        Tcl_SetObjResult(interp, Tcl_NewIntObj(1));
+    } else {
+        Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
+    }
+    return TCL_OK;
+}
+
+/*
+ * shaderPrependPath path
+ *   Add a path to the front of the shader search list.
+ *   Useful for letting local paths override system paths.
+ *   Returns: 1 on success, 0 if path list is full
+ */
+static int shaderPrependPathCmd(ClientData clientData, Tcl_Interp *interp,
+                                int argc, char *argv[])
+{
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " path", NULL);
+        return TCL_ERROR;
+    }
+
+    if (shaderPrependPath(argv[1])) {
+        Tcl_SetObjResult(interp, Tcl_NewIntObj(1));
+    } else {
+        Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
+    }
+    return TCL_OK;
+}
+
+/*
+ * shaderClearPaths
+ *   Remove all paths from the shader search list.
+ *   Also resets the glsw library state.
+ */
+static int shaderClearPathsCmd(ClientData clientData, Tcl_Interp *interp,
+                               int argc, char *argv[])
+{
+    shaderClearPaths();
+    return TCL_OK;
+}
+
+/*
+ * shaderGetPaths
+ *   Returns all search paths as a Tcl list.
+ */
+static int shaderGetPathsCmd(ClientData clientData, Tcl_Interp *interp,
+                             int argc, char *argv[])
+{
+    Tcl_Obj *listObj;
+    int i, count;
+
+    listObj = Tcl_NewListObj(0, NULL);
+    count = shaderGetPathCount();
+
+    for (i = 0; i < count; i++) {
+        const char *path = shaderGetPathN(i);
+        if (path) {
+            Tcl_ListObjAppendElement(interp, listObj, Tcl_NewStringObj(path, -1));
+        }
+    }
+
+    Tcl_SetObjResult(interp, listObj);
+    return TCL_OK;
+}
+
+/*
+ * shaderGetResolvedPath
+ *   Returns the path where the last shader was found.
+ *   Useful for debugging path issues.
+ */
+static int shaderGetResolvedPathCmd(ClientData clientData, Tcl_Interp *interp,
+                                    int argc, char *argv[])
+{
+    Tcl_SetResult(interp, (char *)shaderGetPath(), TCL_VOLATILE);
+    return TCL_OK;
+}
+
+/*
+ * shaderSetSuffix ?suffix?
+ *   Set or get the shader file suffix (default: ".glsl")
+ */
+static int shaderSetSuffixCmd(ClientData clientData, Tcl_Interp *interp,
+                              int argc, char *argv[])
+{
+    if (argc >= 2) {
+        shaderSetSuffix(argv[1]);
+    }
+    Tcl_SetResult(interp, (char *)shaderGetSuffix(), TCL_VOLATILE);
+    return TCL_OK;
+}
+
 static int shaderSetPathCmd(ClientData clientData, Tcl_Interp *interp,
                 int argc, char *argv[])
 {
@@ -1034,6 +1145,27 @@ int Shader_Init(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "shaderSetPath", 
             (Tcl_CmdProc *) shaderSetPathCmd, 
             (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "shaderAddPath",
+            (Tcl_CmdProc *) shaderAddPathCmd,
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "shaderPrependPath",
+            (Tcl_CmdProc *) shaderPrependPathCmd,
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "shaderClearPaths",
+            (Tcl_CmdProc *) shaderClearPathsCmd,
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "shaderGetPaths",
+            (Tcl_CmdProc *) shaderGetPathsCmd,
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "shaderGetResolvedPath",
+            (Tcl_CmdProc *) shaderGetResolvedPathCmd,
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "shaderSetSuffix",
+            (Tcl_CmdProc *) shaderSetSuffixCmd,
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+
+
+
   Tcl_CreateCommand(interp, "shaderBuild", 
             (Tcl_CmdProc *) shaderBuildCmd, 
             (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
