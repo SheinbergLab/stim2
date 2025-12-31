@@ -3,6 +3,13 @@
  *  Simplified image display module using OpenGL
  *  Based on video.c but specialized for still images
  *  Uses stb_image for loading various image formats
+ *
+ *  Supports:
+ *   - Loading images from files (PNG, JPEG, TGA, BMP, etc.)
+ *   - Loading images from raw byte arrays
+ *   - Loading images from DYN_LIST data structures
+ *   - Shared texture pool for efficient multi-instance rendering
+ *   - Real-time image processing via shader uniforms
  */
 
 #ifdef __linux__
@@ -28,46 +35,72 @@
 
 #include <stim2.h>
 #include <prmutil.h>
+#include <df.h>
+#include <tcl_dl.h>
 
-typedef struct _image_obj {
+/****************************************************************/
+/*                   Texture Pool Structures                    */
+/****************************************************************/
+
+#define MAX_IMAGE_TEXTURES 4096
+
+typedef struct _image_texture {
+  int in_use;                   // Is this slot active?
   int width;
   int height;
   int channels;
-  float aspect_ratio;      // width/height ratio
+  float aspect_ratio;
+  GLuint texid;                 // OpenGL texture ID
+  int filter;                   // GL_LINEAR or GL_NEAREST
+} IMAGE_TEXTURE;
+
+typedef struct _image_texture_pool {
+  int count;
+  IMAGE_TEXTURE textures[MAX_IMAGE_TEXTURES];
+} IMAGE_TEXTURE_POOL;
+
+static IMAGE_TEXTURE_POOL TexturePool = {0};
+
+/****************************************************************/
+/*                  Graphics Object Structure                   */
+/****************************************************************/
+
+typedef struct _image_obj {
+  int texture_id;               // Index into TexturePool
+  float aspect_ratio;           // Copied from texture for vertex generation
   
   // Display state
   int visible;
   
-  // OpenGL resources  
-  GLuint texture;
+  // OpenGL resources (per-object, for geometry)
   GLuint vertex_buffer;
   GLuint vao;
   
-  // Image processing parameters
-  int grayscale_mode;      // 0=color, 1=grayscale
-  float brightness;        // -1.0 to 1.0 (additive)
-  float contrast;          // 0.0 to 2.0 (1.0 = normal)
-  float gamma;             // 0.1 to 3.0 (1.0 = normal)
-  float opacity;           // 0.0 to 1.0 (for alpha blending)
+  // Image processing parameters (per-object shader uniforms)
+  int grayscale_mode;           // 0=color, 1=grayscale
+  float brightness;             // -1.0 to 1.0 (additive)
+  float contrast;               // 0.0 to 3.0 (1.0 = normal)
+  float gamma;                  // 0.1 to 3.0 (1.0 = normal)
+  float opacity;                // 0.0 to 1.0 (for alpha blending)
   
   // Color channel manipulation
-  float red_gain;          // 0.0 to 2.0 (1.0 = normal)
-  float green_gain;        // 0.0 to 2.0 (1.0 = normal) 
-  float blue_gain;         // 0.0 to 2.0 (1.0 = normal)
+  float red_gain;               // 0.0 to 2.0 (1.0 = normal)
+  float green_gain;             // 0.0 to 2.0 (1.0 = normal) 
+  float blue_gain;              // 0.0 to 2.0 (1.0 = normal)
   
   // Special effects
-  int invert_mode;         // 0=normal, 1=invert colors
-  int threshold_mode;      // 0=off, 1=binary threshold
-  float threshold_value;   // 0.0 to 1.0 for threshold
+  int invert_mode;              // 0=normal, 1=invert colors
+  int threshold_mode;           // 0=off, 1=binary threshold
+  float threshold_value;        // 0.0 to 1.0 for threshold
   
   // Gaze-contingent masking (normalized coordinates 0.0-1.0)
-  int mask_mode;           // 0=off, 1=circular window, 2=rectangular window, 3=inverse
-  float mask_center_x;     // Center X (0.0 = left, 1.0 = right)
-  float mask_center_y;     // Center Y (0.0 = top, 1.0 = bottom) 
-  float mask_radius;       // Radius for circular mask (0.0-1.0)
-  float mask_width;        // Width for rectangular mask (0.0-1.0)
-  float mask_height;       // Height for rectangular mask (0.0-1.0)
-  float mask_feather;      // Soft edge width (0.0 = hard, 0.1 = 10% feather)
+  int mask_mode;                // 0=off, 1=circular window, 2=rectangular window, 3=inverse
+  float mask_center_x;          // Center X (0.0 = left, 1.0 = right)
+  float mask_center_y;          // Center Y (0.0 = top, 1.0 = bottom) 
+  float mask_radius;            // Radius for circular mask (0.0-1.0)
+  float mask_width;             // Width for rectangular mask (0.0-1.0)
+  float mask_height;            // Height for rectangular mask (0.0-1.0)
+  float mask_feather;           // Soft edge width (0.0 = hard, 0.1 = 10% feather)
   
 } IMAGE_OBJ;
 
@@ -314,35 +347,228 @@ static const char* fragment_shader_source =
 "}\n";
 #endif
 
-// Generate aspect-ratio corrected quad vertices
-static void generate_aspect_corrected_vertices(float *vertices, float aspect_ratio) {
-    // Scale the quad geometry to fit the larger dimension within ±0.5 bounds
-    float half_width, half_height;
-    
-    if (aspect_ratio >= 1.0f) {
-        // Wide or square image: width determines the scale
-        half_width = 0.5f;
-        half_height = 0.5f / aspect_ratio;
-    } else {
-        // Tall image: height determines the scale  
-        half_width = 0.5f * aspect_ratio;
-        half_height = 0.5f;
+/****************************************************************/
+/*                   Texture Pool Functions                     */
+/****************************************************************/
+
+// Find a free slot in the texture pool
+static int texture_pool_find_free_slot(void) {
+    for (int i = 0; i < MAX_IMAGE_TEXTURES; i++) {
+        if (!TexturePool.textures[i].in_use) {
+            return i;
+        }
     }
-    
-    // Generate triangle vertices with full texture coordinates (no cropping)
-    float temp_vertices[] = {
-        -half_width,  half_height, 0.0f,  0.0f, 0.0f,  // top-left
-        -half_width, -half_height, 0.0f,  0.0f, 1.0f,  // bottom-left
-         half_width, -half_height, 0.0f,  1.0f, 1.0f,  // bottom-right
-        -half_width,  half_height, 0.0f,  0.0f, 0.0f,  // top-left
-         half_width, -half_height, 0.0f,  1.0f, 1.0f,  // bottom-right
-         half_width,  half_height, 0.0f,  1.0f, 0.0f   // top-right
-    };
-    
-    memcpy(vertices, temp_vertices, sizeof(temp_vertices));
+    return -1;
 }
 
-// Helper function to compile shader
+// Upload pixel data to a texture in the pool
+static int texture_pool_upload(int slot, int width, int height, int channels,
+                               unsigned char *pixels, int filter) {
+    IMAGE_TEXTURE *tex = &TexturePool.textures[slot];
+    
+    tex->width = width;
+    tex->height = height;
+    tex->channels = channels;
+    tex->aspect_ratio = (float)width / (float)height;
+    tex->filter = filter;
+    tex->in_use = 1;
+    
+    glGenTextures(1, &tex->texid);
+    glBindTexture(GL_TEXTURE_2D, tex->texid);
+    
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    
+    GLenum format = GL_RGB;
+    if (channels == 4) format = GL_RGBA;
+    else if (channels == 1) format = GL_RED;
+    
+    glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, 
+                 format, GL_UNSIGNED_BYTE, pixels);
+
+    // For grayscale images, replicate red channel to G and B for correct display
+    // Texture swizzle supported in GL 3.3+ and GLES 3.0+
+    if (channels == 1) {
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_G, GL_RED);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, GL_RED);
+    }
+    
+    glBindTexture(GL_TEXTURE_2D, 0);
+    
+    if (slot >= TexturePool.count) {
+        TexturePool.count = slot + 1;
+    }
+    
+    return slot;
+}
+
+// Free a single texture from the pool
+static void texture_pool_free(int slot) {
+    if (slot < 0 || slot >= MAX_IMAGE_TEXTURES) return;
+    
+    IMAGE_TEXTURE *tex = &TexturePool.textures[slot];
+    if (tex->in_use && tex->texid) {
+        glDeleteTextures(1, &tex->texid);
+    }
+    memset(tex, 0, sizeof(IMAGE_TEXTURE));
+}
+
+// Free all textures in the pool
+static void texture_pool_reset(void) {
+    for (int i = 0; i < TexturePool.count; i++) {
+        texture_pool_free(i);
+    }
+    TexturePool.count = 0;
+}
+
+/****************************************************************/
+/*              Texture Loading Functions                       */
+/****************************************************************/
+
+// Load texture from file using stb_image
+static int texture_load_from_file(const char *filename, int filter) {
+    int width, height, channels;
+    unsigned char *data = stbi_load(filename, &width, &height, &channels, 0);
+    if (!data) {
+        fprintf(getConsoleFP(), "Failed to load image from file: %s\n", stbi_failure_reason());
+        return -1;
+    }
+    
+    int slot = texture_pool_find_free_slot();
+    if (slot < 0) {
+        fprintf(getConsoleFP(), "Texture pool full\n");
+        stbi_image_free(data);
+        return -1;
+    }
+    
+    texture_pool_upload(slot, width, height, channels, data, filter);
+    stbi_image_free(data);
+    
+    return slot;
+}
+
+// Load texture from encoded image data (PNG, JPEG, etc.) in memory
+static int texture_load_from_memory(const unsigned char *buffer, int len, int filter) {
+    int width, height, channels;
+    unsigned char *data = stbi_load_from_memory(buffer, len, &width, &height, &channels, 0);
+    if (!data) {
+        fprintf(getConsoleFP(), "Failed to load image from memory: %s\n", stbi_failure_reason());
+        return -1;
+    }
+    
+    int slot = texture_pool_find_free_slot();
+    if (slot < 0) {
+        fprintf(getConsoleFP(), "Texture pool full\n");
+        stbi_image_free(data);
+        return -1;
+    }
+    
+    texture_pool_upload(slot, width, height, channels, data, filter);
+    stbi_image_free(data);
+    
+    return slot;
+}
+
+// Load texture from raw pixel data (no decoding)
+static int texture_load_from_raw(const unsigned char *pixels, int width, int height, 
+                                  int channels, int filter) {
+    int slot = texture_pool_find_free_slot();
+    if (slot < 0) {
+        fprintf(getConsoleFP(), "Texture pool full\n");
+        return -1;
+    }
+    
+    texture_pool_upload(slot, width, height, channels, (unsigned char *)pixels, filter);
+    return slot;
+}
+
+// Load texture from DYN_LIST
+static int texture_load_from_dynlist(DYN_LIST *dl, int width, int height, int filter) {
+    int slot = texture_pool_find_free_slot();
+    if (slot < 0) {
+        fprintf(getConsoleFP(), "Texture pool full\n");
+        return -1;
+    }
+    
+    int n = DYN_LIST_N(dl);
+    int size = width * height;
+    int channels;
+    
+    // Determine channels from data size
+    if (n == size) channels = 1;
+    else if (n == size * 3) channels = 3;
+    else if (n == size * 4) channels = 4;
+    else {
+        fprintf(getConsoleFP(), "Invalid DYN_LIST size for %dx%d image\n", width, height);
+        return -1;
+    }
+    
+    unsigned char *pixels = NULL;
+    int datatype = DYN_LIST_DATATYPE(dl);
+    
+    if (datatype == DF_CHAR) {
+        // Direct copy for byte data
+        pixels = (unsigned char *)DYN_LIST_VALS(dl);
+        texture_pool_upload(slot, width, height, channels, pixels, filter);
+    }
+    else if (datatype == DF_FLOAT) {
+        // Convert float (0.0-1.0) to unsigned byte (0-255)
+        float *fvals = (float *)DYN_LIST_VALS(dl);
+        pixels = (unsigned char *)malloc(n);
+        if (!pixels) return -1;
+        
+        for (int i = 0; i < n; i++) {
+            float v = fvals[i];
+            if (v < 0.0f) v = 0.0f;
+            if (v > 1.0f) v = 1.0f;
+            pixels[i] = (unsigned char)(v * 255.0f);
+        }
+        
+        texture_pool_upload(slot, width, height, channels, pixels, filter);
+        free(pixels);
+    }
+    else if (datatype == DF_LONG) {
+        // Clamp long to 0-255
+        long *lvals = (long *)DYN_LIST_VALS(dl);
+        pixels = (unsigned char *)malloc(n);
+        if (!pixels) return -1;
+        
+        for (int i = 0; i < n; i++) {
+            long v = lvals[i];
+            if (v < 0) v = 0;
+            if (v > 255) v = 255;
+            pixels[i] = (unsigned char)v;
+        }
+        
+        texture_pool_upload(slot, width, height, channels, pixels, filter);
+        free(pixels);
+    }
+    else {
+        fprintf(getConsoleFP(), "Unsupported DYN_LIST datatype: %d\n", datatype);
+        return -1;
+    }
+    
+    return slot;
+}
+
+// Helper: detect if data looks like encoded image
+static int is_image_data(const unsigned char *data, int len) {
+    int width, height, channels;
+    return stbi_info_from_memory(data, len, &width, &height, &channels);
+}
+
+// Helper: detect if string is valid image file
+static int is_image_file(const char *filename) {
+    int width, height, channels;
+    return stbi_info(filename, &width, &height, &channels);
+}
+
+/****************************************************************/
+/*                    Shader Functions                          */
+/****************************************************************/
+
 static GLuint compile_shader(GLenum type, const char* source) {
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, NULL);
@@ -359,8 +585,7 @@ static GLuint compile_shader(GLenum type, const char* source) {
     return shader;
 }
 
-// Create shader program once at module initialization
-static int create_image_shader_program() {
+static int create_image_shader_program(void) {
     GLuint vertex_shader = compile_shader(GL_VERTEX_SHADER, vertex_shader_source);
     GLuint fragment_shader = compile_shader(GL_FRAGMENT_SHADER, fragment_shader_source);
     
@@ -406,92 +631,66 @@ static int create_image_shader_program() {
     return 0;
 }
 
-// Initialize OpenGL resources
-static int init_gl_resources(IMAGE_OBJ *img) {
-    // Create VAO and VBO
+/****************************************************************/
+/*                Graphics Object Functions                     */
+/****************************************************************/
+
+// Generate aspect-ratio corrected quad vertices
+static void generate_aspect_corrected_vertices(float *vertices, float aspect_ratio) {
+    float half_width, half_height;
+    
+    if (aspect_ratio >= 1.0f) {
+        half_width = 0.5f;
+        half_height = 0.5f / aspect_ratio;
+    } else {
+        half_width = 0.5f * aspect_ratio;
+        half_height = 0.5f;
+    }
+    
+    float temp_vertices[] = {
+        -half_width,  half_height, 0.0f,  0.0f, 0.0f,
+        -half_width, -half_height, 0.0f,  0.0f, 1.0f,
+         half_width, -half_height, 0.0f,  1.0f, 1.0f,
+        -half_width,  half_height, 0.0f,  0.0f, 0.0f,
+         half_width, -half_height, 0.0f,  1.0f, 1.0f,
+         half_width,  half_height, 0.0f,  1.0f, 0.0f
+    };
+    
+    memcpy(vertices, temp_vertices, sizeof(temp_vertices));
+}
+
+// Initialize per-object OpenGL resources
+static int init_obj_gl_resources(IMAGE_OBJ *img, float aspect_ratio) {
     glGenVertexArrays(1, &img->vao);
     glBindVertexArray(img->vao);
     
     glGenBuffers(1, &img->vertex_buffer);
     glBindBuffer(GL_ARRAY_BUFFER, img->vertex_buffer);
     
-    // Note: We'll update the vertex data after loading the image
-    // when we know the aspect ratio
-    glBufferData(GL_ARRAY_BUFFER, 6 * 5 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
+    float vertices[30];
+    generate_aspect_corrected_vertices(vertices, aspect_ratio);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
     
-    // Position attribute (location = 0)
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
     
-    // Texture coord attribute (location = 1)
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
     
     glBindVertexArray(0);
     
-    // Create texture
-    glGenTextures(1, &img->texture);
-    
     return 0;
-}
-
-// Common function to upload image data to OpenGL texture
-static int load_image_data_to_texture(IMAGE_OBJ *img, unsigned char *data) {
-    img->aspect_ratio = (float)img->width / (float)img->height;
-    
-    // Generate aspect-corrected vertices and update VBO
-    float vertices[30]; // 6 vertices * 5 components each
-    generate_aspect_corrected_vertices(vertices, img->aspect_ratio);
-    
-    glBindBuffer(GL_ARRAY_BUFFER, img->vertex_buffer);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    
-    glBindTexture(GL_TEXTURE_2D, img->texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    
-    GLenum format = GL_RGB;
-    if (img->channels == 4) format = GL_RGBA;
-    else if (img->channels == 1) format = GL_RED;
-    
-    glTexImage2D(GL_TEXTURE_2D, 0, format, img->width, img->height, 0, 
-                 format, GL_UNSIGNED_BYTE, data);
-    
-    stbi_image_free(data);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    
-    return 0;
-}
-
-static int load_image_to_texture_from_file(IMAGE_OBJ *img, const char *filename) {
-    unsigned char *data = stbi_load(filename, &img->width, &img->height, &img->channels, 0);
-    if (!data) {
-        fprintf(getConsoleFP(), "Failed to load image from file: %s\n", stbi_failure_reason());
-        return -1;
-    }
-    
-    return load_image_data_to_texture(img, data);
-}
-
-static int load_image_to_texture_from_memory(IMAGE_OBJ *img, const unsigned char *buffer, int len) {
-    unsigned char *data = stbi_load_from_memory(buffer, len, &img->width, &img->height, &img->channels, 0);
-    if (!data) {
-        fprintf(getConsoleFP(), "Failed to load image from memory: %s\n", stbi_failure_reason());
-        return -1;
-    }
-    
-    return load_image_data_to_texture(img, data);
 }
 
 void imageShow(GR_OBJ *gobj) {
     IMAGE_OBJ *img = (IMAGE_OBJ *) GR_CLIENTDATA(gobj);
     
     if (!img->visible) return;
+    if (img->texture_id < 0 || img->texture_id >= TexturePool.count) return;
     
-    // Render textured quad
+    IMAGE_TEXTURE *tex = &TexturePool.textures[img->texture_id];
+    if (!tex->in_use) return;
+    
     float modelview[16], projection[16];
     stimGetMatrix(STIM_MODELVIEW_MATRIX, modelview);
     stimGetMatrix(STIM_PROJECTION_MATRIX, projection);
@@ -519,13 +718,12 @@ void imageShow(GR_OBJ *gobj) {
     glUniform1f(ImageUniformAspectRatio, img->aspect_ratio);
  
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, img->texture);
+    glBindTexture(GL_TEXTURE_2D, tex->texid);
     glUniform1i(ImageUniformTexture, 0);
     
     glBindVertexArray(img->vao);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     
-    // Clean up
     glBindVertexArray(0);
     glUseProgram(0);
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -535,8 +733,7 @@ void imageShow(GR_OBJ *gobj) {
 void imageDelete(GR_OBJ *gobj) {
     IMAGE_OBJ *img = (IMAGE_OBJ *) GR_CLIENTDATA(gobj);
 
-    // Clean up OpenGL resources
-    if (img->texture) glDeleteTextures(1, &img->texture);
+    // Clean up per-object OpenGL resources (NOT the texture - that's in the pool)
     if (img->vertex_buffer) glDeleteBuffers(1, &img->vertex_buffer);
     if (img->vao) glDeleteVertexArrays(1, &img->vao);
     
@@ -548,25 +745,13 @@ void imageReset(GR_OBJ *gobj) {
     // Reset any state as needed
 }
 
-// Helper function to detect if data looks like image bytes
-static int is_image_data(const unsigned char *data, int len) {
-    int width, height, channels;
+// Create graphics object from texture ID
+static int imageCreateFromTexture(OBJ_LIST *objlist, int texture_id) {
+    if (texture_id < 0 || texture_id >= MAX_IMAGE_TEXTURES) return -1;
     
-    // Try to get image info from memory - this is very fast
-    // and doesn't actually decode the image
-    return stbi_info_from_memory(data, len, &width, &height, &channels);
-}
-
-// Helper function to detect if string is a valid image file
-static int is_image_file(const char *filename) {
-    int width, height, channels;
+    IMAGE_TEXTURE *tex = &TexturePool.textures[texture_id];
+    if (!tex->in_use) return -1;
     
-    // Check if file exists and is a valid image
-    return stbi_info(filename, &width, &height, &channels);
-}
-
-// image creation function
-int imageCreate(OBJ_LIST *objlist, const void *input, int len, int is_filename) {
     const char *name = "Image";
     GR_OBJ *obj;
     IMAGE_OBJ *img;
@@ -584,6 +769,10 @@ int imageCreate(OBJ_LIST *objlist, const void *input, int len, int is_filename) 
     img = (IMAGE_OBJ *) calloc(1, sizeof(IMAGE_OBJ));
     GR_CLIENTDATA(obj) = img;
 
+    // Link to texture
+    img->texture_id = texture_id;
+    img->aspect_ratio = tex->aspect_ratio;
+    
     // Initialize state
     img->visible = 1;
     img->grayscale_mode = 0;
@@ -605,23 +794,9 @@ int imageCreate(OBJ_LIST *objlist, const void *input, int len, int is_filename) 
     img->mask_height = 0.3f;
     img->mask_feather = 0.05f;
     
-    // Initialize OpenGL resources
-    if (init_gl_resources(img) < 0) {
+    // Initialize per-object GL resources
+    if (init_obj_gl_resources(img, tex->aspect_ratio) < 0) {
         fprintf(getConsoleFP(), "error initializing OpenGL resources\n");
-        imageDelete(obj);
-        return -1;
-    }
-
-    // Load image based on input type
-    int result;
-    if (is_filename) {
-        result = load_image_to_texture_from_file(img, (const char*)input);
-    } else {
-        result = load_image_to_texture_from_memory(img, (const unsigned char*)input, len);
-    }
-    
-    if (result < 0) {
-        fprintf(getConsoleFP(), "error loading image\n");
         imageDelete(obj);
         return -1;
     }
@@ -629,71 +804,290 @@ int imageCreate(OBJ_LIST *objlist, const void *input, int len, int is_filename) 
     return gobjAddObj(objlist, obj);
 }
 
+/****************************************************************/
+/*                   Tcl Command: imageTextureLoad              */
+/****************************************************************/
 
-// Tcl command implementations
-static int imageCmd(ClientData clientData, Tcl_Interp *interp,
-		    int objc, Tcl_Obj *const objv[]) {
-  OBJ_LIST *olist = (OBJ_LIST *) clientData;
-  int id;
-  
-  if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "filename_or_imagedata");
-    return TCL_ERROR;
-  }
-  
-  // Get the input as both string and byte array
-  char *str_input = Tcl_GetString(objv[1]);
-  int str_len = strlen(str_input);
-  
-  unsigned char *byte_input;
-  Tcl_Size byte_len;
-  byte_input = Tcl_GetByteArrayFromObj(objv[1], &byte_len);
-  
-  int is_file = 0;
-  int is_data = 0;
-  
-  // Check if it could be a filename (reasonable length, exists, valid image)
-  if (str_len > 0 && str_len < 512) {  // Reasonable filename length
-    if (is_image_file(str_input)) {
-      is_file = 1;
+static int imagetextureloadCmd(ClientData clientData, Tcl_Interp *interp,
+                               int argc, char *argv[]) {
+    int filter = GL_LINEAR;
+    
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " filename [filter]", NULL);
+        return TCL_ERROR;
     }
-  }
-  
-  // Check if it could be image data
-  if (byte_input && byte_len > 0) {
-    if (is_image_data(byte_input, byte_len)) {
-      is_data = 1;
+    
+    if (argc > 2) {
+        if (!strcmp(argv[2], "NEAREST") || !strcmp(argv[2], "nearest"))
+            filter = GL_NEAREST;
+        else if (!strcmp(argv[2], "LINEAR") || !strcmp(argv[2], "linear"))
+            filter = GL_LINEAR;
     }
-  }
-  
-  // Decide what to do based on what we found
-  if (is_file && !is_data) {
-    // Definitely a file
-    id = imageCreate(olist, str_input, 0, 1);
-  } else if (is_data && !is_file) {
-    // Definitely data
-    id = imageCreate(olist, byte_input, byte_len, 0);
-  } else if (is_file && is_data) {
-    // Ambiguous - prefer file interpretation for shorter strings
-    if (str_len < 100) {
-      id = imageCreate(olist, str_input, 0, 1);
-    } else {
-      id = imageCreate(olist, byte_input, byte_len, 0);
+    
+    int id = texture_load_from_file(argv[1], filter);
+    if (id < 0) {
+        Tcl_AppendResult(interp, argv[0], ": unable to load image \"", argv[1], "\"", NULL);
+        return TCL_ERROR;
     }
-  } else {
-    // Neither worked
-    Tcl_SetResult(interp, "input is neither a valid image file nor valid image data", TCL_STATIC);
-    return TCL_ERROR;
-  }
-  
-  if (id < 0) {
-    Tcl_SetResult(interp, "error loading image", TCL_STATIC);
-    return TCL_ERROR;
-  }
-  
-  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
-  return TCL_OK;
+    
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
+    return TCL_OK;
 }
+
+/****************************************************************/
+/*                   Tcl Command: imageTextureRaw               */
+/****************************************************************/
+
+static int imagetexturerawCmd(ClientData clientData, Tcl_Interp *interp,
+                              int objc, Tcl_Obj *const objv[]) {
+    int width, height, channels;
+    int filter = GL_LINEAR;
+    unsigned char *data;
+    Tcl_Size length;
+    
+    if (objc < 5) {
+        Tcl_WrongNumArgs(interp, 1, objv, "data width height channels [filter]");
+        return TCL_ERROR;
+    }
+    
+    data = Tcl_GetByteArrayFromObj(objv[1], &length);
+    if (!data) {
+        Tcl_SetResult(interp, "invalid byte array data", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    if (Tcl_GetIntFromObj(interp, objv[2], &width) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetIntFromObj(interp, objv[3], &height) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetIntFromObj(interp, objv[4], &channels) != TCL_OK) return TCL_ERROR;
+    
+    if (channels < 1 || channels > 4) {
+        Tcl_SetResult(interp, "channels must be 1, 3, or 4", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    if (length < width * height * channels) {
+        Tcl_SetResult(interp, "byte array too small for specified dimensions", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    if (objc > 5) {
+        const char *filtername = Tcl_GetString(objv[5]);
+        if (!strcmp(filtername, "NEAREST") || !strcmp(filtername, "nearest"))
+            filter = GL_NEAREST;
+        else if (!strcmp(filtername, "LINEAR") || !strcmp(filtername, "linear"))
+            filter = GL_LINEAR;
+    }
+    
+    int id = texture_load_from_raw(data, width, height, channels, filter);
+    if (id < 0) {
+        Tcl_SetResult(interp, "unable to create texture from raw data", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
+    return TCL_OK;
+}
+
+/****************************************************************/
+/*                   Tcl Command: imageTextureFromList          */
+/****************************************************************/
+
+static int imagetexturefromlistCmd(ClientData clientData, Tcl_Interp *interp,
+                                   int argc, char *argv[]) {
+    DYN_LIST *dl;
+    int width, height;
+    int filter = GL_LINEAR;
+    
+    if (argc < 4) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " dynlist width height [filter]", NULL);
+        return TCL_ERROR;
+    }
+    
+    if (tclFindDynList(interp, argv[1], &dl) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetInt(interp, argv[2], &width) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetInt(interp, argv[3], &height) != TCL_OK) return TCL_ERROR;
+    
+    if (argc > 4) {
+        if (!strcmp(argv[4], "NEAREST") || !strcmp(argv[4], "nearest"))
+            filter = GL_NEAREST;
+        else if (!strcmp(argv[4], "LINEAR") || !strcmp(argv[4], "linear"))
+            filter = GL_LINEAR;
+    }
+    
+    int id = texture_load_from_dynlist(dl, width, height, filter);
+    if (id < 0) {
+        Tcl_AppendResult(interp, argv[0], ": unable to create texture from dynlist \"", 
+                         argv[1], "\"", NULL);
+        return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
+    return TCL_OK;
+}
+
+/****************************************************************/
+/*                   Tcl Command: imageTextureReset             */
+/****************************************************************/
+
+static int imagetextureresetCmd(ClientData clientData, Tcl_Interp *interp,
+                                int argc, char *argv[]) {
+    texture_pool_reset();
+    return TCL_OK;
+}
+
+/****************************************************************/
+/*                   Tcl Command: imageTextureDelete            */
+/****************************************************************/
+
+static int imagetexturedeleteCmd(ClientData clientData, Tcl_Interp *interp,
+                                 int argc, char *argv[]) {
+    int id;
+    
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " texture_id", NULL);
+        return TCL_ERROR;
+    }
+    
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    
+    if (id < 0 || id >= MAX_IMAGE_TEXTURES || !TexturePool.textures[id].in_use) {
+        Tcl_AppendResult(interp, argv[0], ": invalid texture id", NULL);
+        return TCL_ERROR;
+    }
+    
+    texture_pool_free(id);
+    return TCL_OK;
+}
+
+/****************************************************************/
+/*                   Tcl Command: imageTextureInfo              */
+/****************************************************************/
+
+static int imagetextureinfoCmd(ClientData clientData, Tcl_Interp *interp,
+                               int argc, char *argv[]) {
+    int id;
+    
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " texture_id", NULL);
+        return TCL_ERROR;
+    }
+    
+    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
+    
+    if (id < 0 || id >= MAX_IMAGE_TEXTURES || !TexturePool.textures[id].in_use) {
+        Tcl_AppendResult(interp, argv[0], ": invalid texture id", NULL);
+        return TCL_ERROR;
+    }
+    
+    IMAGE_TEXTURE *tex = &TexturePool.textures[id];
+    
+    Tcl_Obj *dictObj = Tcl_NewDictObj();
+    Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("width", -1), 
+                   Tcl_NewIntObj(tex->width));
+    Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("height", -1), 
+                   Tcl_NewIntObj(tex->height));
+    Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("channels", -1), 
+                   Tcl_NewIntObj(tex->channels));
+    Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("aspect_ratio", -1), 
+                   Tcl_NewDoubleObj(tex->aspect_ratio));
+    Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("texid", -1), 
+                   Tcl_NewIntObj(tex->texid));
+    
+    Tcl_SetObjResult(interp, dictObj);
+    return TCL_OK;
+}
+
+/****************************************************************/
+/*                   Tcl Command: image                         */
+/****************************************************************/
+
+// Main image command: accepts texture_id OR filename
+static int imageCmd(ClientData clientData, Tcl_Interp *interp,
+                    int objc, Tcl_Obj *const objv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *) clientData;
+    int id;
+    int texture_id = -1;
+    
+    if (objc < 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "texture_id_or_filename");
+        return TCL_ERROR;
+    }
+    
+    // First, try to interpret as integer (texture_id)
+    if (Tcl_GetIntFromObj(NULL, objv[1], &texture_id) == TCL_OK) {
+        // It's an integer - check if it's a valid texture ID
+        if (texture_id >= 0 && texture_id < MAX_IMAGE_TEXTURES && 
+            TexturePool.textures[texture_id].in_use) {
+            // Valid texture ID - create object from it
+            id = imageCreateFromTexture(olist, texture_id);
+            if (id < 0) {
+                Tcl_SetResult(interp, "error creating image object from texture", TCL_STATIC);
+                return TCL_ERROR;
+            }
+            Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
+            return TCL_OK;
+        }
+    }
+    
+    // Not a valid texture ID - try as filename or image data
+    char *str_input = Tcl_GetString(objv[1]);
+    int str_len = strlen(str_input);
+    
+    unsigned char *byte_input;
+    Tcl_Size byte_len;
+    byte_input = Tcl_GetByteArrayFromObj(objv[1], &byte_len);
+    
+    int is_file = 0;
+    int is_data = 0;
+    
+    // Check if it could be a filename
+    if (str_len > 0 && str_len < 512) {
+        if (is_image_file(str_input)) {
+            is_file = 1;
+        }
+    }
+    
+    // Check if it could be encoded image data
+    if (byte_input && byte_len > 0) {
+        if (is_image_data(byte_input, byte_len)) {
+            is_data = 1;
+        }
+    }
+    
+    // Load texture and create object
+    if (is_file && !is_data) {
+        texture_id = texture_load_from_file(str_input, GL_LINEAR);
+    } else if (is_data && !is_file) {
+        texture_id = texture_load_from_memory(byte_input, byte_len, GL_LINEAR);
+    } else if (is_file && is_data) {
+        if (str_len < 100) {
+            texture_id = texture_load_from_file(str_input, GL_LINEAR);
+        } else {
+            texture_id = texture_load_from_memory(byte_input, byte_len, GL_LINEAR);
+        }
+    } else {
+        Tcl_SetResult(interp, "input is neither a valid texture id, image file, nor image data", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    if (texture_id < 0) {
+        Tcl_SetResult(interp, "error loading image", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    id = imageCreateFromTexture(olist, texture_id);
+    if (id < 0) {
+        Tcl_SetResult(interp, "error creating image object", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
+    return TCL_OK;
+}
+
+/****************************************************************/
+/*                   Per-object control commands                */
+/****************************************************************/
 
 static int imageinfoCmd(ClientData clientData, Tcl_Interp *interp,
                        int argc, char *argv[]) {
@@ -714,16 +1108,18 @@ static int imageinfoCmd(ClientData clientData, Tcl_Interp *interp,
     }
 
     img = GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    IMAGE_TEXTURE *tex = &TexturePool.textures[img->texture_id];
 
-    // Create Tcl dictionary with image information
     dictObj = Tcl_NewDictObj();
-
+    Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("texture_id", -1), 
+                   Tcl_NewIntObj(img->texture_id));
     Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("width", -1), 
-                   Tcl_NewIntObj(img->width));
+                   Tcl_NewIntObj(tex->width));
     Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("height", -1), 
-                   Tcl_NewIntObj(img->height));
+                   Tcl_NewIntObj(tex->height));
     Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("channels", -1), 
-                   Tcl_NewIntObj(img->channels));
+                   Tcl_NewIntObj(tex->channels));
     Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("aspect_ratio", -1), 
                    Tcl_NewDoubleObj(img->aspect_ratio));
 
@@ -731,7 +1127,7 @@ static int imageinfoCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
-// Grayscale control (0/1)
+// Grayscale control
 static int imagegrayscaleCmd(ClientData clientData, Tcl_Interp *interp,
                             int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *) clientData;
@@ -752,19 +1148,17 @@ static int imagegrayscaleCmd(ClientData clientData, Tcl_Interp *interp,
     img = GR_CLIENTDATA(OL_OBJ(olist, id));
     
     if (argc == 2) {
-        // Return current grayscale mode
         Tcl_SetObjResult(interp, Tcl_NewIntObj(img->grayscale_mode));
         return TCL_OK;
     }
     
     if (Tcl_GetInt(interp, argv[2], &grayscale) != TCL_OK) return TCL_ERROR;
-    
     img->grayscale_mode = grayscale ? 1 : 0;
     
     return TCL_OK;
 }
 
-// Brightness control (-1.0 to 1.0)
+// Brightness control
 static int imagebrightnessCmd(ClientData clientData, Tcl_Interp *interp,
                              int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *) clientData;
@@ -791,12 +1185,12 @@ static int imagebrightnessCmd(ClientData clientData, Tcl_Interp *interp,
     }
     
     if (Tcl_GetDouble(interp, argv[2], &brightness) != TCL_OK) return TCL_ERROR;
-    img->brightness = (float)fmax(-1.0, fmin(1.0, brightness)); // Clamp to valid range
+    img->brightness = (float)fmax(-1.0, fmin(1.0, brightness));
     
     return TCL_OK;
 }
 
-// Contrast control (0.0 to 2.0)
+// Contrast control
 static int imagecontrastCmd(ClientData clientData, Tcl_Interp *interp,
                            int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *) clientData;
@@ -828,7 +1222,7 @@ static int imagecontrastCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
-// Gamma control (0.1 to 3.0)
+// Gamma control
 static int imagegammaCmd(ClientData clientData, Tcl_Interp *interp,
                         int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *) clientData;
@@ -860,7 +1254,7 @@ static int imagegammaCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
-// Opacity control (0.0 to 1.0)
+// Opacity control
 static int imageopacityCmd(ClientData clientData, Tcl_Interp *interp,
                           int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *) clientData;
@@ -892,7 +1286,7 @@ static int imageopacityCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
-// Color gains control (RGB gains, 0.0 to 2.0 each)
+// Color gains control
 static int imagecolorgainsCmd(ClientData clientData, Tcl_Interp *interp,
                              int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *) clientData;
@@ -938,7 +1332,7 @@ static int imagecolorgainsCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
-// Invert control (0/1)
+// Invert control
 static int imageinvertCmd(ClientData clientData, Tcl_Interp *interp,
                          int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *) clientData;
@@ -969,7 +1363,7 @@ static int imageinvertCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
-// Threshold control (enable and value)
+// Threshold control
 static int imagethresholdCmd(ClientData clientData, Tcl_Interp *interp,
                             int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *) clientData;
@@ -1013,6 +1407,8 @@ static int imagethresholdCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 // Gaze-contingent mask control
+// Circular (mode 1,3): imageMask id mode centerX centerY radius feather
+// Rectangular (mode 2): imageMask id mode centerX centerY width height feather
 static int imagemaskCmd(ClientData clientData, Tcl_Interp *interp,
                        int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *) clientData;
@@ -1021,7 +1417,8 @@ static int imagemaskCmd(ClientData clientData, Tcl_Interp *interp,
     double centerX, centerY, radius, width, height, feather;
 
     if (argc < 2) {
-        Tcl_AppendResult(interp, "usage: ", argv[0], " id [mode centerX centerY radius/width height feather]", NULL);
+        Tcl_AppendResult(interp, "usage: ", argv[0], " id [mode centerX centerY radius feather] (circular)\n",
+                         "   or: ", argv[0], " id mode centerX centerY width height feather (rectangular)", NULL);
         return TCL_ERROR;
     }
 
@@ -1034,7 +1431,6 @@ static int imagemaskCmd(ClientData clientData, Tcl_Interp *interp,
     img = GR_CLIENTDATA(OL_OBJ(olist, id));
     
     if (argc == 2) {
-        // Return current mask settings
         Tcl_Obj *listObj = Tcl_NewListObj(0, NULL);
         Tcl_ListObjAppendElement(interp, listObj, Tcl_NewIntObj(img->mask_mode));
         Tcl_ListObjAppendElement(interp, listObj, Tcl_NewDoubleObj(img->mask_center_x));
@@ -1047,28 +1443,64 @@ static int imagemaskCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_OK;
     }
     
-    if (argc < 8) {
-        Tcl_AppendResult(interp, "usage: ", argv[0], " id mode centerX centerY radius/width height feather", NULL);
+    if (argc < 3) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " id mode ...", NULL);
         return TCL_ERROR;
     }
     
     if (Tcl_GetInt(interp, argv[2], &mode) != TCL_OK) return TCL_ERROR;
-    if (Tcl_GetDouble(interp, argv[3], &centerX) != TCL_OK) return TCL_ERROR;
-    if (Tcl_GetDouble(interp, argv[4], &centerY) != TCL_OK) return TCL_ERROR;
-    if (Tcl_GetDouble(interp, argv[5], &radius) != TCL_OK) return TCL_ERROR;
-    if (Tcl_GetDouble(interp, argv[6], &height) != TCL_OK) return TCL_ERROR;
-    if (Tcl_GetDouble(interp, argv[7], &feather) != TCL_OK) return TCL_ERROR;
+    mode = (int)fmax(0, fmin(3, mode));
     
-    img->mask_mode = fmax(0, fmin(3, mode));
-    img->mask_center_x = (float)fmax(0.0, fmin(1.0, centerX));
-    img->mask_center_y = (float)fmax(0.0, fmin(1.0, centerY));
-    img->mask_radius = (float)fmax(0.0, fmin(1.0, radius));    // For circular or width for rect
-    img->mask_width = (float)fmax(0.0, fmin(1.0, radius));     // Store width in radius for rect
-    img->mask_height = (float)fmax(0.0, fmin(1.0, height));
-    img->mask_feather = (float)fmax(0.0, fmin(0.5, feather));
+    if (mode == 0) {
+        img->mask_mode = 0;
+        return TCL_OK;
+    }
+    
+    // Circular modes (1=window, 3=inverse)
+    if (mode == 1 || mode == 3) {
+        if (argc < 7) {
+            Tcl_AppendResult(interp, "circular mask usage: ", argv[0], 
+                             " id mode centerX centerY radius feather", NULL);
+            return TCL_ERROR;
+        }
+        if (Tcl_GetDouble(interp, argv[3], &centerX) != TCL_OK) return TCL_ERROR;
+        if (Tcl_GetDouble(interp, argv[4], &centerY) != TCL_OK) return TCL_ERROR;
+        if (Tcl_GetDouble(interp, argv[5], &radius) != TCL_OK) return TCL_ERROR;
+        if (Tcl_GetDouble(interp, argv[6], &feather) != TCL_OK) return TCL_ERROR;
+        
+        img->mask_mode = mode;
+        img->mask_center_x = (float)fmax(0.0, fmin(1.0, centerX));
+        img->mask_center_y = (float)fmax(0.0, fmin(1.0, centerY));
+        img->mask_radius = (float)fmax(0.0, fmin(1.0, radius));
+        img->mask_feather = (float)fmax(0.0, fmin(0.5, feather));
+    }
+    // Rectangular mode (2)
+    else if (mode == 2) {
+        if (argc < 8) {
+            Tcl_AppendResult(interp, "rectangular mask usage: ", argv[0], 
+                             " id mode centerX centerY width height feather", NULL);
+            return TCL_ERROR;
+        }
+        if (Tcl_GetDouble(interp, argv[3], &centerX) != TCL_OK) return TCL_ERROR;
+        if (Tcl_GetDouble(interp, argv[4], &centerY) != TCL_OK) return TCL_ERROR;
+        if (Tcl_GetDouble(interp, argv[5], &width) != TCL_OK) return TCL_ERROR;
+        if (Tcl_GetDouble(interp, argv[6], &height) != TCL_OK) return TCL_ERROR;
+        if (Tcl_GetDouble(interp, argv[7], &feather) != TCL_OK) return TCL_ERROR;
+        
+        img->mask_mode = mode;
+        img->mask_center_x = (float)fmax(0.0, fmin(1.0, centerX));
+        img->mask_center_y = (float)fmax(0.0, fmin(1.0, centerY));
+        img->mask_width = (float)fmax(0.0, fmin(1.0, width));
+        img->mask_height = (float)fmax(0.0, fmin(1.0, height));
+        img->mask_feather = (float)fmax(0.0, fmin(0.5, feather));
+    }
     
     return TCL_OK;
 }
+
+/****************************************************************/
+/*                       Module Init                            */
+/****************************************************************/
 
 #ifdef _WIN32
 EXPORT(int, Image_Init) (Tcl_Interp *interp)
@@ -1091,7 +1523,7 @@ int Image_Init(Tcl_Interp *interp)
     if (ImageID < 0) {
         ImageID = gobjRegisterType();
         
-        // Load OpenGL functions
+        // Ensure OpenGL function pointers are loaded
         gladLoadGL();
         
         // Create shader program once for all image instances
@@ -1101,16 +1533,30 @@ int Image_Init(Tcl_Interp *interp)
         }
     }
 
-    Tcl_CreateObjCommand(interp, "image", imageCmd, 
-			 (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+    // Texture pool management commands
+    Tcl_CreateCommand(interp, "imageTextureLoad", (Tcl_CmdProc *) imagetextureloadCmd,
+                      (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+    Tcl_CreateObjCommand(interp, "imageTextureRaw", imagetexturerawCmd,
+                         (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+    Tcl_CreateCommand(interp, "imageTextureFromList", (Tcl_CmdProc *) imagetexturefromlistCmd,
+                      (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+    Tcl_CreateCommand(interp, "imageTextureReset", (Tcl_CmdProc *) imagetextureresetCmd,
+                      (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+    Tcl_CreateCommand(interp, "imageTextureDelete", (Tcl_CmdProc *) imagetexturedeleteCmd,
+                      (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+    Tcl_CreateCommand(interp, "imageTextureInfo", (Tcl_CmdProc *) imagetextureinfoCmd,
+                      (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
     
+    // Main image object command
+    Tcl_CreateObjCommand(interp, "image", imageCmd, 
+                         (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+    
+    // Per-object control commands
     Tcl_CreateCommand(interp, "imageInfo", (Tcl_CmdProc *) imageinfoCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-    Tcl_CreateCommand(interp, "imageGrayscale",
-		      (Tcl_CmdProc *) imagegrayscaleCmd,
+    Tcl_CreateCommand(interp, "imageGrayscale", (Tcl_CmdProc *) imagegrayscaleCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-    Tcl_CreateCommand(interp, "imageBrightness",
-		      (Tcl_CmdProc *) imagebrightnessCmd,
+    Tcl_CreateCommand(interp, "imageBrightness", (Tcl_CmdProc *) imagebrightnessCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
     Tcl_CreateCommand(interp, "imageContrast", (Tcl_CmdProc *) imagecontrastCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
@@ -1126,6 +1572,7 @@ int Image_Init(Tcl_Interp *interp)
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
     Tcl_CreateCommand(interp, "imageMask", (Tcl_CmdProc *) imagemaskCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+    
     return TCL_OK;
 }
 
