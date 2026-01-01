@@ -196,7 +196,7 @@ void WebSocketServer::run_server() {
         clients_[ws] = userData;
       }
       
-      std::cout << "WebSocket client connected: " << userData->client_id << std::endl;
+      //      std::cout << "WebSocket client connected: " << userData->client_id << std::endl;
       
       // Send welcome message
       std::ostringstream oss;
@@ -287,7 +287,7 @@ void WebSocketServer::run_server() {
         return;
       }
       
-      std::cout << "WebSocket client disconnected: " << userData->client_id << std::endl;
+      //      std::cout << "WebSocket client disconnected: " << userData->client_id << std::endl;
       
       // Remove from client list
       {
