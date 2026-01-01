@@ -9,10 +9,12 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <math.h>
-    
+
+#include <tcl.h>
+
 #include <spine/spine.h>
 #include <spine/extension.h>
-#include <tcl.h>
+
 #include <stim2.h>
 #include <objname.h>
 
@@ -25,7 +27,6 @@
 #define SPINE_MESH_VERTEX_COUNT_MAX 2048
 #endif
 
-#define MAX_VERTICES_PER_ATTACHMENT 2048
 #define MAX_VERTICES_PER_ATTACHMENT 2048
 
 typedef struct _SPINE_INFO {
@@ -75,85 +76,6 @@ typedef struct _SpineObject {
 static int SpineID = -1;	/* unique spine object id */
 static SPINE_INFO SpineInfo;	/* track global variables */
 
-/*
-  read the information from the header and store it in the LodePNG_Info. 
-  return value is error
-*/
-static int PNG_GetInfo(const unsigned char* in, size_t inlength, 
-		       int *w, int *h, int *bitDepth, int *colorType)
-{
-  extern unsigned LodePNG_read32bitInt(const unsigned char* buffer);
-  
-  if(inlength == 0 || in == 0) return -1;
-  if(inlength < 29) return -1;
-  
-  if(in[0] != 137 || in[1] != 80 || in[2] != 78 || in[3] != 71
-     || in[4] != 13 || in[5] != 10 || in[6] != 26 || in[7] != 10)
-  {
-    return -1;
-  }
-  if(in[12] != 'I' || in[13] != 'H' || in[14] != 'D' || in[15] != 'R')
-  {
-    return -1;
-  }
-
-  /*read the values given in the header*/
-  if (w) *w = LodePNG_read32bitInt(&in[16]);
-  if (h) *h = LodePNG_read32bitInt(&in[20]);
-  if (bitDepth) *bitDepth = in[24];
-  if (colorType) *colorType = in[25];
-  return 0;
-}
-
-static int LoadPNGFile(const char *filename, unsigned char **pixels, 
-		       int *width, int *height, int *depth)
-{    
-  extern unsigned LodePNG_loadFile(unsigned char** out,
-				   size_t* outsize, const char* filename);
-  extern unsigned LodePNG_decode(unsigned char** out, 
-				 unsigned* w, unsigned* h,
-				 const unsigned char* in,
-				 size_t insize, unsigned colorType,
-				 unsigned bitDepth);
-  unsigned char *pixeldata;
-  unsigned int w, h;
-  int d;
-  unsigned char* buffer;
-  size_t buffersize;
-  unsigned error;
-  int bitDepth;
-  int colorType;
-
-  error = LodePNG_loadFile(&buffer, &buffersize, filename);
-  if (error) return 0;
-
-  error = PNG_GetInfo(buffer, buffersize, NULL, NULL, &bitDepth, &colorType); 
-  if (error) return 0;
-  
-  if (colorType != 0 && colorType != 2 && colorType != 6) 
-    return 0; /* only handle these three (RGBA, RGB, GRAYSCALE) */
-  
-  error = LodePNG_decode(&pixeldata, &w, &h,
-			 buffer, buffersize, colorType, bitDepth);
-  free(buffer);
-  if (error) return 0;
-
-  if (colorType == 6) {
-    d = 4;			
-  } else if (colorType == 2) {
-    d = 3;			
-  } else if (colorType == 0) {
-    d = 1;			
-  }
-
-  if (pixels) *pixels = pixeldata;
-  if (width) *width = w;
-  if (height) *height = h;
-  if (depth) *depth = d;
-
-  return 1;
-}
-
 void _spAtlasPage_createTexture (spAtlasPage* self, const char* path)
 {
   int width, height, components;
@@ -161,11 +83,6 @@ void _spAtlasPage_createTexture (spAtlasPage* self, const char* path)
   if (!imageData) return;
 	
   GLuint texture;
-
-  //  if (!LoadPNGFile(path, &pixels, &w, &h, &d)) {
-  //    fprintf(getConsoleFP(), "error loading atlas source: %s\n", path);
-  //    return;
-  //  }
 
   glGenTextures(1, &texture);
   
@@ -188,9 +105,6 @@ void _spAtlasPage_createTexture (spAtlasPage* self, const char* path)
   self->rendererObject = spine_texture;
   self->width = width;
   self->height = height;
-
-  //  printf("loaded texture [%d]: %dx%d\n",
-  //	 ((SpineTexture *) (self->rendererObject))->textureID, width, height);
 }
 
 void _spAtlasPage_disposeTexture (spAtlasPage* self) {
@@ -688,7 +602,19 @@ int spineCopy(OBJ_LIST *objlist, SpineObject *source)
   return(gobjAddObj(objlist, obj));
 }
 
-int spineCreate(OBJ_LIST *objlist, char *skelfile, char *atlasfile)
+/*
+ * spineCreate - Create a new spine animation object
+ *
+ * jsonScale: Scale applied when loading skeleton JSON (affects bone positions)
+ * renderScale: Scale applied when rendering and for bounding box output
+ *
+ * The two scales serve different purposes:
+ * - jsonScale adjusts the imported skeleton size (typically to match your
+ *   coordinate system, e.g., if Spine uses pixels but you use degrees)
+ * - renderScale is a runtime multiplier for rendering flexibility
+ */
+int spineCreate(OBJ_LIST *objlist, char *skelfile, char *atlasfile,
+		float jsonScale, float renderScale)
 {
   const char *name = "Spine";
   GR_OBJ *obj;
@@ -712,8 +638,6 @@ int spineCreate(OBJ_LIST *objlist, char *skelfile, char *atlasfile)
   GR_RESETFUNCP(obj) = spineReset;
   GR_ACTIONFUNCP(obj) = spineDraw;
 
-  //  printf("loading atlasfile %s\n", atlasfile);
-  
   atlas = spAtlas_createFromFile(atlasfile, 0);
 
   if (!atlas) {
@@ -723,32 +647,19 @@ int spineCreate(OBJ_LIST *objlist, char *skelfile, char *atlasfile)
   
 
   json = spSkeletonJson_create(atlas);
-
-  json->scale = 0.6f;
+  json->scale = jsonScale;
   
-  //  printf("reading skeleton data from %s\n", skelfile);
   skeletonData = spSkeletonJson_readSkeletonDataFile(json, skelfile);
-  //  printf("read skeleton data\n");
 
   if (!skeletonData) {
     fprintf(getConsoleFP(), "%s\n", json->error);
+    spAtlas_dispose(atlas);
     return -1;
   }
 
   spSkeletonJson_dispose(json);
 
-  
-  // Configure mixing.
-  /*
-    stateData = spAnimationStateData_create(skeletonData);
-    spAnimationStateData_setMixByName(stateData, "idle", "walk", 0.6f);
-    spAnimationStateData_setMixByName(stateData, "jump", "run", 0.2f);
-  */
-
   spineobj = (SpineObject *) calloc(1, sizeof(SpineObject));
-  /*
-  vertexArray(new VertexArray(Triangles, skeletonData->bonesCount * 4))
-  */
   
   spineobj->timeScale = 1.0;
   spineobj->worldVertices = spFloatArray_create(12);
@@ -756,12 +667,8 @@ int spineCreate(OBJ_LIST *objlist, char *skelfile, char *atlasfile)
   spineobj->clipper = spSkeletonClipping_create();
   
   spineobj->ownsAnimationStateData = 1;
-  if (spineobj->ownsAnimationStateData) {
-    spineobj->stateData = spAnimationStateData_create(skeletonData);
-  }
+  spineobj->stateData = spAnimationStateData_create(skeletonData);
   spineobj->state = spAnimationState_create(spineobj->stateData);
-
-  spineobj->timeScale = 1;
 
   bounds = spSkeletonBounds_create();
   spineobj->bounds = bounds;
@@ -781,14 +688,13 @@ int spineCreate(OBJ_LIST *objlist, char *skelfile, char *atlasfile)
 
   spSkeletonBounds_update(spineobj->bounds, spineobj->skeleton, 1);
 
-  // spSkeleton_update(spineobj->skeleton, 0.0);
   spAnimationState_update(spineobj->state, 0.0);
   spAnimationState_apply(spineobj->state, spineobj->skeleton);
 
   spSkeleton_updateWorldTransform(skeleton, SP_PHYSICS_UPDATE);
   spSkeleton_setSkin(skeleton, 0);
 
-  spineobj->scale = 0.01;	/* fix this */
+  spineobj->scale = renderScale;
   spineobj->program = SpineInfo.SpineShaderProg;
   spineobj->spineInfo = &SpineInfo;
 
@@ -814,12 +720,6 @@ int spineCreate(OBJ_LIST *objlist, char *skelfile, char *atlasfile)
   
   GR_CLIENTDATA(obj) = spineobj;
   
-  /*
-    spineobj->state->listener = callback;
-    AnimationState_setAnimationByName(spineobj->state, 0, "walk", 1);
-    AnimationState_addAnimationByName(spineobj->state, 0, "jump", 0, 3);
-    AnimationState_addAnimationByName(spineobj->state, 0, "run", 1, 0);
-  */
   return(gobjAddObj(objlist, obj));
 }
 
@@ -830,14 +730,27 @@ static int spCreateCmd(ClientData clientData, Tcl_Interp *interp,
 {
   OBJ_LIST *olist = (OBJ_LIST *) clientData;
   int id;
+  double jsonScale = 1.0;
+  double renderScale = 1.0;
 
   if (argc < 3) {
     Tcl_AppendResult(interp, "usage: ", argv[0],
-		     " skeleton_file atlas_file", NULL);
+		     " skeleton_file atlas_file ?json_scale? ?render_scale?", NULL);
     return TCL_ERROR;
   }
 
-  if ((id = spineCreate(olist, argv[1], argv[2])) < 0) {
+  if (argc > 3) {
+    if (Tcl_GetDouble(interp, argv[3], &jsonScale) != TCL_OK)
+      return TCL_ERROR;
+  }
+
+  if (argc > 4) {
+    if (Tcl_GetDouble(interp, argv[4], &renderScale) != TCL_OK)
+      return TCL_ERROR;
+  }
+
+  if ((id = spineCreate(olist, argv[1], argv[2], 
+			(float)jsonScale, (float)renderScale)) < 0) {
     Tcl_SetResult(interp, "error loading spine animation", TCL_STATIC);
     return(TCL_ERROR);
   }
@@ -901,6 +814,377 @@ static int spGetBoundsCmd(ClientData clientData, Tcl_Interp *interp,
   Tcl_ListObjAppendElement(interp, listPtr, Tcl_NewDoubleObj(s->bounds->maxY));
   Tcl_SetObjResult(interp, listPtr);
   return(TCL_OK);
+}
+
+/*
+ * sp::getBoundingBoxes spine_obj
+ *
+ * Returns a list of all bounding box attachments with their current
+ * world-space polygon vertices. Each element is:
+ *   {slot_name attachment_name {x0 y0 x1 y1 ...}}
+ *
+ * These polygons are suitable for creating Box2D fixtures.
+ * The vertices are already transformed to world coordinates and
+ * scaled by the spine object's scale factor.
+ */
+static int spGetBoundingBoxesCmd(ClientData clientData, Tcl_Interp *interp,
+				 int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  SpineObject *s;
+  int id;
+  float worldVertices[MAX_VERTICES_PER_ATTACHMENT];
+
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " spine_obj", NULL);
+    return TCL_ERROR;
+  }
+  
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 SpineID, "spine")) < 0)
+    return TCL_ERROR;  
+  
+  s = (SpineObject *) GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  Tcl_Obj *resultList = Tcl_NewListObj(0, NULL);
+
+  /* Iterate through all slots looking for bounding box attachments */
+  for (int i = 0; i < s->skeleton->slotsCount; i++) {
+    spSlot *slot = s->skeleton->slots[i];
+    if (!slot->attachment) continue;
+    if (!slot->bone->active) continue;
+    
+    if (slot->attachment->type == SP_ATTACHMENT_BOUNDING_BOX) {
+      spBoundingBoxAttachment *bb = (spBoundingBoxAttachment *)slot->attachment;
+      int vertexCount = bb->super.worldVerticesLength;
+      
+      /* Compute world vertices */
+      spVertexAttachment_computeWorldVertices(SUPER(bb), slot, 0, 
+					      vertexCount, worldVertices, 0, 2);
+      
+      /* Build the polygon vertex list, applying scale */
+      Tcl_Obj *vertList = Tcl_NewListObj(0, NULL);
+      for (int v = 0; v < vertexCount; v += 2) {
+	Tcl_ListObjAppendElement(interp, vertList, 
+				 Tcl_NewDoubleObj(worldVertices[v] * s->scale));
+	Tcl_ListObjAppendElement(interp, vertList, 
+				 Tcl_NewDoubleObj(worldVertices[v+1] * s->scale));
+      }
+      
+      /* Create entry: {slot_name attachment_name {vertices...}} */
+      Tcl_Obj *entry = Tcl_NewListObj(0, NULL);
+      Tcl_ListObjAppendElement(interp, entry, 
+			       Tcl_NewStringObj(slot->data->name, -1));
+      Tcl_ListObjAppendElement(interp, entry, 
+			       Tcl_NewStringObj(slot->attachment->name, -1));
+      Tcl_ListObjAppendElement(interp, entry, vertList);
+      
+      Tcl_ListObjAppendElement(interp, resultList, entry);
+    }
+  }
+
+  Tcl_SetObjResult(interp, resultList);
+  return TCL_OK;
+}
+
+/*
+ * sp::listBoundingBoxes spine_obj
+ *
+ * Returns a list of bounding box attachment names defined in the skeleton.
+ * This queries the skeleton data (all skins), not just currently visible ones.
+ */
+static int spListBoundingBoxesCmd(ClientData clientData, Tcl_Interp *interp,
+				  int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  SpineObject *s;
+  int id;
+
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " spine_obj", NULL);
+    return TCL_ERROR;
+  }
+  
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 SpineID, "spine")) < 0)
+    return TCL_ERROR;  
+  
+  s = (SpineObject *) GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  Tcl_Obj *resultList = Tcl_NewListObj(0, NULL);
+  
+  /* Search through all skins for bounding box attachments */
+  spSkeletonData *data = s->skeletonData;
+  for (int skinIdx = 0; skinIdx < data->skinsCount; skinIdx++) {
+    spSkin *skin = data->skins[skinIdx];
+    spSkinEntry *entry = spSkin_getAttachments(skin);
+    
+    while (entry) {
+      if (entry->attachment && 
+	  entry->attachment->type == SP_ATTACHMENT_BOUNDING_BOX) {
+	Tcl_Obj *item = Tcl_NewListObj(0, NULL);
+	Tcl_ListObjAppendElement(interp, item, 
+				 Tcl_NewStringObj(skin->name, -1));
+	Tcl_ListObjAppendElement(interp, item, 
+				 Tcl_NewStringObj(entry->attachment->name, -1));
+	Tcl_ListObjAppendElement(interp, resultList, item);
+      }
+      entry = entry->next;
+    }
+  }
+
+  Tcl_SetObjResult(interp, resultList);
+  return TCL_OK;
+}
+
+/*
+ * sp::setScale spine_obj scale
+ *
+ * Set the scale factor for the spine object.
+ * This affects both rendering and bounding box vertex output.
+ */
+static int spSetScaleCmd(ClientData clientData, Tcl_Interp *interp,
+			 int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  SpineObject *s;
+  int id;
+  double scale;
+
+  if (argc < 3) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " spine_obj scale", NULL);
+    return TCL_ERROR;
+  }
+  
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 SpineID, "spine")) < 0)
+    return TCL_ERROR;  
+  
+  if (Tcl_GetDouble(interp, argv[2], &scale) != TCL_OK)
+    return TCL_ERROR;
+  
+  s = (SpineObject *) GR_CLIENTDATA(OL_OBJ(olist,id));
+  s->scale = (float)scale;
+  
+  return TCL_OK;
+}
+
+/*
+ * sp::getScale spine_obj
+ *
+ * Get the current scale factor for the spine object.
+ */
+static int spGetScaleCmd(ClientData clientData, Tcl_Interp *interp,
+			 int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  SpineObject *s;
+  int id;
+
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " spine_obj", NULL);
+    return TCL_ERROR;
+  }
+  
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 SpineID, "spine")) < 0)
+    return TCL_ERROR;  
+  
+  s = (SpineObject *) GR_CLIENTDATA(OL_OBJ(olist,id));
+  Tcl_SetObjResult(interp, Tcl_NewDoubleObj(s->scale));
+  
+  return TCL_OK;
+}
+
+/*
+ * Compute the visual bounds of a skeleton from all visible attachments.
+ * This includes region and mesh attachments, not just bounding boxes.
+ */
+static void computeVisualBounds(SpineObject *s, float *minX, float *minY, 
+				float *maxX, float *maxY)
+{
+  float worldVertices[MAX_VERTICES_PER_ATTACHMENT];
+  *minX = 1e30f;
+  *minY = 1e30f;
+  *maxX = -1e30f;
+  *maxY = -1e30f;
+  
+  for (int i = 0; i < s->skeleton->slotsCount; i++) {
+    spSlot *slot = s->skeleton->slots[i];
+    if (!slot->attachment) continue;
+    if (!slot->bone->active) continue;
+    
+    int vertexCount = 0;
+    
+    if (slot->attachment->type == SP_ATTACHMENT_REGION) {
+      spRegionAttachment *region = (spRegionAttachment *)slot->attachment;
+      vertexCount = 8;
+      spRegionAttachment_computeWorldVertices(region, slot, worldVertices, 0, 2);
+    } 
+    else if (slot->attachment->type == SP_ATTACHMENT_MESH) {
+      spMeshAttachment *mesh = (spMeshAttachment *)slot->attachment;
+      vertexCount = mesh->super.worldVerticesLength;
+      spVertexAttachment_computeWorldVertices(SUPER(mesh), slot, 0,
+					      vertexCount, worldVertices, 0, 2);
+    }
+    else if (slot->attachment->type == SP_ATTACHMENT_BOUNDING_BOX) {
+      spBoundingBoxAttachment *bb = (spBoundingBoxAttachment *)slot->attachment;
+      vertexCount = bb->super.worldVerticesLength;
+      spVertexAttachment_computeWorldVertices(SUPER(bb), slot, 0,
+					      vertexCount, worldVertices, 0, 2);
+    }
+    
+    for (int v = 0; v < vertexCount; v += 2) {
+      float x = worldVertices[v];
+      float y = worldVertices[v + 1];
+      if (x < *minX) *minX = x;
+      if (y < *minY) *minY = y;
+      if (x > *maxX) *maxX = x;
+      if (y > *maxY) *maxY = y;
+    }
+  }
+}
+
+/*
+ * sp::fitToHeight spine_obj degrees
+ *
+ * Scale the spine object so its height equals the specified degrees.
+ * Uses the skeleton's visual bounds to determine natural height.
+ * Returns the computed scale factor.
+ */
+static int spFitToHeightCmd(ClientData clientData, Tcl_Interp *interp,
+			    int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  SpineObject *s;
+  int id;
+  double degrees;
+  float minX, minY, maxX, maxY;
+  float height, scale;
+
+  if (argc < 3) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " spine_obj degrees", NULL);
+    return TCL_ERROR;
+  }
+  
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 SpineID, "spine")) < 0)
+    return TCL_ERROR;  
+  
+  if (Tcl_GetDouble(interp, argv[2], &degrees) != TCL_OK)
+    return TCL_ERROR;
+
+  if (degrees <= 0) {
+    Tcl_SetResult(interp, "degrees must be positive", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  
+  s = (SpineObject *) GR_CLIENTDATA(OL_OBJ(olist,id));
+  
+  /* Compute visual bounds from all attachments */
+  computeVisualBounds(s, &minX, &minY, &maxX, &maxY);
+  
+  height = maxY - minY;
+  if (height <= 0) {
+    Tcl_SetResult(interp, "skeleton has zero height", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  
+  scale = (float)degrees / height;
+  s->scale = scale;
+  
+  Tcl_SetObjResult(interp, Tcl_NewDoubleObj(scale));
+  return TCL_OK;
+}
+
+/*
+ * sp::fitToWidth spine_obj degrees
+ *
+ * Scale the spine object so its width equals the specified degrees.
+ * Uses the skeleton's visual bounds to determine natural width.
+ * Returns the computed scale factor.
+ */
+static int spFitToWidthCmd(ClientData clientData, Tcl_Interp *interp,
+			   int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  SpineObject *s;
+  int id;
+  double degrees;
+  float minX, minY, maxX, maxY;
+  float width, scale;
+
+  if (argc < 3) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " spine_obj degrees", NULL);
+    return TCL_ERROR;
+  }
+  
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 SpineID, "spine")) < 0)
+    return TCL_ERROR;  
+  
+  if (Tcl_GetDouble(interp, argv[2], &degrees) != TCL_OK)
+    return TCL_ERROR;
+
+  if (degrees <= 0) {
+    Tcl_SetResult(interp, "degrees must be positive", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  
+  s = (SpineObject *) GR_CLIENTDATA(OL_OBJ(olist,id));
+  
+  /* Compute visual bounds from all attachments */
+  computeVisualBounds(s, &minX, &minY, &maxX, &maxY);
+  
+  width = maxX - minX;
+  if (width <= 0) {
+    Tcl_SetResult(interp, "skeleton has zero width", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  
+  scale = (float)degrees / width;
+  s->scale = scale;
+  
+  Tcl_SetObjResult(interp, Tcl_NewDoubleObj(scale));
+  return TCL_OK;
+}
+
+/*
+ * sp::getSize spine_obj
+ *
+ * Returns the current size {width height} in degrees (after scaling).
+ */
+static int spGetSizeCmd(ClientData clientData, Tcl_Interp *interp,
+			int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  SpineObject *s;
+  int id;
+  float minX, minY, maxX, maxY;
+
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " spine_obj", NULL);
+    return TCL_ERROR;
+  }
+  
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 SpineID, "spine")) < 0)
+    return TCL_ERROR;  
+  
+  s = (SpineObject *) GR_CLIENTDATA(OL_OBJ(olist,id));
+  
+  /* Compute visual bounds from all attachments */
+  computeVisualBounds(s, &minX, &minY, &maxX, &maxY);
+  
+  float width = (maxX - minX) * s->scale;
+  float height = (maxY - minY) * s->scale;
+  
+  Tcl_Obj *listPtr = Tcl_NewListObj(0, NULL);
+  Tcl_ListObjAppendElement(interp, listPtr, Tcl_NewDoubleObj(width));
+  Tcl_ListObjAppendElement(interp, listPtr, Tcl_NewDoubleObj(height));
+  Tcl_SetObjResult(interp, listPtr);
+  
+  return TCL_OK;
 }
 
 static int spSetAddAnimationByNameCmd(ClientData clientData, Tcl_Interp *interp,
@@ -1177,6 +1461,34 @@ int Spine_Init(Tcl_Interp * interp)
 
   Tcl_CreateCommand(interp, "sp::getBounds", 
 		    (Tcl_CmdProc *) spGetBoundsCmd, 
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+
+  Tcl_CreateCommand(interp, "sp::getBoundingBoxes", 
+		    (Tcl_CmdProc *) spGetBoundingBoxesCmd, 
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+
+  Tcl_CreateCommand(interp, "sp::listBoundingBoxes", 
+		    (Tcl_CmdProc *) spListBoundingBoxesCmd, 
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+
+  Tcl_CreateCommand(interp, "sp::setScale", 
+		    (Tcl_CmdProc *) spSetScaleCmd, 
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+
+  Tcl_CreateCommand(interp, "sp::getScale", 
+		    (Tcl_CmdProc *) spGetScaleCmd, 
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+
+  Tcl_CreateCommand(interp, "sp::fitToHeight", 
+		    (Tcl_CmdProc *) spFitToHeightCmd, 
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+
+  Tcl_CreateCommand(interp, "sp::fitToWidth", 
+		    (Tcl_CmdProc *) spFitToWidthCmd, 
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+
+  Tcl_CreateCommand(interp, "sp::getSize", 
+		    (Tcl_CmdProc *) spGetSizeCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
 
