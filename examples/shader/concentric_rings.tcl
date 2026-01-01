@@ -191,7 +191,7 @@ workspace::adjuster rings_ncycles {
 } -target rings -proc set_ncycles
 
 workspace::adjuster rings_speed {
-    val {float 0.0 10.0 0.1 4.0 "Speed" cyc/s}
+    val {float -10.0 10.0 0.1 4.0 "Speed" cyc/s}
 } -target rings -proc set_speed
 
 workspace::adjuster rings_phase {
