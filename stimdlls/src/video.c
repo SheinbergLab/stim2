@@ -28,6 +28,7 @@
 #include <GLFW/glfw3.h>
 
 #include <stim2.h>
+#include <objname.h>
 #include <prmutil.h>
 
 typedef struct _ffmpeg_video {
@@ -995,17 +996,10 @@ static int videopauseCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist)) {
-        Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-        return TCL_ERROR;
-    }
-
-    if (GR_OBJTYPE(OL_OBJ(olist, id)) != VideoID) {
-        Tcl_AppendResult(interp, argv[0], ": object not of type video", NULL);
-        return TCL_ERROR;
-    }
-
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist),
+			   argv[1], VideoID, "video")) < 0)
+      return TCL_ERROR;
+    
     v = GR_CLIENTDATA(OL_OBJ(olist, id));
     
     if (Tcl_GetInt(interp, argv[2], &pause) != TCL_OK) return TCL_ERROR;
@@ -1034,17 +1028,10 @@ static int videorepeatCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist)) {
-        Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-        return TCL_ERROR;
-    }
-
-    if (GR_OBJTYPE(OL_OBJ(olist, id)) != VideoID) {
-        Tcl_AppendResult(interp, argv[0], ": object not of type video", NULL);
-        return TCL_ERROR;
-    }
-
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist),
+			   argv[1], VideoID, "video")) < 0)
+      return TCL_ERROR;
+    
     v = GR_CLIENTDATA(OL_OBJ(olist, id));
     v->repeat_mode = repeat;
     
@@ -1062,17 +1049,10 @@ static int videohideCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist)) {
-        Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-        return TCL_ERROR;
-    }
-
-    if (GR_OBJTYPE(OL_OBJ(olist, id)) != VideoID) {
-        Tcl_AppendResult(interp, argv[0], ": object not of type video", NULL);
-        return TCL_ERROR;
-    }
-
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist),
+			   argv[1], VideoID, "video")) < 0)
+      return TCL_ERROR;
+    
     v = GR_CLIENTDATA(OL_OBJ(olist, id));
     v->hidden = hide;
     
@@ -1091,16 +1071,9 @@ static int videoseekCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
     
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist)) {
-        Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-        return TCL_ERROR;
-    }
-    
-    if (GR_OBJTYPE(OL_OBJ(olist, id)) != VideoID) {
-        Tcl_AppendResult(interp, argv[0], ": object not of type video", NULL);
-        return TCL_ERROR;
-    }
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist),
+			   argv[1], VideoID, "video")) < 0)
+      return TCL_ERROR;
     
     v = GR_CLIENTDATA(OL_OBJ(olist, id));
     
@@ -1131,17 +1104,10 @@ static int videoeofcallbackCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist)) {
-        Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-        return TCL_ERROR;
-    }
-
-    if (GR_OBJTYPE(OL_OBJ(olist, id)) != VideoID) {
-        Tcl_AppendResult(interp, argv[0], ": object not of type video", NULL);
-        return TCL_ERROR;
-    }
-
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist),
+			   argv[1], VideoID, "video")) < 0)
+      return TCL_ERROR;
+    
     v = GR_CLIENTDATA(OL_OBJ(olist, id));
 
     if (argc == 2) {
@@ -1176,17 +1142,10 @@ static int videograyscaleCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist)) {
-        Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-        return TCL_ERROR;
-    }
-
-    if (GR_OBJTYPE(OL_OBJ(olist, id)) != VideoID) {
-        Tcl_AppendResult(interp, argv[0], ": object not of type video", NULL);
-        return TCL_ERROR;
-    }
-
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist),
+			   argv[1], VideoID, "video")) < 0)
+      return TCL_ERROR;
+    
     v = GR_CLIENTDATA(OL_OBJ(olist, id));
     
     if (argc == 2) {
@@ -1215,12 +1174,10 @@ static int videobrightnessCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != VideoID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid video object", NULL);
-        return TCL_ERROR;
-    }
-
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist),
+			   argv[1], VideoID, "video")) < 0)
+      return TCL_ERROR;
+    
     v = GR_CLIENTDATA(OL_OBJ(olist, id));
     
     if (argc == 2) {
@@ -1247,12 +1204,10 @@ static int videocontrastCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != VideoID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid video object", NULL);
-        return TCL_ERROR;
-    }
-
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist),
+			   argv[1], VideoID, "video")) < 0)
+      return TCL_ERROR;
+    
     v = GR_CLIENTDATA(OL_OBJ(olist, id));
     
     if (argc == 2) {
@@ -1279,12 +1234,10 @@ static int videogammaCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != VideoID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid video object", NULL);
-        return TCL_ERROR;
-    }
-
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist),
+			   argv[1], VideoID, "video")) < 0)
+      return TCL_ERROR;
+    
     v = GR_CLIENTDATA(OL_OBJ(olist, id));
     
     if (argc == 2) {
@@ -1311,12 +1264,10 @@ static int videoopacityCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != VideoID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid video object", NULL);
-        return TCL_ERROR;
-    }
-
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist),
+			   argv[1], VideoID, "video")) < 0)
+      return TCL_ERROR;
+    
     v = GR_CLIENTDATA(OL_OBJ(olist, id));
     
     if (argc == 2) {
@@ -1343,12 +1294,10 @@ static int videocolorgainsCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != VideoID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid video object", NULL);
-        return TCL_ERROR;
-    }
-
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist),
+			   argv[1], VideoID, "video")) < 0)
+      return TCL_ERROR;
+    
     v = GR_CLIENTDATA(OL_OBJ(olist, id));
     
     if (argc == 2) {
@@ -1388,12 +1337,10 @@ static int videoinvertCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != VideoID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid video object", NULL);
-        return TCL_ERROR;
-    }
-
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist),
+			   argv[1], VideoID, "video")) < 0)
+      return TCL_ERROR;
+    
     v = GR_CLIENTDATA(OL_OBJ(olist, id));
     
     if (argc == 2) {
@@ -1420,12 +1367,10 @@ static int videothresholdCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != VideoID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid video object", NULL);
-        return TCL_ERROR;
-    }
-
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist),
+			   argv[1], VideoID, "video")) < 0)
+      return TCL_ERROR;
+    
     v = GR_CLIENTDATA(OL_OBJ(olist, id));
     
     if (argc == 2) {
@@ -1459,16 +1404,16 @@ static int videomaskCmd(ClientData clientData, Tcl_Interp *interp,
     double centerX, centerY, radius, width, height, feather;
 
     if (argc < 2) {
-        Tcl_AppendResult(interp, "usage: ", argv[0], " id [mode centerX centerY radius/width height feather]", NULL);
+        Tcl_AppendResult(interp, "usage: ", argv[0],
+			 " id [mode centerX centerY radius/width height feather]",
+			 NULL);
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != VideoID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid video object", NULL);
-        return TCL_ERROR;
-    }
-
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist),
+			   argv[1], VideoID, "video")) < 0)
+      return TCL_ERROR;
+    
     v = GR_CLIENTDATA(OL_OBJ(olist, id));
     
     if (argc == 2) {

@@ -35,6 +35,7 @@
 
 #include <stim2.h>
 #include <prmutil.h>
+#include "objname.h"
 #include <df.h>
 #include <tcl_dl.h>
 
@@ -1101,11 +1102,8 @@ static int imageinfoCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != ImageID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid image object", NULL);
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], ImageID, "image")) < 0)
         return TCL_ERROR;
-    }
 
     img = GR_CLIENTDATA(OL_OBJ(olist, id));
     
@@ -1139,11 +1137,8 @@ static int imagegrayscaleCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != ImageID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid image object", NULL);
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], ImageID, "image")) < 0)
         return TCL_ERROR;
-    }
 
     img = GR_CLIENTDATA(OL_OBJ(olist, id));
     
@@ -1171,11 +1166,8 @@ static int imagebrightnessCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != ImageID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid image object", NULL);
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], ImageID, "image")) < 0)
         return TCL_ERROR;
-    }
 
     img = GR_CLIENTDATA(OL_OBJ(olist, id));
     
@@ -1203,11 +1195,8 @@ static int imagecontrastCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != ImageID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid image object", NULL);
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], ImageID, "image")) < 0)
         return TCL_ERROR;
-    }
 
     img = GR_CLIENTDATA(OL_OBJ(olist, id));
     
@@ -1235,11 +1224,8 @@ static int imagegammaCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != ImageID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid image object", NULL);
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], ImageID, "image")) < 0)
         return TCL_ERROR;
-    }
 
     img = GR_CLIENTDATA(OL_OBJ(olist, id));
     
@@ -1267,11 +1253,8 @@ static int imageopacityCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != ImageID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid image object", NULL);
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], ImageID, "image")) < 0)
         return TCL_ERROR;
-    }
 
     img = GR_CLIENTDATA(OL_OBJ(olist, id));
     
@@ -1299,11 +1282,8 @@ static int imagecolorgainsCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != ImageID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid image object", NULL);
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], ImageID, "image")) < 0)
         return TCL_ERROR;
-    }
 
     img = GR_CLIENTDATA(OL_OBJ(olist, id));
     
@@ -1344,11 +1324,8 @@ static int imageinvertCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != ImageID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid image object", NULL);
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], ImageID, "image")) < 0)
         return TCL_ERROR;
-    }
 
     img = GR_CLIENTDATA(OL_OBJ(olist, id));
     
@@ -1376,11 +1353,8 @@ static int imagethresholdCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != ImageID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid image object", NULL);
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], ImageID, "image")) < 0)
         return TCL_ERROR;
-    }
 
     img = GR_CLIENTDATA(OL_OBJ(olist, id));
     
@@ -1422,11 +1396,8 @@ static int imagemaskCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != ImageID) {
-        Tcl_AppendResult(interp, argv[0], ": invalid image object", NULL);
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], ImageID, "image")) < 0)
         return TCL_ERROR;
-    }
 
     img = GR_CLIENTDATA(OL_OBJ(olist, id));
     

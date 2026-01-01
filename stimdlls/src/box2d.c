@@ -19,6 +19,7 @@
 #include <tcl_dl.h>
 
 #include <stim2.h>
+#include <objname.h>
 #include "box2d/box2d.h"
 
 static Tcl_Interp *OurInterp = NULL;
@@ -105,23 +106,15 @@ static int find_body(BOX2D_WORLD *Box2DObj,
 		     char *name, b2BodyId *b);
 
 static BOX2D_WORLD *find_Box2D(Tcl_Interp *interp, 
-				OBJ_LIST *olist,
-			       char *idstring)
+                               OBJ_LIST *olist,
+                               char *idstring)
 {
-  int id;
-  
-  if (Tcl_GetInt(interp, idstring, &id) != TCL_OK) return NULL;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, "objid out of range", NULL);
-    return NULL;
-  }
-  
-  /* Make sure it's a Box2D object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != Box2DID) {
-    Tcl_AppendResult(interp, "object not a Box2D world", NULL);
-    return NULL;
-  }
-  return (BOX2D_WORLD *) GR_CLIENTDATA(OL_OBJ(olist,id));
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist),
+			   idstring, Box2DID, "Box2D world")) < 0)
+        return NULL;
+    
+    return (BOX2D_WORLD *) GR_CLIENTDATA(OL_OBJ(olist, id));
 }
 
 static int find_vec_3(Tcl_Interp *interp, char *name, float *m)

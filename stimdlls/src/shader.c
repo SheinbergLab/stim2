@@ -66,6 +66,7 @@
 /****************************************************************/
 
 #include <stim2.h>
+#include <objname.h>
 #include "shaderutils.h"
 
 #ifndef M_PI
@@ -468,18 +469,10 @@ static int shaderObjSetSamplerCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-    return TCL_ERROR;
-  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 ShaderObjID, "shader")) < 0)
+    return TCL_ERROR;  
   
-  /* Make sure it's a shader object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != ShaderObjID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type shaderObj", NULL);
-    return TCL_ERROR;
-  }
-
   if (argc > 2) {
     if (Tcl_GetInt(interp, argv[2], &texid) != TCL_OK) return TCL_ERROR;
   }
@@ -623,6 +616,164 @@ static int shaderSetPathCmd(ClientData clientData, Tcl_Interp *interp,
   Tcl_SetResult(interp, oldpath, TCL_VOLATILE);
   return(TCL_OK);
 }
+
+/*
+ * shaderBuildInline - Build shader from inline source strings
+ *
+ * Add this to shader.c and register in Shader_Init()
+ *
+ * Usage:
+ *   shaderBuildInline vertex_source fragment_source ?uniforms?
+ *
+ * Returns: shader name (e.g., "shader0")
+ */
+
+/*
+ * Helper: parse uniforms string and add to defaults table
+ * (Similar to add_defaults_to_table but works from string instead of file)
+ */
+static int parse_uniforms_string(Tcl_Interp *interp, Tcl_HashTable *dtable,
+                                  const char *uniforms_str)
+{
+    char *u_copy, *pch;
+    Tcl_Size argc;
+    char **argv;
+    Tcl_HashEntry *entryPtr;
+    int newentry;
+
+    if (!uniforms_str || !uniforms_str[0]) {
+        return 0;  /* Empty uniforms is fine */
+    }
+
+    u_copy = strdup(uniforms_str);
+    if (!u_copy) return -1;
+
+    /* For each line, parse "name value" pairs */
+    pch = strtok(u_copy, "\n");
+    while (pch != NULL) {
+        /* Skip empty lines and comments */
+        while (*pch == ' ' || *pch == '\t') pch++;
+        if (pch[0] != '\0' && pch[0] != '#') {
+            if (Tcl_SplitList(interp, pch, &argc, (const char ***)&argv) == TCL_OK) {
+                if (argc == 2) {
+                    entryPtr = Tcl_CreateHashEntry(dtable, argv[0], &newentry);
+                    Tcl_SetHashValue(entryPtr, strdup(argv[1]));
+                }
+                Tcl_Free((char *)argv);
+            }
+        }
+        pch = strtok(NULL, "\n");
+    }
+
+    free(u_copy);
+    return 0;
+}
+
+/*
+ * Helper: prepend version directive to shader source
+ */
+static char *prepend_version(const char *source)
+{
+    const char *version;
+    char *result;
+    size_t len;
+
+#ifndef STIM2_USE_GLES
+    version = "#version 330\n";
+#else
+    version = "#version 300 es\n";
+#endif
+
+    len = strlen(version) + strlen(source) + 1;
+    result = malloc(len);
+    if (result) {
+        strcpy(result, version);
+        strcat(result, source);
+    }
+    return result;
+}
+
+static int shaderBuildInlineCmd(ClientData clientData, Tcl_Interp *interp,
+                                 int argc, char *argv[])
+{
+    OBJ_LIST *olist = (OBJ_LIST *) clientData;
+    SHADER_PROG shader_prog;
+    char shader_name[64];
+    Tcl_HashEntry *entryPtr;
+    int newentry;
+    int verbose = 0;
+    SHADER_PROG *newprog;
+    char *vertex_src = NULL;
+    char *fragment_src = NULL;
+    const char *uniforms_str = NULL;
+    int result = TCL_ERROR;
+
+    if (argc < 3) {
+        Tcl_AppendResult(interp, "usage: ", argv[0],
+                         " vertex_source fragment_source ?uniforms?", NULL);
+        return TCL_ERROR;
+    }
+
+    /* Prepend version directives */
+    vertex_src = prepend_version(argv[1]);
+    fragment_src = prepend_version(argv[2]);
+
+    if (!vertex_src || !fragment_src) {
+        Tcl_AppendResult(interp, argv[0], ": memory allocation failed", NULL);
+        goto cleanup;
+    }
+
+    /* Optional uniforms string */
+    if (argc > 3) {
+        uniforms_str = argv[3];
+    }
+
+    /* Build the shader program */
+    if (build_prog(&shader_prog, vertex_src, fragment_src, verbose) != GL_NO_ERROR) {
+        Tcl_AppendResult(interp, argv[0], ": shader compilation/linking failed", NULL);
+        goto cleanup;
+    }
+
+    /* Allocate and populate shader program structure */
+    newprog = (SHADER_PROG *) calloc(1, sizeof(SHADER_PROG));
+    if (!newprog) {
+        Tcl_AppendResult(interp, argv[0], ": memory allocation failed", NULL);
+        goto cleanup;
+    }
+
+    newprog->fragShader = shader_prog.fragShader;
+    newprog->vertShader = shader_prog.vertShader;
+    newprog->program = shader_prog.program;
+
+    /* Add uniforms into master table */
+    Tcl_InitHashTable(&newprog->uniformTable, TCL_STRING_KEYS);
+    add_uniforms_to_table(&newprog->uniformTable, newprog);
+
+    /* Parse inline uniforms string for defaults */
+    Tcl_InitHashTable(&newprog->defaultsTable, TCL_STRING_KEYS);
+    if (uniforms_str) {
+        parse_uniforms_string(interp, &newprog->defaultsTable, uniforms_str);
+    }
+
+    /* Add attribs into master table */
+    Tcl_InitHashTable(&newprog->attribTable, TCL_STRING_KEYS);
+    add_attribs_to_table(&newprog->attribTable, newprog);
+
+    /* Register in shader table */
+    sprintf(shader_name, "shader%d", shaderProgramCount++);
+    strcpy(newprog->name, shader_name);
+    entryPtr = Tcl_CreateHashEntry(&shaderProgramTable, shader_name, &newentry);
+    Tcl_SetHashValue(entryPtr, newprog);
+
+    Tcl_SetResult(interp, shader_name, TCL_VOLATILE);
+    result = TCL_OK;
+
+cleanup:
+    if (vertex_src) free(vertex_src);
+    if (fragment_src) free(fragment_src);
+    return result;
+}
+
 
 static int shaderBuildCmd(ClientData clientData, Tcl_Interp *interp,
               int argc, char *argv[])
@@ -827,17 +978,10 @@ static int shaderObjUniformNamesCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-    return TCL_ERROR;
-  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 ShaderObjID, "shader")) < 0)
+    return TCL_ERROR;  
   
-  /* Make sure it's a shader object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != ShaderObjID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type shaderObj", NULL);
-    return TCL_ERROR;
-  }
   g = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   return(uniform_names(interp, &g->uniformTable));
@@ -1078,17 +1222,10 @@ static int shaderObjSetUniformCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-    return TCL_ERROR;
-  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 ShaderObjID, "shader")) < 0)
+    return TCL_ERROR;  
   
-  /* Make sure it's a shader object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != ShaderObjID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type shaderObj", NULL);
-    return TCL_ERROR;
-  }
   g = GR_CLIENTDATA(OL_OBJ(olist,id));
   if (argc > 3) {
     return(uniform_set(interp, &g->uniformTable, g->program->name, 
@@ -1164,11 +1301,13 @@ int Shader_Init(Tcl_Interp *interp)
             (Tcl_CmdProc *) shaderSetSuffixCmd,
             (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
-
-
   Tcl_CreateCommand(interp, "shaderBuild", 
             (Tcl_CmdProc *) shaderBuildCmd, 
             (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "shaderBuildInline",
+		    (Tcl_CmdProc *) shaderBuildInlineCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  
   Tcl_CreateCommand(interp, "shaderDelete", 
             (Tcl_CmdProc *) shaderDeleteCmd, 
             (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);

@@ -12,6 +12,7 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <stim2.h>
+#include <objname.h>
 #include "box2d/box2d.h"
 #include "aseprite_json.h"
 

@@ -259,11 +259,9 @@ int worldLoadTMXCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[])
     }
     
     int id;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) {
-        Tcl_AppendResult(interp, "invalid world", NULL);
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
         return TCL_ERROR;
-    }
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     
     float ppm = 32.0f;
@@ -593,8 +591,9 @@ int worldGetObjectsCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]
     }
     
     int id;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     const char *filter = argc > 2 ? argv[2] : NULL;
     
@@ -644,8 +643,9 @@ int worldGetMapInfoCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[]
     }
     
     int id;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     
     Tcl_Obj *result = Tcl_NewDictObj();
@@ -672,10 +672,12 @@ int worldSetOffsetCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[])
     }
     
     int id;
-    double ox, oy;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    double ox, oy;
     if (Tcl_GetDouble(interp, argv[2], &ox) != TCL_OK) return TCL_ERROR;
     if (Tcl_GetDouble(interp, argv[3], &oy) != TCL_OK) return TCL_ERROR;
     

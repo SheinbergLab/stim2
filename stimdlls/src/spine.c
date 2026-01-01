@@ -14,6 +14,7 @@
 #include <spine/extension.h>
 #include <tcl.h>
 #include <stim2.h>
+#include <objname.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -859,17 +860,10 @@ static int spCopyCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
   
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-    return TCL_ERROR;
-  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 SpineID, "spine")) < 0)
+    return TCL_ERROR;  
   
-  /* Make sure it's a spine object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != SpineID) {
-    Tcl_AppendResult(interp, argv[0], ": object not a spine object", NULL);
-    return TCL_ERROR;
-  }
   s = (SpineObject *) GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if ((id = spineCopy(olist, s)) < 0) {
@@ -894,17 +888,10 @@ static int spGetBoundsCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
   
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-    return TCL_ERROR;
-  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 SpineID, "spine")) < 0)
+    return TCL_ERROR;  
   
-  /* Make sure it's a spine object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != SpineID) {
-    Tcl_AppendResult(interp, argv[0], ": object not a spine object", NULL);
-    return TCL_ERROR;
-  }
   s = (SpineObject *) GR_CLIENTDATA(OL_OBJ(olist,id));
 
   Tcl_Obj *listPtr = Tcl_NewListObj(0, NULL);
@@ -970,17 +957,10 @@ static int spSetAddAnimationByNameCmd(ClientData clientData, Tcl_Interp *interp,
     }
   }
   
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-    return TCL_ERROR;
-  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 SpineID, "spine")) < 0)
+    return TCL_ERROR;  
   
-  /* Make sure it's a spine object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != SpineID) {
-    Tcl_AppendResult(interp, argv[0], ": object not a spine object", NULL);
-    return TCL_ERROR;
-  }
   s = (SpineObject *) GR_CLIENTDATA(OL_OBJ(olist,id));
   
   if (!spSkeletonData_findAnimation(s->skeletonData, argv[2])) {

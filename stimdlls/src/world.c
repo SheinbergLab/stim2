@@ -224,9 +224,11 @@ static int worldSetGravityCmd(ClientData cd, Tcl_Interp *interp, int argc, char 
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 4) { Tcl_AppendResult(interp, "usage: ", argv[0], " world gx gy", NULL); return TCL_ERROR; }
+    
     int id;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     double gx, gy;
     if (Tcl_GetDouble(interp, argv[2], &gx) != TCL_OK) return TCL_ERROR;
@@ -239,10 +241,12 @@ static int worldSetGravityCmd(ClientData cd, Tcl_Interp *interp, int argc, char 
 static int worldGetContactsCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[])
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
-    if (argc < 2) return TCL_ERROR;
+    if (argc < 2) { Tcl_AppendResult(interp, "usage: ", argv[0], " world", NULL); return TCL_ERROR; }
+    
     int id;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     if (!w->has_world) { Tcl_SetResult(interp, "", TCL_STATIC); return TCL_OK; }
 
@@ -272,9 +276,11 @@ static int worldSetCollisionCallbackCmd(ClientData cd, Tcl_Interp *interp, int a
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 3) { Tcl_AppendResult(interp, "usage: ", argv[0], " world callback", NULL); return TCL_ERROR; }
+    
     int id;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
 
     strncpy(w->collision_callback, argv[2], sizeof(w->collision_callback) - 1);
@@ -294,10 +300,13 @@ static int worldSetAutoCenterCmd(ClientData cd, Tcl_Interp *interp, int argc, ch
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 3) { Tcl_AppendResult(interp, "usage: ", argv[0], " world 0/1", NULL); return TCL_ERROR; }
-    int id, enabled;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    int enabled;
     if (Tcl_GetInt(interp, argv[2], &enabled) != TCL_OK) return TCL_ERROR;
     w->auto_center = enabled;
     return TCL_OK;
@@ -307,11 +316,15 @@ static int worldQueryPointCmd(ClientData cd, Tcl_Interp *interp, int argc, char 
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 4) { Tcl_AppendResult(interp, "usage: ", argv[0], " world x y ?-ignore sid?", NULL); return TCL_ERROR; }
-    int id; double x, y;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     if (!w->has_world) { Tcl_SetObjResult(interp, Tcl_NewIntObj(0)); return TCL_OK; }
+    
+    double x, y;
     if (Tcl_GetDouble(interp, argv[2], &x) != TCL_OK) return TCL_ERROR;
     if (Tcl_GetDouble(interp, argv[3], &y) != TCL_OK) return TCL_ERROR;
 
@@ -336,11 +349,15 @@ static int worldQueryAABBCmd(ClientData cd, Tcl_Interp *interp, int argc, char *
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 6) { Tcl_AppendResult(interp, "usage: ", argv[0], " world x1 y1 x2 y2 ?-ignore sid?", NULL); return TCL_ERROR; }
-    int id; double x1, y1, x2, y2;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     if (!w->has_world) { Tcl_SetObjResult(interp, Tcl_NewIntObj(0)); return TCL_OK; }
+    
+    double x1, y1, x2, y2;
     if (Tcl_GetDouble(interp, argv[2], &x1) != TCL_OK) return TCL_ERROR;
     if (Tcl_GetDouble(interp, argv[3], &y1) != TCL_OK) return TCL_ERROR;
     if (Tcl_GetDouble(interp, argv[4], &x2) != TCL_OK) return TCL_ERROR;

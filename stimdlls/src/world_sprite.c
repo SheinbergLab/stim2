@@ -137,9 +137,11 @@ static int worldCreateSpriteCmd(ClientData cd, Tcl_Interp *interp, int argc, cha
         Tcl_AppendResult(interp, "usage: ", argv[0], " world name tile_id x y w h ?atlas?", NULL);
         return TCL_ERROR;
     }
+    
     int id;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     
     if (w->sprite_count >= WORLD_MAX_SPRITES) {
@@ -176,10 +178,14 @@ static int worldRemoveSpriteCmd(ClientData cd, Tcl_Interp *interp, int argc, cha
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 3) { Tcl_AppendResult(interp, "usage: ", argv[0], " world sprite_id", NULL); return TCL_ERROR; }
-    int id, sid;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    int sid;
     if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
     if (sid < 0 || sid >= w->sprite_count) return TCL_ERROR;
     
@@ -201,10 +207,14 @@ static int worldSpriteAddBodyCmd(ClientData cd, Tcl_Interp *interp, int argc, ch
         Tcl_AppendResult(interp, "usage: ", argv[0], " world sprite ?options...?", NULL);
         return TCL_ERROR;
     }
-    int id, sid;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    int sid;
     if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
     if (sid < 0 || sid >= w->sprite_count) return TCL_ERROR;
     Sprite *sp = &w->sprites[sid];
@@ -274,10 +284,15 @@ static int worldSetSpritePositionCmd(ClientData cd, Tcl_Interp *interp, int argc
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 5) { Tcl_AppendResult(interp, "usage: ", argv[0], " world sprite x y", NULL); return TCL_ERROR; }
-    int id, sid; double x, y;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    int sid;
+    double x, y;
     if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
     if (sid < 0 || sid >= w->sprite_count) return TCL_ERROR;
     if (Tcl_GetDouble(interp, argv[3], &x) != TCL_OK) return TCL_ERROR;
@@ -295,10 +310,15 @@ static int worldSetSpriteRotationCmd(ClientData cd, Tcl_Interp *interp, int argc
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 4) { Tcl_AppendResult(interp, "usage: ", argv[0], " world sprite angle", NULL); return TCL_ERROR; }
-    int id, sid; double angle;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    int sid;
+    double angle;
     if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
     if (sid < 0 || sid >= w->sprite_count) return TCL_ERROR;
     if (Tcl_GetDouble(interp, argv[3], &angle) != TCL_OK) return TCL_ERROR;
@@ -315,10 +335,14 @@ static int worldSetSpriteVisibleCmd(ClientData cd, Tcl_Interp *interp, int argc,
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 4) { Tcl_AppendResult(interp, "usage: ", argv[0], " world sprite visible", NULL); return TCL_ERROR; }
-    int id, sid, visible;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    int sid, visible;
     if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
     if (sid < 0 || sid >= w->sprite_count) return TCL_ERROR;
     if (Tcl_GetInt(interp, argv[3], &visible) != TCL_OK) return TCL_ERROR;
@@ -330,10 +354,14 @@ static int worldSetSpriteTileCmd(ClientData cd, Tcl_Interp *interp, int argc, ch
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 4) { Tcl_AppendResult(interp, "usage: ", argv[0], " world sprite tile_id", NULL); return TCL_ERROR; }
-    int id, sid, tile_id;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    int sid, tile_id;
     if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
     if (sid < 0 || sid >= w->sprite_count) return TCL_ERROR;
     if (Tcl_GetInt(interp, argv[3], &tile_id) != TCL_OK) return TCL_ERROR;
@@ -353,10 +381,12 @@ static int worldSetSpriteTileCmd(ClientData cd, Tcl_Interp *interp, int argc, ch
 static int worldGetSpriteCountCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[])
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
-    if (argc < 2) return TCL_ERROR;
+    if (argc < 2) { Tcl_AppendResult(interp, "usage: ", argv[0], " world", NULL); return TCL_ERROR; }
+    
     int id;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     Tcl_SetObjResult(interp, Tcl_NewIntObj(w->sprite_count));
     return TCL_OK;
@@ -366,9 +396,11 @@ static int worldGetSpriteByNameCmd(ClientData cd, Tcl_Interp *interp, int argc, 
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 3) { Tcl_AppendResult(interp, "usage: ", argv[0], " world name", NULL); return TCL_ERROR; }
+    
     int id;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     for (int i = 0; i < w->sprite_count; i++) {
         if (strcmp(w->sprites[i].name, argv[2]) == 0) {
@@ -384,10 +416,14 @@ static int worldGetSpriteInfoCmd(ClientData cd, Tcl_Interp *interp, int argc, ch
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 3) { Tcl_AppendResult(interp, "usage: ", argv[0], " world sprite", NULL); return TCL_ERROR; }
-    int id, sid;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    int sid;
     if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
     if (sid < 0 || sid >= w->sprite_count) return TCL_ERROR;
     
@@ -418,10 +454,15 @@ static int worldApplyImpulseCmd(ClientData cd, Tcl_Interp *interp, int argc, cha
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 5) { Tcl_AppendResult(interp, "usage: ", argv[0], " world sprite ix iy", NULL); return TCL_ERROR; }
-    int id, sid; double ix, iy;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    int sid;
+    double ix, iy;
     if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
     if (sid < 0 || sid >= w->sprite_count) return TCL_ERROR;
     if (Tcl_GetDouble(interp, argv[3], &ix) != TCL_OK) return TCL_ERROR;
@@ -437,10 +478,15 @@ static int worldSetLinearVelocityCmd(ClientData cd, Tcl_Interp *interp, int argc
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 5) { Tcl_AppendResult(interp, "usage: ", argv[0], " world sprite vx vy", NULL); return TCL_ERROR; }
-    int id, sid; double vx, vy;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    int sid;
+    double vx, vy;
     if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
     if (sid < 0 || sid >= w->sprite_count) return TCL_ERROR;
     if (Tcl_GetDouble(interp, argv[3], &vx) != TCL_OK) return TCL_ERROR;
@@ -456,10 +502,15 @@ static int worldApplyForceCmd(ClientData cd, Tcl_Interp *interp, int argc, char 
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 5) { Tcl_AppendResult(interp, "usage: ", argv[0], " world sprite fx fy", NULL); return TCL_ERROR; }
-    int id, sid; double fx, fy;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    int sid;
+    double fx, fy;
     if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
     if (sid < 0 || sid >= w->sprite_count) return TCL_ERROR;
     if (Tcl_GetDouble(interp, argv[3], &fx) != TCL_OK) return TCL_ERROR;
@@ -479,10 +530,14 @@ static int worldSetSpriteAnimationCmd(ClientData cd, Tcl_Interp *interp, int arg
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 5) { Tcl_AppendResult(interp, "usage: ", argv[0], " world sprite frames fps ?loop?", NULL); return TCL_ERROR; }
-    int id, sid;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    int sid;
     if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
     if (sid < 0 || sid >= w->sprite_count) return TCL_ERROR;
     
@@ -508,10 +563,14 @@ static int worldPlayAnimationCmd(ClientData cd, Tcl_Interp *interp, int argc, ch
 {
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (argc < 4) { Tcl_AppendResult(interp, "usage: ", argv[0], " world sprite play(0/1)", NULL); return TCL_ERROR; }
-    int id, sid, play;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    int sid, play;
     if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
     if (sid < 0 || sid >= w->sprite_count) return TCL_ERROR;
     if (Tcl_GetInt(interp, argv[3], &play) != TCL_OK) return TCL_ERROR;

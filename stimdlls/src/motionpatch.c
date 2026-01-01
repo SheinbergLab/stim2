@@ -31,6 +31,7 @@
 
 #include <stim2.h>		/* Stim header      */
 #include "shaderutils.h"
+#include "objname.h"
 
 #if !defined(PI)
 #define PI 3.1415926
@@ -575,17 +576,8 @@ static int motionpatchSetSamplerCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], MotionpatchID, "motionpatch")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a shader object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MotionpatchID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type shaderObj", NULL);
-    return TCL_ERROR;
-  }
 
   if (argc > 2) {
     if (Tcl_GetInt(interp, argv[2], &texid) != TCL_OK) return TCL_ERROR;
@@ -622,17 +614,8 @@ static int motionpatchSpeedCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], MotionpatchID, "motionpatch")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a motionpatch object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MotionpatchID) {
-    Tcl_AppendResult(interp, argv[0], ": object not a motionpatch", NULL);
-    return TCL_ERROR;
-  }
   s = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetDouble(interp, argv[2], &speed) != TCL_OK) return TCL_ERROR;
@@ -659,17 +642,8 @@ static int motionpatchUseNoiseDirectionCmd(ClientData clientData, Tcl_Interp *in
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], MotionpatchID, "motionpatch")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a motionpatch object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MotionpatchID) {
-    Tcl_AppendResult(interp, argv[0], ": object not a motionpatch", NULL);
-    return TCL_ERROR;
-  }
   s = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetInt(interp, argv[2], &use_noise) != TCL_OK) return TCL_ERROR;
@@ -700,17 +674,8 @@ static int motionpatchSetSeedCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], MotionpatchID, "motionpatch")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a motionpatch object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MotionpatchID) {
-    Tcl_AppendResult(interp, argv[0], ": object not a motionpatch", NULL);
-    return TCL_ERROR;
-  }
   s = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetInt(interp, argv[2], &ctxid) != TCL_OK) return TCL_ERROR;
@@ -743,17 +708,8 @@ static int motionpatchSetNoiseZCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], MotionpatchID, "motionpatch")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a motionpatch object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MotionpatchID) {
-    Tcl_AppendResult(interp, argv[0], ": object not a motionpatch", NULL);
-    return TCL_ERROR;
-  }
   s = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetDouble(interp, argv[2], &noise_z) != TCL_OK) return TCL_ERROR;
@@ -776,17 +732,8 @@ static int motionpatchNoiseUpdateZCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], MotionpatchID, "motionpatch")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a motionpatch object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MotionpatchID) {
-    Tcl_AppendResult(interp, argv[0], ": object not a motionpatch", NULL);
-    return TCL_ERROR;
-  }
   s = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetInt(interp, argv[2], &do_update) != TCL_OK) return TCL_ERROR;
@@ -810,17 +757,8 @@ static int motionpatchDirectionCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], MotionpatchID, "motionpatch")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a motionpatch object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MotionpatchID) {
-    Tcl_AppendResult(interp, argv[0], ": object not a motionpatch", NULL);
-    return TCL_ERROR;
-  }
   s = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetDouble(interp, argv[2], &direction) != TCL_OK) return TCL_ERROR;
@@ -845,17 +783,8 @@ static int motionpatchCoherenceCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], MotionpatchID, "motionpatch")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a motionpatch object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MotionpatchID) {
-    Tcl_AppendResult(interp, argv[0], ": object not a motionpatch", NULL);
-    return TCL_ERROR;
-  }
   s = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetDouble(interp, argv[2], &coherence) != TCL_OK) return TCL_ERROR;
@@ -885,17 +814,8 @@ static int motionpatchPointsizeCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], MotionpatchID, "motionpatch")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a motionpatch object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MotionpatchID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type motionpatch", NULL);
-    return TCL_ERROR;
-  }
   s = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetDouble(interp, argv[2], &pointsize) != TCL_OK) return TCL_ERROR;
@@ -920,17 +840,8 @@ static int motionpatchMaskTypeCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], MotionpatchID, "motionpatch")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a motionpatch object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MotionpatchID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type motionpatch", NULL);
-    return TCL_ERROR;
-  }
   s = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetInt(interp, argv[2], &type) != TCL_OK) return TCL_ERROR;
@@ -958,17 +869,8 @@ static int motionpatchSamplerMaskModeCmd(ClientData clientData, Tcl_Interp *inte
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], MotionpatchID, "motionpatch")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a motionpatch object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MotionpatchID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type motionpatch", NULL);
-    return TCL_ERROR;
-  }
   s = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetInt(interp, argv[2], &mode) != TCL_OK) return TCL_ERROR;
@@ -996,17 +898,8 @@ static int motionpatchMaskRadiusCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], MotionpatchID, "motionpatch")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a motionpatch object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MotionpatchID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type motionpatch", NULL);
-    return TCL_ERROR;
-  }
   s = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetDouble(interp, argv[2], &radius) != TCL_OK) return TCL_ERROR;
@@ -1031,17 +924,8 @@ static int motionpatchColorCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], MotionpatchID, "motionpatch")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a polygon object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MotionpatchID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type motionpatch", NULL);
-    return TCL_ERROR;
-  }
   s = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetDouble(interp, argv[2], &r) != TCL_OK) return TCL_ERROR;

@@ -21,6 +21,7 @@
 #include <GLFW/glfw3.h> 
 
 #include <prmutil.h>
+#include <objname.h>
 
 /* If you want access to dlsh connectivity, include these */
 #include "df.h"
@@ -178,16 +179,9 @@ static int metagroupAddCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-    return TCL_ERROR;
-  }
-  
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MetagroupID) {
-    Tcl_AppendResult(interp, argv[0], ": object not a metagroup", NULL);
-    return TCL_ERROR;
-  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MetagroupID, "metagroup")) < 0)
+    return TCL_ERROR;  
     
   mg = GR_CLIENTDATA(OL_OBJ(olist,id));
 
@@ -228,16 +222,9 @@ static int metagroupClearCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
   
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-    return TCL_ERROR;
-  }
-  
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MetagroupID) {
-    Tcl_AppendResult(interp, argv[0], ": object not a metagroup", NULL);
-    return TCL_ERROR;
-  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MetagroupID, "metagroup")) < 0)
+    return TCL_ERROR;  
     
   mg = GR_CLIENTDATA(OL_OBJ(olist,id));
   mg->nobjs = 0;
@@ -267,17 +254,10 @@ static int metagroupContentsCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-    return TCL_ERROR;
-  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MetagroupID, "metagroup")) < 0)
+    return TCL_ERROR;  
   
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MetagroupID) {
-    Tcl_AppendResult(interp, argv[0], ": object not a metagroup", NULL);
-    return TCL_ERROR;
-  }
-
   Tcl_DStringInit(&objlist);
 
   mg = GR_CLIENTDATA(OL_OBJ(olist,id));

@@ -72,6 +72,7 @@
 #include <stim.h>
 #else
 #include <stim2.h>
+#include <objname.h>
 #include "shaderutils.h"
 #endif
 
@@ -732,18 +733,10 @@ static int meshObjSetSamplerCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-    return TCL_ERROR;
-  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MeshObjID, "mesh")) < 0)
+    return TCL_ERROR;  
   
-  /* Make sure it's a shader object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MeshObjID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type meshObj", NULL);
-    return TCL_ERROR;
-  }
-
   if (argc > 2) {
     if (Tcl_GetInt(interp, argv[2], &texid) != TCL_OK) return TCL_ERROR;
   }
@@ -1200,17 +1193,10 @@ static int meshObjUniformNamesCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-    return TCL_ERROR;
-  }
-  
-  /* Make sure it's a shader object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MeshObjID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type meshObj", NULL);
-    return TCL_ERROR;
-  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MeshObjID, "mesh")) < 0)
+    return TCL_ERROR;  
+
   g = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   return(uniform_names(interp, &g->uniformTable));
@@ -1419,17 +1405,10 @@ static int meshObjSetUniformCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
   
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-    return TCL_ERROR;
-  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MeshObjID, "mesh")) < 0)
+    return TCL_ERROR;  
   
-  /* Make sure it's a shader object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != MeshObjID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type meshObj", NULL);
-    return TCL_ERROR;
-  }
   g = GR_CLIENTDATA(OL_OBJ(olist,id));
   if (argc > 3) {
     return(uniform_set(interp, &g->uniformTable, g->program->name, 

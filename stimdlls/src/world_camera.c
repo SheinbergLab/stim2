@@ -134,11 +134,9 @@ int worldSetCameraModeCmd(ClientData cd, Tcl_Interp *interp, int argc, char *arg
     }
     
     int id;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) {
-        Tcl_AppendResult(interp, "invalid world", NULL);
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
         return TCL_ERROR;
-    }
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     
     const char *mode = argv[2];
@@ -187,14 +185,12 @@ int worldSetCameraSmoothCmd(ClientData cd, Tcl_Interp *interp, int argc, char *a
     }
     
     int id;
-    double speed;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) {
-        Tcl_AppendResult(interp, "invalid world", NULL);
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
         return TCL_ERROR;
-    }
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     
+    double speed;
     if (Tcl_GetDouble(interp, argv[2], &speed) != TCL_OK) return TCL_ERROR;
     w->camera.smooth_speed = (float)speed;
     
@@ -210,14 +206,12 @@ int worldSetCameraBoundsCmd(ClientData cd, Tcl_Interp *interp, int argc, char *a
     }
     
     int id;
-    double min_x, max_x, min_y, max_y;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) {
-        Tcl_AppendResult(interp, "invalid world", NULL);
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
         return TCL_ERROR;
-    }
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     
+    double min_x, max_x, min_y, max_y;
     if (Tcl_GetDouble(interp, argv[2], &min_x) != TCL_OK) return TCL_ERROR;
     if (Tcl_GetDouble(interp, argv[3], &max_x) != TCL_OK) return TCL_ERROR;
     if (Tcl_GetDouble(interp, argv[4], &min_y) != TCL_OK) return TCL_ERROR;
@@ -241,11 +235,9 @@ int worldClearCameraBoundsCmd(ClientData cd, Tcl_Interp *interp, int argc, char 
     }
     
     int id;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) {
-        Tcl_AppendResult(interp, "invalid world", NULL);
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
         return TCL_ERROR;
-    }
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     
     w->camera.use_bounds = 0;
@@ -262,14 +254,12 @@ int worldSetCameraPosCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv
     }
     
     int id;
-    double x, y;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) {
-        Tcl_AppendResult(interp, "invalid world", NULL);
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
         return TCL_ERROR;
-    }
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     
+    double x, y;
     if (Tcl_GetDouble(interp, argv[2], &x) != TCL_OK) return TCL_ERROR;
     if (Tcl_GetDouble(interp, argv[3], &y) != TCL_OK) return TCL_ERROR;
     
@@ -290,11 +280,9 @@ int worldGetCameraInfoCmd(ClientData cd, Tcl_Interp *interp, int argc, char *arg
     }
     
     int id;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) {
-        Tcl_AppendResult(interp, "invalid world", NULL);
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
         return TCL_ERROR;
-    }
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     Camera *cam = &w->camera;
     
@@ -329,14 +317,13 @@ int worldSetAutoCenterCmd(ClientData cd, Tcl_Interp *interp, int argc, char *arg
         return TCL_ERROR;
     }
     
-    int id, val;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) {
-        Tcl_AppendResult(interp, "invalid world", NULL);
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
         return TCL_ERROR;
-    }
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     
+    int val;
     if (Tcl_GetInt(interp, argv[2], &val) != TCL_OK) return TCL_ERROR;
     w->auto_center = val;
     

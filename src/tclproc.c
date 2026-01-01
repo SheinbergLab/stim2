@@ -23,6 +23,7 @@
 #include <tcl.h>
 
 #include "stim2.h"
+#include "objname.h"
 
 #ifdef WIN32
 static int strcasecmp(char *a,char *b) { return stricmp(a,b); }
@@ -466,18 +467,12 @@ static int resetGraphicsStateCmd(ClientData clientData, Tcl_Interp *interp,
 int findObj(Tcl_Interp *interp, OBJ_LIST *olist,
 	    char *name, int *id)
 {
-  int status;
-  
-  if (Tcl_GetInt(interp, name, id) == TCL_OK &&
-      *id < OL_MAXOBJS(olist)) return TCL_OK;
-  Tcl_ResetResult(interp);
-  status = gobjFindObj(olist, name, id);
-  if (!status) {
-    Tcl_AppendResult(interp, "findObj: ", "obj \"", name, 
-		     "\" not found", NULL);
+  int result = resolveObjId(interp, OL_NAMEINFO(olist), name, -1, NULL);
+  if (result < 0) {
     return TCL_ERROR;
   }
-  else return TCL_OK;
+  *id = result;
+  return TCL_OK;  
 }
 
 static int unloadObjCmd(ClientData clientData, Tcl_Interp *interp,

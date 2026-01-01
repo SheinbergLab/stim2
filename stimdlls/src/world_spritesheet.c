@@ -116,11 +116,8 @@ static int worldGetSpriteSheetsCmd(ClientData cd, Tcl_Interp *interp, int argc, 
     }
 
     int id;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) {
-        Tcl_AppendResult(interp, "invalid world", NULL);
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
         return TCL_ERROR;
-    }
 
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     Tcl_Obj *list = Tcl_NewListObj(0, NULL);
@@ -159,11 +156,8 @@ static int worldGetAnimationFramesCmd(ClientData cd, Tcl_Interp *interp, int arg
     }
 
     int id;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) {
-        Tcl_AppendResult(interp, "invalid world", NULL);
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
         return TCL_ERROR;
-    }
 
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     SpriteSheet *ss = world_find_sprite_sheet(w, argv[2]);
@@ -193,11 +187,13 @@ static int worldSetSpriteAnimationByNameCmd(ClientData cd, Tcl_Interp *interp, i
         return TCL_ERROR;
     }
 
-    int id, sid;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    int id;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
 
+    int sid;
     if (Tcl_GetInt(interp, argv[2], &sid) != TCL_OK) return TCL_ERROR;
     if (sid < 0 || sid >= w->sprite_count) { Tcl_AppendResult(interp, "invalid sprite", NULL); return TCL_ERROR; }
 
@@ -239,8 +235,9 @@ static int worldCreateSpriteFromTilesetCmd(ClientData cd, Tcl_Interp *interp, in
     }
 
     int id;
-    if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), argv[1], WorldID, "world")) < 0)
+        return TCL_ERROR;
+    
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
 
     if (w->sprite_count >= WORLD_MAX_SPRITES) { Tcl_AppendResult(interp, "max sprites", NULL); return TCL_ERROR; }
@@ -416,8 +413,9 @@ static int worldAddSpriteSheetCmd(ClientData cd, Tcl_Interp *interp,
     if (objc != 4) { Tcl_WrongNumArgs(interp, 1, objv, "world name sheetDict"); return TCL_ERROR; }
 
     int id;
-    if (Tcl_GetIntFromObj(interp, objv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    const char *idstr = Tcl_GetString(objv[1]);
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), idstr, WorldID, "world")) < 0)
+        return TCL_ERROR;
 
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     const char *name = Tcl_GetString(objv[2]);
@@ -508,8 +506,9 @@ static int worldCreateSpriteFromSheetCmd(ClientData cd, Tcl_Interp *interp,
     }
 
     int id;
-    if (Tcl_GetIntFromObj(interp, objv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    const char *idstr = Tcl_GetString(objv[1]);
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), idstr, WorldID, "world")) < 0)
+        return TCL_ERROR;
 
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     const char *sheet_name = Tcl_GetString(objv[2]);
@@ -558,8 +557,9 @@ static int worldSetSpriteFrameCmd(ClientData cd, Tcl_Interp *interp,
     if (objc != 4) { Tcl_WrongNumArgs(interp, 1, objv, "world spriteIdx frameIdx"); return TCL_ERROR; }
 
     int id;
-    if (Tcl_GetIntFromObj(interp, objv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    const char *idstr = Tcl_GetString(objv[1]);
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), idstr, WorldID, "world")) < 0)
+        return TCL_ERROR;
 
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
 
@@ -590,8 +590,9 @@ static int worldSetSpriteFrameByNameCmd(ClientData cd, Tcl_Interp *interp,
     if (objc != 4) { Tcl_WrongNumArgs(interp, 1, objv, "world spriteIdx frameName"); return TCL_ERROR; }
 
     int id;
-    if (Tcl_GetIntFromObj(interp, objv[1], &id) != TCL_OK) return TCL_ERROR;
-    if (id >= OL_NOBJS(olist) || GR_OBJTYPE(OL_OBJ(olist, id)) != WorldID) return TCL_ERROR;
+    const char *idstr = Tcl_GetString(objv[1]);
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist), idstr, WorldID, "world")) < 0)
+        return TCL_ERROR;
 
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
 

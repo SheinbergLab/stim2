@@ -24,6 +24,7 @@
 #include "tcl_dl.h"
 #include <stim2.h>
 #include "shaderutils.h"
+#include "objname.h"
 
 typedef struct _vao_info {
   GLuint vao;
@@ -328,18 +329,10 @@ static int polycircCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a polygon object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != PolygonID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type polygon", NULL);
-    return TCL_ERROR;
-  }
   p = GR_CLIENTDATA(OL_OBJ(olist,id));
+
   if (Tcl_GetInt(interp, argv[2], &circ) != TCL_OK) return TCL_ERROR;
 
   p->circ = circ;
@@ -515,17 +508,8 @@ static int polyvertsCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
     return TCL_ERROR;
-  }
-  
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != PolygonID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type polygon", NULL);
-    return TCL_ERROR;
-  }
-    
   p = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (tclFindDynList(interp, argv[2], &xlist) != TCL_OK) return TCL_ERROR;
@@ -572,17 +556,8 @@ static int polytexcoordsCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
     return TCL_ERROR;
-  }
-  
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != PolygonID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type polygon", NULL);
-    return TCL_ERROR;
-  }
-    
   p = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (tclFindDynList(interp, argv[2], &xlist) != TCL_OK) return TCL_ERROR;
@@ -618,17 +593,8 @@ static int polycolorCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a polygon object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != PolygonID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type polygon", NULL);
-    return TCL_ERROR;
-  }
   p = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetDouble(interp, argv[2], &r) != TCL_OK) return TCL_ERROR;
@@ -666,17 +632,8 @@ static int polycolorindexCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a polygon object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != PolygonID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type polygon", NULL);
-    return TCL_ERROR;
-  }
   p = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetInt(interp, argv[2], &n) != TCL_OK) return TCL_ERROR;
@@ -700,17 +657,8 @@ static int polyfillCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a polygon object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != PolygonID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type polygon", NULL);
-    return TCL_ERROR;
-  }
   p = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetInt(interp, argv[2], &fill) != TCL_OK) return TCL_ERROR;
@@ -739,17 +687,8 @@ static int polytypeCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a polygon object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != PolygonID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type polygon", NULL);
-    return TCL_ERROR;
-  }
   p = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (!strcmp(argv[2], "quads") || !strcmp(argv[2], "QUADS")) {
@@ -813,17 +752,8 @@ static int polyangleCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a polygon object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != PolygonID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type polygon", NULL);
-    return TCL_ERROR;
-  }
   p = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetInt(interp, argv[2], &angle) != TCL_OK) return TCL_ERROR;
@@ -847,17 +777,8 @@ static int polypointsizeCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a polygon object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != PolygonID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type polygon", NULL);
-    return TCL_ERROR;
-  }
   p = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetDouble(interp, argv[2], &size) != TCL_OK) return TCL_ERROR;
@@ -881,17 +802,8 @@ static int polyaaCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
     return TCL_ERROR;
-  }
-  
-  /* Make sure it's a polygon object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != PolygonID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type polygon", NULL);
-    return TCL_ERROR;
-  }
   p = GR_CLIENTDATA(OL_OBJ(olist,id));
 
   if (Tcl_GetInt(interp, argv[2], &aa) != TCL_OK) return TCL_ERROR;
