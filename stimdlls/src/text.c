@@ -1,17 +1,18 @@
 /*
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * text.c
+ *  Modern text rendering module using fontstash + stb_truetype
+ *  
+ *  Features:
+ *   - Multiple fonts (load any TTF/OTF)
+ *   - Dynamic text updates
+ *   - UTF-8 support
+ *   - Configurable font paths
+ *   - Multiple sizes from same font
+ *   - Text measurement
+ *   - Justification (left/center/right)
  *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ *  No FreeType dependency - uses header-only stb_truetype
  */
-
 
 #ifdef WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -22,733 +23,978 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+#include <sys/stat.h>
+
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#endif
+
 #include <tcl.h>
 
-#include <ft2build.h>
-#include FT_FREETYPE_H
-#include <math.h>
-
-#ifdef __QNX__
-#include <EGL/egl.h>
-#include <GLES3/gl3.h>
-#include <cglm/cglm.h>
-#else
 #include <glad/glad.h>
-#include <GLFW/glfw3.h> 
-#endif
+#include <GLFW/glfw3.h>
 
 #include <prmutil.h>
 #include <stim2.h>
-#include "shaderutils.h"
+#include "objname.h"
 
-typedef struct _vao_info {
-  GLuint vao;
-  int narrays;
-  int nindices;
-  GLuint points_vbo;
-  GLuint texcoords_vbo;
-} VAO_INFO;
+/* fontstash configuration */
+#define FONTSTASH_IMPLEMENTATION
+#include "fontstash.h"
 
+/* We'll implement our own GL backend for modern OpenGL */
 
-typedef struct text {
-  char *string;
-  int angle;			/* rotation angle   */
-  int type;
+/****************************************************************/
+/*                    Font System State                         */
+/****************************************************************/
 
-  GLfloat *verts;
-  int nverts;
-  GLfloat *texcoords;
-  int ntexcoords;
-  float color[4];
+#define MAX_FONTS 16
+#define ATLAS_SIZE 1024
 
-  UNIFORM_INFO *modelviewMat;
-  UNIFORM_INFO *projMat;
-  UNIFORM_INFO *uColor;
-  SHADER_PROG *program;
-  VAO_INFO *vao_info;		/* to track vertex attributes */
-  Tcl_HashTable uniformTable;	/* local unique version */
-  Tcl_HashTable attribTable;	/* local unique version */
+typedef struct {
+    FONScontext* fs;
+    GLuint texture;
+    int width;
+    int height;
+    int fonts[MAX_FONTS];
+    char* fontNames[MAX_FONTS];
+    int numFonts;
+    int defaultFont;
+    char* fontPath;          /* Base path for fonts */
+} FontSystem;
 
-} TEXT;
+static FontSystem* gFontSystem = NULL;
 
-static int TextID = -1;	/* unique polygon object id */
-SHADER_PROG *TextShaderProg = NULL;
+/****************************************************************/
+/*                    Text Object Structure                     */
+/****************************************************************/
 
+typedef struct {
+    char* string;
+    int fontId;
+    float fontSize;
+    float color[4];
+    int justify;             /* 0=left, 1=center, 2=right */
+    
+    /* Cached geometry */
+    GLfloat* verts;
+    GLfloat* texcoords;
+    int numQuads;
+    
+    /* Measured bounds */
+    float width;
+    float height;
+    float ascender;
+    float descender;
+    
+    /* OpenGL resources */
+    GLuint vao;
+    GLuint vbo_pos;
+    GLuint vbo_tex;
+    int dirty;               /* Needs geometry rebuild */
+} TEXT_OBJ;
 
-enum { TEXT_JUSTIFIED_LEFT, TEXT_JUSTIFIED_CENTERED, TEXT_JUSTIFIED_RIGHT };
-enum { TEXT_VERTS_VBO, TEXT_TEXCOORDS_VBO };
+static int TextID = -1;
 
-static void delete_vao_info(VAO_INFO *vinfo)
-{
-  glDeleteBuffers(1, &vinfo->points_vbo);
-  glDeleteBuffers(1, &vinfo->texcoords_vbo);
-  glDeleteVertexArrays(1, &vinfo->vao);
-}
+/* Shader */
+static GLuint TextShaderProgram = 0;
+static GLint TextUniformTexture = -1;
+static GLint TextUniformModelview = -1;
+static GLint TextUniformProjection = -1;
+static GLint TextUniformColor = -1;
 
-static void update_vbo(TEXT *t, int type)
-{
-  float *vals;
-  int n, d;
-  int vbo;
-  switch(type) {
-  case TEXT_VERTS_VBO:
-    {
-      d = 3;			/* 3D */
-      vals = t->verts;
-      n = t->nverts;
-      vbo = t->vao_info->points_vbo;
-    }
-    break;
-  case TEXT_TEXCOORDS_VBO:
-    {
-      d = 2;			/* 2D */
-      vals = t->texcoords;
-      n = t->ntexcoords;
-      vbo = t->vao_info->texcoords_vbo;
-    }
-    break;
-  }
+enum { TEXT_JUSTIFY_LEFT = 0, TEXT_JUSTIFY_CENTER = 1, TEXT_JUSTIFY_RIGHT = 2 };
 
-  glBindBuffer(GL_ARRAY_BUFFER, vbo);
-  glBufferData(GL_ARRAY_BUFFER, d*n*sizeof(GLfloat), vals, GL_STATIC_DRAW);
-  t->vao_info->nindices = n;
-}
+/****************************************************************/
+/*                    Shader Code                               */
+/****************************************************************/
 
-struct font_t {
-	unsigned int font_texture;
-	float pt;
-	float advance[128];
-	float width[128];
-	float height[128];
-	float tex_x1[128];
-	float tex_x2[128];
-	float tex_y1[128];
-	float tex_y2[128];
-	float offset_x[128];
-	float offset_y[128];
-	int initialized;
-};
+#ifdef STIM2_USE_GLES
+static const char* text_vertex_shader =
+"#version 300 es\n"
+"precision mediump float;\n"
+"layout(location = 0) in vec2 aPos;\n"
+"layout(location = 1) in vec2 aTexCoord;\n"
+"out vec2 vTexCoord;\n"
+"uniform mat4 projMat;\n"
+"uniform mat4 modelviewMat;\n"
+"void main() {\n"
+"    gl_Position = projMat * modelviewMat * vec4(aPos, 0.0, 1.0);\n"
+"    vTexCoord = aTexCoord;\n"
+"}\n";
 
-typedef struct font_t font_t;
+static const char* text_fragment_shader =
+"#version 300 es\n"
+"precision mediump float;\n"
+"in vec2 vTexCoord;\n"
+"out vec4 fragColor;\n"
+"uniform sampler2D tex;\n"
+"uniform vec4 uColor;\n"
+"void main() {\n"
+"    float alpha = texture(tex, vTexCoord).r;\n"
+"    fragColor = vec4(uColor.rgb, uColor.a * alpha);\n"
+"}\n";
 
-static int initialized = 0;
-static font_t* font;
-
-/* Utility function to calculate the dpi based on the display size */
-static int calculate_dpi() {
-#if 0
-  int screen_phys_size[2] = { 0, 0 };
-
-  screen_get_display_property_iv(screen_disp, SCREEN_PROPERTY_PHYSICAL_SIZE, screen_phys_size);
-
-  /* If using a simulator, {0,0} is returned for physical size of the screen,
-     so use 170 as the default dpi when this is the case. */
-  if ((screen_phys_size[0] == 0) && (screen_phys_size[1] == 0)) {
-    return 170;
-  } else{
-    int screen_resolution[2] = { 0, 0 };
-    screen_get_display_property_iv(screen_disp, SCREEN_PROPERTY_SIZE, screen_resolution);
-
-    int diagonal_pixels = sqrt(screen_resolution[0] * screen_resolution[0]
-			       + screen_resolution[1] * screen_resolution[1]);
-    int diagonal_inches = 0.0393700787 * sqrt(screen_phys_size[0] * screen_phys_size[0]
-					      + screen_phys_size[1] * screen_phys_size[1]);
-    return (int)(diagonal_pixels / diagonal_inches);
-  }
 #else
-  return 96;
+static const char* text_vertex_shader =
+"#version 330 core\n"
+"layout(location = 0) in vec2 aPos;\n"
+"layout(location = 1) in vec2 aTexCoord;\n"
+"out vec2 vTexCoord;\n"
+"uniform mat4 projMat;\n"
+"uniform mat4 modelviewMat;\n"
+"void main() {\n"
+"    gl_Position = projMat * modelviewMat * vec4(aPos, 0.0, 1.0);\n"
+"    vTexCoord = aTexCoord;\n"
+"}\n";
+
+static const char* text_fragment_shader =
+"#version 330 core\n"
+"in vec2 vTexCoord;\n"
+"out vec4 fragColor;\n"
+"uniform sampler2D tex;\n"
+"uniform vec4 uColor;\n"
+"void main() {\n"
+"    float alpha = texture(tex, vTexCoord).r;\n"
+"    fragColor = vec4(uColor.rgb, uColor.a * alpha);\n"
+"}\n";
 #endif
-}
 
-static inline int
-nextp2(int x)
-{
-  int val = 1;
-  while(val < x) val <<= 1;
-  return val;
-}
+/****************************************************************/
+/*                    Fontstash Callbacks                       */
+/****************************************************************/
 
-
-/* Utility function to load and ready the font for use by OpenGL */
-static font_t* load_font(const char* path, int point_size, int dpi) {
-  FT_Library library;
-  FT_Face face;
-  int c;
-  int i, j;
-  font_t* font;
-
-  if (!path){
-    fprintf(stderr, "Invalid path to font file\n");
-    return NULL;
-  }
-
-  if(FT_Init_FreeType(&library)) {
-    fprintf(stderr, "Error loading Freetype library\n");
-    return NULL;
-  }
-  if (FT_New_Face(library, path,0,&face)) {
-    fprintf(stderr, "Error loading font %s\n", path);
-    return NULL;
-  }
-
-  if(FT_Set_Char_Size ( face, point_size * 64, point_size * 64, dpi, dpi)) {
-    fprintf(stderr, "Error initializing character parameters\n");
-    return NULL;
-  }
-
-  font = (font_t*) malloc(sizeof(font_t));
-  font->initialized = 0;
-
-  glGenTextures(1, &(font->font_texture));
-
-  /*Let each glyph reside in 32x32 section of the font texture */
-  int segment_size_x = 0, segment_size_y = 0;
-  int num_segments_x = 16;
-  int num_segments_y = 8;
-
-  FT_GlyphSlot slot;
-  FT_Bitmap bmp;
-  int glyph_width, glyph_height;
-
-  /*First calculate the max width and height of a character in a passed font*/
-  for(c = 0; c < 128; c++) {
-    if(FT_Load_Char(face, c, FT_LOAD_RENDER)) {
-      fprintf(stderr, "FT_Load_Char failed\n");
-      free(font);
-      return NULL;
-    }
-
-    slot = face->glyph;
-    bmp = slot->bitmap;
-
-    glyph_width = bmp.width;
-    glyph_height = bmp.rows;
-
-    if (glyph_width > segment_size_x) {
-      segment_size_x = glyph_width;
-    }
-
-    if (glyph_height > segment_size_y) {
-      segment_size_y = glyph_height;
-    }
-  }
-
-  int font_tex_width = nextp2(num_segments_x * segment_size_x);
-  int font_tex_height = nextp2(num_segments_y * segment_size_y);
-
-  int bitmap_offset_x = 0, bitmap_offset_y = 0;
-
-  GLubyte* font_texture_data = (GLubyte*) malloc(sizeof(GLubyte) * 2 * font_tex_width * font_tex_height);
-  memset((void*)font_texture_data, 0, sizeof(GLubyte) * 2 * font_tex_width * font_tex_height);
-
-  if (!font_texture_data) {
-    fprintf(stderr, "Failed to allocate memory for font texture\n");
-    free(font);
-    return NULL;
-  }
-
-  /* Fill font texture bitmap with individual bmp data and record appropriate size,
-     texture coordinates and offsets for every glyph */
-  for(c = 0; c < 128; c++) {
-    if(FT_Load_Char(face, c, FT_LOAD_RENDER)) {
-      fprintf(stderr, "FT_Load_Char failed\n");
-      free(font);
-      return NULL;
-    }
-
-    slot = face->glyph;
-    bmp = slot->bitmap;
-
-    glyph_width = nextp2(bmp.width);
-    glyph_height = nextp2(bmp.rows);
-
-    div_t temp = div(c, num_segments_x);
-
-    bitmap_offset_x = segment_size_x * temp.rem;
-    bitmap_offset_y = segment_size_y * temp.quot;
-
-    for (j = 0; j < glyph_height; j++) {
-      for (i = 0; i < glyph_width; i++) {
-	font_texture_data[2 * ((bitmap_offset_x + i) + (j + bitmap_offset_y) * font_tex_width) + 0] =
-	  font_texture_data[2 * ((bitmap_offset_x + i) + (j + bitmap_offset_y) * font_tex_width) + 1] =
-	  (i >= bmp.width || j >= bmp.rows)? 0 : bmp.buffer[i + bmp.width * j];
-      }
-    }
-
-    font->advance[c] = (float)(slot->advance.x >> 6);
-    font->tex_x1[c] = (float)bitmap_offset_x / (float) font_tex_width;
-    font->tex_x2[c] = (float)(bitmap_offset_x + bmp.width) / (float)font_tex_width;
-    font->tex_y1[c] = (float)bitmap_offset_y / (float) font_tex_height;
-    font->tex_y2[c] = (float)(bitmap_offset_y + bmp.rows) / (float)font_tex_height;
-    font->width[c] = bmp.width;
-    font->height[c] = bmp.rows;
-    font->offset_x[c] = (float)slot->bitmap_left;
-    font->offset_y[c] =  (float)((slot->metrics.horiBearingY-face->glyph->metrics.height) >> 6);
-  }
-
-  glBindTexture(GL_TEXTURE_2D, font->font_texture);
-  glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
-
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RG, font_tex_width,
-	       font_tex_height,
-	       0, GL_RG , GL_UNSIGNED_BYTE, font_texture_data);
-
-  int err = glGetError();
-
-  free(font_texture_data);
-
-  FT_Done_Face(face);
-  FT_Done_FreeType(library);
-
-  if (err != 0) {
-    fprintf(stderr, "GL Error 0x%x", err);
-    free(font);
-    return NULL;
-  }
-
-  font->initialized = 1;
-  return font;
-}
-
-static void measure_text(font_t* font, const char* msg, float* width, float* height) {
-  int i, c;
-
-  if (!msg) {
-    return;
-  }
-
-  if (width) {
-    /* Width of a text rectangle is a sum advances for every glyph in a string */
-    *width = 0.0f;
-
-    for(i = 0; i < strlen(msg); ++i) {
-      c = msg[i];
-      *width += font->advance[c];
-    }
-  }
-
-  if (height) {
-    /* Height of a text rectangle is a high of a tallest glyph in a string */
-    *height = 0.0f;
-
-    for(i = 0; i < strlen(msg); ++i) {
-      c = msg[i];
-
-      if (*height < font->height[c]) {
-	*height = font->height[c];
-      }
-    }
-  }
-}
-
-
-
-void textDraw(GR_OBJ *g) 
-{
-  TEXT *t = (TEXT *) GR_CLIENTDATA(g);
-  SHADER_PROG *sp = (SHADER_PROG *) t->program;
-  float *v;
-
-  /* Update uniform table */
-  if (t->modelviewMat) {
-    v = (float *) t->modelviewMat->val;
-    stimGetMatrix(STIM_MODELVIEW_MATRIX, v);
-  }
-  if (t->projMat) {
-    v = (float *) t->projMat->val;
-    stimGetMatrix(STIM_PROJECTION_MATRIX, v);
-  }
-  if (t->uColor) {
-    v = (float *) t->uColor->val;
-    v[0] = t->color[0];
-    v[1] = t->color[1];
-    v[2] = t->color[2];
-    v[3] = t->color[3];
-  }
-  
-  glEnable(GL_TEXTURE_2D);
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  
-  glUseProgram(sp->program);
-  update_uniforms(&t->uniformTable);
-
-  glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, font->font_texture);
-
-  if (t->vao_info->narrays) {
-    glBindVertexArray(t->vao_info->vao);
-    glDrawArrays(t->type, 0, t->vao_info->nindices);
-  }
-  glUseProgram(0);
-
-}
-
-
-void textDelete(GR_OBJ *g) 
-{
-  TEXT *t = (TEXT *) GR_CLIENTDATA(g);
-  if (t->verts) free(t->verts);
-  if (t->texcoords) free(t->texcoords);
-
-  delete_uniform_table(&t->uniformTable);
-  delete_attrib_table(&t->attribTable);
-  delete_vao_info(t->vao_info);
-
-  free((void *) t);
-}
-
-
-int textSet(GR_OBJ *g, font_t* font, const char* msg, float x, float y, int just) {
-  TEXT *t = (TEXT *) GR_CLIENTDATA(g);
-  float pen_x = 0.0f;
-  GLfloat *vptr, *tptr;
-  int nchars = strlen(msg);
-  int i, c;
-  
-  if (!nchars) return -1;
-      
-  if (t->verts) free(t->verts);
-  vptr = t->verts = (GLfloat *) malloc(sizeof(float)*18*nchars);
-  t->nverts = 6*nchars;
-  if (t->texcoords) free(t->texcoords);
-  tptr = t->texcoords = (GLfloat *) malloc(sizeof(float)*12*nchars);
-
-  float x0, y0, xoff = 0, yoff = 0;
-
-  float width, height;
-  measure_text(font, msg, &width, &height);
-
-  switch (just) {
-  case TEXT_JUSTIFIED_CENTERED:
-    xoff=-width/2;
-    yoff=-height/2;
-    break;
-  case TEXT_JUSTIFIED_RIGHT:
-    xoff=-width;
-    yoff=-height/2;
-    break;
-  case TEXT_JUSTIFIED_LEFT:
-    xoff=0.0;
-    yoff=-height/2;
-    break;
-  }
-
-  for(i = 0; i < strlen(msg); ++i) {
-    c = msg[i];
-
-    x0 = (x + pen_x + font->offset_x[c]) + xoff;
-    y0 = (y + font->offset_y[c]) + yoff;
-
-    //v0
-    *vptr++ = x0;
-    *vptr++ = y0;
-    *vptr++ = 0.0;
-    //v1
-    *vptr++ = x0 + font->width[c];
-    *vptr++ = y0;
-    *vptr++ = 0.0;
-    //v2
-    *vptr++ = x0;
-    *vptr++ = y0 + font->height[c];
-    *vptr++ = 0.0;
-    //v3 (v2)
-    *vptr++ = x0;
-    *vptr++ = y0 + font->height[c];
-    *vptr++ = 0.0;
-    //v4 (v1)
-    *vptr++ = x0 + font->width[c];
-    *vptr++ = y0;
-    *vptr++ = 0.0;
-    //v5
-    *vptr++ = x0 + font->width[c];
-    *vptr++ = y0 + font->height[c];
-    *vptr++ = 0.0;
-
-    //t0
-    *tptr++ = font->tex_x1[c];
-    *tptr++ = font->tex_y2[c];
-    //t1
-    *tptr++ = font->tex_x2[c];
-    *tptr++ = font->tex_y2[c];
-    //t2
-    *tptr++ = font->tex_x1[c];
-    *tptr++ = font->tex_y1[c];
-    //t3 (t2)
-    *tptr++ = font->tex_x1[c];
-    *tptr++ = font->tex_y1[c];
-    //t4 (t1)
-    *tptr++ = font->tex_x2[c];
-    *tptr++ = font->tex_y2[c];
-    //t5
-    *tptr++ = font->tex_x2[c];
-    *tptr++ = font->tex_y1[c];
+static int fs_create(void* userPtr, int width, int height) {
+    FontSystem* sys = (FontSystem*)userPtr;
+    sys->width = width;
+    sys->height = height;
     
-    /* Assume we are only working with typewriter fonts */
-    pen_x += font->advance[c];
-  }
-
-  t->nverts = 6*nchars;
-  t->ntexcoords = 6*nchars;
-  t->type = GL_TRIANGLES;
-  update_vbo(t, TEXT_VERTS_VBO);
-  update_vbo(t, TEXT_TEXCOORDS_VBO);
-
-  return 0;
+    glGenTextures(1, &sys->texture);
+    glBindTexture(GL_TEXTURE_2D, sys->texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    
+    return 1;
 }
 
-
-
-
-
-static int textcolorCmd(ClientData clientData, Tcl_Interp *interp,
-			int argc, char *argv[])
-{
-
-  OBJ_LIST *olist = (OBJ_LIST *) clientData;
-  TEXT *t;
-  double r, g, b, a;
-  int id;
-
-  if (argc < 5) {
-    Tcl_AppendResult(interp, "usage: ", argv[0], " text r g b ?a?", NULL);
-    return TCL_ERROR;
-  }
-
-  if (Tcl_GetInt(interp, argv[1], &id) != TCL_OK) return TCL_ERROR;
-  if (id >= OL_NOBJS(olist)) {
-    Tcl_AppendResult(interp, argv[0], ": objid out of range", NULL);
-    return TCL_ERROR;
-  }
-  
-  /* Make sure it's a polygon object */
-  if (GR_OBJTYPE(OL_OBJ(olist,id)) != TextID) {
-    Tcl_AppendResult(interp, argv[0], ": object not of type text", NULL);
-    return TCL_ERROR;
-  }
-  t = GR_CLIENTDATA(OL_OBJ(olist,id));
-
-  if (Tcl_GetDouble(interp, argv[2], &r) != TCL_OK) return TCL_ERROR;
-  if (Tcl_GetDouble(interp, argv[3], &g) != TCL_OK) return TCL_ERROR;
-  if (Tcl_GetDouble(interp, argv[4], &b) != TCL_OK) return TCL_ERROR;
-  if (argc > 5) {
-    if (Tcl_GetDouble(interp, argv[5], &a) != TCL_OK) return TCL_ERROR;
-  }
-  else {
-    a = 1.0;
-  }
-
-  t->color[0] = r;
-  t->color[1] = g;
-  t->color[2] = b;
-  t->color[3] = a;
-
-  return(TCL_OK);
+static int fs_resize(void* userPtr, int width, int height) {
+    return fs_create(userPtr, width, height);
 }
 
-
-int textCreate(OBJ_LIST *objlist, SHADER_PROG *sp, char *string)
-{
-  const char *name = "Text";
-  GR_OBJ *obj;
-  TEXT *t;
-  Tcl_HashEntry *entryPtr;
-
-  obj = gobjCreateObj();
-  if (!obj) return -1;
-
-  strcpy(GR_NAME(obj), name);
-  GR_OBJTYPE(obj) = TextID;
-
-  GR_ACTIONFUNCP(obj) = textDraw;
-  GR_DELETEFUNCP(obj) = textDelete;
-
-  t = (TEXT *) calloc(1, sizeof(TEXT));
-  GR_CLIENTDATA(obj) = t;
-  
-  /* Default to white */
-  t->color[0] = 1.0;
-  t->color[1] = 1.0;
-  t->color[2] = 1.0;
-  t->color[3] = 1.0;
-
-  t->program = sp;
-  copy_uniform_table(&sp->uniformTable, &t->uniformTable);
-  copy_attrib_table(&sp->attribTable, &t->attribTable);
-
-  t->vao_info = (VAO_INFO *) calloc(1, sizeof(VAO_INFO));
-  t->vao_info->narrays = 0;
-  glGenVertexArrays(1, &t->vao_info->vao);
-  glBindVertexArray(t->vao_info->vao);
-
-  if ((entryPtr = Tcl_FindHashEntry(&t->attribTable, "vertex_position"))) {
-    ATTRIB_INFO *ainfo = Tcl_GetHashValue(entryPtr);
-    glGenBuffers(1, &t->vao_info->points_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, t->vao_info->points_vbo);
-    glVertexAttribPointer(ainfo->location, 3, GL_FLOAT, GL_FALSE, 0, NULL);
-    glEnableVertexAttribArray(ainfo->location);
-    t->vao_info->narrays++;
-  }
-
-  if ((entryPtr = Tcl_FindHashEntry(&t->attribTable, "vertex_texcoord"))) {
-    ATTRIB_INFO *ainfo = Tcl_GetHashValue(entryPtr);
-    glGenBuffers(1, &t->vao_info->texcoords_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, t->vao_info->texcoords_vbo);
-    glVertexAttribPointer(ainfo->location, 2, GL_FLOAT, GL_FALSE, 0, NULL);
-    glEnableVertexAttribArray(ainfo->location);
-    t->vao_info->narrays++;
-  }
-
-  if ((entryPtr = Tcl_FindHashEntry(&t->uniformTable, "modelviewMat"))) {
-    t->modelviewMat = Tcl_GetHashValue(entryPtr);
-    t->modelviewMat->val = malloc(sizeof(float)*16);
-  }
-
-  if ((entryPtr = Tcl_FindHashEntry(&t->uniformTable, "projMat"))) {
-    t->projMat = Tcl_GetHashValue(entryPtr);
-    t->projMat->val = malloc(sizeof(float)*16);
-  }
-
-  if ((entryPtr = Tcl_FindHashEntry(&t->uniformTable, "uColor"))) {
-    t->uColor = Tcl_GetHashValue(entryPtr);
-    t->uColor->val = malloc(sizeof(float)*4);
-  }
-
-
-  /* setup the initial string */
-  textSet(obj, font, string, 0.0, 0.0, TEXT_JUSTIFIED_CENTERED);
-
-  return(gobjAddObj(objlist, obj));
+static void fs_update(void* userPtr, int* rect, const unsigned char* data) {
+    FontSystem* sys = (FontSystem*)userPtr;
+    
+    int x = rect[0];
+    int y = rect[1];
+    int w = rect[2] - rect[0];
+    int h = rect[3] - rect[1];
+    
+    glBindTexture(GL_TEXTURE_2D, sys->texture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, sys->width);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, x);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, y);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RED, GL_UNSIGNED_BYTE, data);
+    
+    /* Reset pixel store state */
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+static void fs_draw(void* userPtr, const float* verts, const float* tcoords,
+                    const unsigned int* colors, int nverts) {
+    /* We don't use fontstash's immediate drawing - we build geometry ourselves */
+    (void)userPtr;
+    (void)verts;
+    (void)tcoords;
+    (void)colors;
+    (void)nverts;
+}
 
+static void fs_delete(void* userPtr) {
+    FontSystem* sys = (FontSystem*)userPtr;
+    if (sys->texture) {
+        glDeleteTextures(1, &sys->texture);
+        sys->texture = 0;
+    }
+}
 
+/****************************************************************/
+/*                    Shader Setup                              */
+/****************************************************************/
+
+static GLuint compile_text_shader(GLenum type, const char* source) {
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, NULL);
+    glCompileShader(shader);
+    
+    GLint success;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        char log[512];
+        glGetShaderInfoLog(shader, 512, NULL, log);
+        fprintf(stderr, "Text shader compile error: %s\n", log);
+        return 0;
+    }
+    return shader;
+}
+
+static int create_text_shader(void) {
+    GLuint vs = compile_text_shader(GL_VERTEX_SHADER, text_vertex_shader);
+    GLuint fs = compile_text_shader(GL_FRAGMENT_SHADER, text_fragment_shader);
+    
+    if (!vs || !fs) return -1;
+    
+    TextShaderProgram = glCreateProgram();
+    glAttachShader(TextShaderProgram, vs);
+    glAttachShader(TextShaderProgram, fs);
+    glLinkProgram(TextShaderProgram);
+    
+    GLint success;
+    glGetProgramiv(TextShaderProgram, GL_LINK_STATUS, &success);
+    if (!success) {
+        char log[512];
+        glGetProgramInfoLog(TextShaderProgram, 512, NULL, log);
+        fprintf(stderr, "Text shader link error: %s\n", log);
+        return -1;
+    }
+    
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    
+    TextUniformTexture = glGetUniformLocation(TextShaderProgram, "tex");
+    TextUniformModelview = glGetUniformLocation(TextShaderProgram, "modelviewMat");
+    TextUniformProjection = glGetUniformLocation(TextShaderProgram, "projMat");
+    TextUniformColor = glGetUniformLocation(TextShaderProgram, "uColor");
+    
+    return 0;
+}
+
+/****************************************************************/
+/*                    Font System Init                          */
+/****************************************************************/
+
+static char* build_font_path(const char* filename) {
+    if (!gFontSystem || !gFontSystem->fontPath) return strdup(filename);
+    
+    /* If absolute path, use as-is */
+    if (filename[0] == '/' || filename[0] == '\\') return strdup(filename);
+#ifdef WIN32
+    if (filename[1] == ':') return strdup(filename);
+#endif
+    
+    /* Build relative path */
+    size_t len = strlen(gFontSystem->fontPath) + strlen(filename) + 2;
+    char* path = (char*)malloc(len);
+    snprintf(path, len, "%s/%s", gFontSystem->fontPath, filename);
+    return path;
+}
+
+static int init_font_system(const char* fontPath) {
+    if (gFontSystem) return 0;  /* Already initialized */
+    
+    gFontSystem = (FontSystem*)calloc(1, sizeof(FontSystem));
+    if (!gFontSystem) return -1;
+    
+    if (fontPath) {
+        gFontSystem->fontPath = strdup(fontPath);
+    }
+    
+    /* Create fontstash context with our callbacks */
+    FONSparams params;
+    memset(&params, 0, sizeof(params));
+    params.width = ATLAS_SIZE;
+    params.height = ATLAS_SIZE;
+    params.flags = FONS_ZERO_TOPLEFT;
+    params.userPtr = gFontSystem;
+    params.renderCreate = fs_create;
+    params.renderResize = fs_resize;
+    params.renderUpdate = fs_update;
+    params.renderDraw = fs_draw;
+    params.renderDelete = fs_delete;
+    
+    gFontSystem->fs = fonsCreateInternal(&params);
+    if (!gFontSystem->fs) {
+        free(gFontSystem->fontPath);
+        free(gFontSystem);
+        gFontSystem = NULL;
+        return -1;
+    }
+    
+    gFontSystem->defaultFont = FONS_INVALID;
+    
+    return 0;
+}
+
+static void shutdown_font_system(void) {
+    if (!gFontSystem) return;
+    
+    if (gFontSystem->fs) {
+        fonsDeleteInternal(gFontSystem->fs);
+    }
+    
+    for (int i = 0; i < gFontSystem->numFonts; i++) {
+        free(gFontSystem->fontNames[i]);
+    }
+    
+    free(gFontSystem->fontPath);
+    free(gFontSystem);
+    gFontSystem = NULL;
+}
+
+/****************************************************************/
+/*                    Font Loading                              */
+/****************************************************************/
+
+static int load_font(const char* name, const char* filename) {
+    if (!gFontSystem || !gFontSystem->fs) return -1;
+    
+    /* Check if font with this name already loaded */
+    for (int i = 0; i < gFontSystem->numFonts; i++) {
+        if (strcmp(gFontSystem->fontNames[i], name) == 0) {
+            /* Already loaded - return existing ID */
+            return gFontSystem->fonts[i];
+        }
+    }
+    
+    if (gFontSystem->numFonts >= MAX_FONTS) return -1;
+    
+    char* path = build_font_path(filename);
+    int fontId = fonsAddFont(gFontSystem->fs, name, path);
+    free(path);
+    
+    if (fontId == FONS_INVALID) {
+        fprintf(getConsoleFP(), "Text: Failed to load font: %s\n", filename);
+        return -1;
+    }
+    
+    gFontSystem->fonts[gFontSystem->numFonts] = fontId;
+    gFontSystem->fontNames[gFontSystem->numFonts] = strdup(name);
+    gFontSystem->numFonts++;
+    
+    /* First font becomes default */
+    if (gFontSystem->defaultFont == FONS_INVALID) {
+        gFontSystem->defaultFont = fontId;
+    }
+    
+    return fontId;
+}
+
+static int get_font_by_name(const char* name) {
+    if (!gFontSystem) return FONS_INVALID;
+    
+    for (int i = 0; i < gFontSystem->numFonts; i++) {
+        if (strcmp(gFontSystem->fontNames[i], name) == 0) {
+            return gFontSystem->fonts[i];
+        }
+    }
+    return FONS_INVALID;
+}
+
+/****************************************************************/
+/*                    Text Object                               */
+/****************************************************************/
+
+static void text_build_geometry(TEXT_OBJ* t) {
+    if (!gFontSystem || !gFontSystem->fs || !t->string) return;
+    
+    FONScontext* fs = gFontSystem->fs;
+    
+    /* Set font state - use a reference size for rasterization */
+    float rasterSize = 64.0f;  /* Rasterize at 64px for quality */
+    fonsSetFont(fs, t->fontId);
+    fonsSetSize(fs, rasterSize);
+    fonsSetAlign(fs, FONS_ALIGN_LEFT | FONS_ALIGN_BASELINE);
+    
+    /* Get metrics at raster size */
+    float ascender, descender, lineHeight;
+    fonsVertMetrics(fs, &ascender, &descender, &lineHeight);
+    
+    /* Calculate scale: convert pixels to degrees
+     * fontSize is now in degrees (e.g., 1.0 = 1 degree tall)
+     * We use the em-height (ascender - descender) as the reference
+     * Note: descender is negative, so this is ascender + |descender|
+     */
+    float emHeight = ascender - descender;
+    float scale = t->fontSize / emHeight;  /* degrees per pixel */
+    
+    /* Measure text */
+    float bounds[4];
+    float advance = fonsTextBounds(fs, 0, 0, t->string, NULL, bounds);
+    
+    /* Store dimensions in degrees */
+    t->width = (bounds[2] - bounds[0]) * scale;
+    t->height = (bounds[3] - bounds[1]) * scale;
+    t->ascender = ascender * scale;
+    t->descender = descender * scale;
+    
+    /* Count quads needed */
+    int len = strlen(t->string);
+    int maxQuads = len;  /* One quad per character max */
+    
+    /* Allocate geometry */
+    if (t->verts) free(t->verts);
+    if (t->texcoords) free(t->texcoords);
+    
+    t->verts = (GLfloat*)malloc(maxQuads * 6 * 2 * sizeof(GLfloat));     /* 6 verts * 2 coords (x,y) */
+    t->texcoords = (GLfloat*)malloc(maxQuads * 6 * 2 * sizeof(GLfloat)); /* 6 verts * 2 coords (s,t) */
+    
+    /* Calculate offset based on justification (in pixels, will scale later) 
+     * For centering, we center the em-box, not just the glyph bounds.
+     * Em-box center is at y = (ascender + descender) / 2 from baseline
+     */
+    float pixelWidth = bounds[2] - bounds[0];
+    float emCenter = (ascender + descender) / 2.0f;  /* Center of em-box relative to baseline */
+    
+    float xoff = 0, yoff = 0;
+    switch (t->justify) {
+        case TEXT_JUSTIFY_CENTER:
+            xoff = -pixelWidth / 2.0f;
+            yoff = emCenter;  /* Shift baseline so em-box center is at origin */
+            break;
+        case TEXT_JUSTIFY_RIGHT:
+            xoff = -pixelWidth;
+            yoff = emCenter;
+            break;
+        case TEXT_JUSTIFY_LEFT:
+        default:
+            xoff = 0;
+            yoff = emCenter;
+            break;
+    }
+    
+    /* First call fonsDrawText to ensure glyphs are rasterized to atlas */
+    fonsDrawText(fs, 0, 0, t->string, NULL);
+    
+    /* Now build quads using fontstash iterator */
+    FONStextIter iter;
+    FONSquad quad;
+    
+    GLfloat* vptr = t->verts;
+    GLfloat* tptr = t->texcoords;
+    int numQuads = 0;
+    
+    /* Start at xoff, with baseline at y=0 (yoff adjusts for centering) */
+    fonsTextIterInit(fs, &iter, xoff, 0, t->string, NULL);
+    
+    while (fonsTextIterNext(fs, &iter, &quad)) {
+        /* Scale positions to degrees and flip Y axis (negate Y) 
+         * Apply yoff for vertical centering */
+        float x0 = quad.x0 * scale;
+        float x1 = quad.x1 * scale;
+        float y0 = -(quad.y0 + yoff) * scale;  /* Flip Y and apply centering offset */
+        float y1 = -(quad.y1 + yoff) * scale;  /* Flip Y and apply centering offset */
+        
+        /* Triangle 1: v0, v1, v2 */
+        *vptr++ = x0; *vptr++ = y0;
+        *tptr++ = quad.s0; *tptr++ = quad.t0;
+        
+        *vptr++ = x1; *vptr++ = y0;
+        *tptr++ = quad.s1; *tptr++ = quad.t0;
+        
+        *vptr++ = x1; *vptr++ = y1;
+        *tptr++ = quad.s1; *tptr++ = quad.t1;
+        
+        /* Triangle 2: v0, v2, v3 */
+        *vptr++ = x0; *vptr++ = y0;
+        *tptr++ = quad.s0; *tptr++ = quad.t0;
+        
+        *vptr++ = x1; *vptr++ = y1;
+        *tptr++ = quad.s1; *tptr++ = quad.t1;
+        
+        *vptr++ = x0; *vptr++ = y1;
+        *tptr++ = quad.s0; *tptr++ = quad.t1;
+        
+        numQuads++;
+    }
+    
+    t->numQuads = numQuads;
+    
+    /* Upload to GPU */
+    glBindBuffer(GL_ARRAY_BUFFER, t->vbo_pos);
+    glBufferData(GL_ARRAY_BUFFER, numQuads * 6 * 2 * sizeof(GLfloat), t->verts, GL_DYNAMIC_DRAW);
+    
+    glBindBuffer(GL_ARRAY_BUFFER, t->vbo_tex);
+    glBufferData(GL_ARRAY_BUFFER, numQuads * 6 * 2 * sizeof(GLfloat), t->texcoords, GL_DYNAMIC_DRAW);
+    
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    
+    t->dirty = 0;
+}
+
+static void textDraw(GR_OBJ* g) {
+    TEXT_OBJ* t = (TEXT_OBJ*)GR_CLIENTDATA(g);
+    
+    if (!t->string || !t->numQuads) return;
+    if (!gFontSystem || !gFontSystem->texture) return;
+    
+    if (t->dirty) {
+        text_build_geometry(t);
+    }
+    
+    float modelview[16], projection[16];
+    stimGetMatrix(STIM_MODELVIEW_MATRIX, modelview);
+    stimGetMatrix(STIM_PROJECTION_MATRIX, projection);
+    
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    
+    glUseProgram(TextShaderProgram);
+    glUniformMatrix4fv(TextUniformModelview, 1, GL_FALSE, modelview);
+    glUniformMatrix4fv(TextUniformProjection, 1, GL_FALSE, projection);
+    glUniform4f(TextUniformColor, t->color[0], t->color[1], t->color[2], t->color[3]);
+    
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, gFontSystem->texture);
+    glUniform1i(TextUniformTexture, 0);
+    
+    glBindVertexArray(t->vao);
+    glDrawArrays(GL_TRIANGLES, 0, t->numQuads * 6);
+    
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDisable(GL_BLEND);
+}
+
+static void textDelete(GR_OBJ* g) {
+    TEXT_OBJ* t = (TEXT_OBJ*)GR_CLIENTDATA(g);
+    
+    if (t->string) free(t->string);
+    if (t->verts) free(t->verts);
+    if (t->texcoords) free(t->texcoords);
+    
+    if (t->vbo_pos) glDeleteBuffers(1, &t->vbo_pos);
+    if (t->vbo_tex) glDeleteBuffers(1, &t->vbo_tex);
+    if (t->vao) glDeleteVertexArrays(1, &t->vao);
+    
+    free(t);
+}
+
+static void textReset(GR_OBJ* g) {
+    /* Nothing to reset */
+}
+
+static int textCreate(OBJ_LIST* objlist, const char* string, int fontId, float fontSize) {
+    GR_OBJ* obj = gobjCreateObj();
+    if (!obj) return -1;
+    
+    strcpy(GR_NAME(obj), "Text");
+    GR_OBJTYPE(obj) = TextID;
+    GR_ACTIONFUNCP(obj) = textDraw;
+    GR_DELETEFUNCP(obj) = textDelete;
+    GR_RESETFUNCP(obj) = textReset;
+    
+    TEXT_OBJ* t = (TEXT_OBJ*)calloc(1, sizeof(TEXT_OBJ));
+    GR_CLIENTDATA(obj) = t;
+    
+    t->string = strdup(string);
+    t->fontId = (fontId >= 0) ? fontId : gFontSystem->defaultFont;
+    t->fontSize = fontSize;
+    t->justify = TEXT_JUSTIFY_CENTER;
+    
+    /* Default white */
+    t->color[0] = 1.0f;
+    t->color[1] = 1.0f;
+    t->color[2] = 1.0f;
+    t->color[3] = 1.0f;
+    
+    /* Create VAO/VBOs */
+    glGenVertexArrays(1, &t->vao);
+    glBindVertexArray(t->vao);
+    
+    glGenBuffers(1, &t->vbo_pos);
+    glBindBuffer(GL_ARRAY_BUFFER, t->vbo_pos);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);  /* vec2 position */
+    glEnableVertexAttribArray(0);
+    
+    glGenBuffers(1, &t->vbo_tex);
+    glBindBuffer(GL_ARRAY_BUFFER, t->vbo_tex);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, NULL);  /* vec2 texcoord */
+    glEnableVertexAttribArray(1);
+    
+    glBindVertexArray(0);
+    
+    /* Build initial geometry */
+    t->dirty = 1;
+    text_build_geometry(t);
+    
+    return gobjAddObj(objlist, obj);
+}
+
+/****************************************************************/
+/*                    Tcl Commands                              */
+/****************************************************************/
+
+/* textFont name filename ?size? - Load a font */
+static int textfontCmd(ClientData clientData, Tcl_Interp *interp,
+                       int argc, char *argv[]) {
+    if (argc < 3) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " name filename", NULL);
+        return TCL_ERROR;
+    }
+    
+    int fontId = load_font(argv[1], argv[2]);
+    if (fontId < 0) {
+        Tcl_AppendResult(interp, argv[0], ": failed to load font: ", argv[2], NULL);
+        return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(fontId));
+    return TCL_OK;
+}
+
+/* textPath path - Set font search path */
+static int textpathCmd(ClientData clientData, Tcl_Interp *interp,
+                       int argc, char *argv[]) {
+    if (argc < 2) {
+        /* Return current path */
+        if (gFontSystem && gFontSystem->fontPath) {
+            Tcl_SetResult(interp, gFontSystem->fontPath, TCL_VOLATILE);
+        }
+        return TCL_OK;
+    }
+    
+    if (gFontSystem) {
+        free(gFontSystem->fontPath);
+        gFontSystem->fontPath = strdup(argv[1]);
+    }
+    
+    return TCL_OK;
+}
+
+/* text string ?-font fontname? ?-size pts? */
 static int textCmd(ClientData clientData, Tcl_Interp *interp,
-		      int argc, char *argv[])
-{
-  OBJ_LIST *olist = (OBJ_LIST *) clientData;
-  int id;
-  char *string = "text";
-  
-  if (argc > 1) string = argv[1];
-  
-  if ((id = textCreate(olist, TextShaderProg, string)) < 0) {
-    Tcl_SetResult(interp, "error creating text", TCL_STATIC);
-    return(TCL_ERROR);
-  }
-  
-  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
-  return(TCL_OK);
-}
-
-
-int textShaderCreate(Tcl_Interp *interp)
-{
-  TextShaderProg = (SHADER_PROG *) calloc(1, sizeof(SHADER_PROG));
-
-  const char* vertex_shader =
-  #ifndef STIM2_USE_GLES
-    "# version 330\n"
-  #else
-    "# version 310 es\n"  
-  #endif
-    "in vec3 vertex_position;"
-    "in vec2 vertex_texcoord;"
-    "out vec2 texcoord;"
-    "uniform mat4 projMat;"
-    "uniform mat4 modelviewMat;"
+                   int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST*)clientData;
     
-    "void main () {"
-    " texcoord = vertex_texcoord;"
-    " gl_Position = projMat * modelviewMat * vec4(vertex_position, 1.0);"
-    "}";
-
-  const char* fragment_shader =
-  #ifndef STIM2_USE_GLES
-    "# version 330\n"
-  #else
-    "# version 310 es\n"  
-  #endif
-  
-    "#ifdef GL_ES\n"
-    "precision mediump float;"
-    "precision mediump int;\n"
-    "#endif\n"
-
-    "uniform highp vec4 uColor;"
-    "uniform sampler2D tex0;"
-    "in highp vec2 texcoord;"
-    "out highp vec4 frag_color;"
-    "void main () {"
-    //"  frag_color = uColor;"
-    "  highp float alpha = texture(tex0, vec2(texcoord.s, texcoord.t)).g;"
-    "  frag_color = vec4(uColor.rgb, alpha);"
-    "}";
-  
-  
-  if (build_prog(TextShaderProg, vertex_shader, fragment_shader, 0) == -1) {
-    Tcl_AppendResult(interp, "text : error building text shader", NULL);
-    return TCL_ERROR;
-  }
-
-  /* Now add uniforms into master table */
-  Tcl_InitHashTable(&TextShaderProg->uniformTable, TCL_STRING_KEYS);
-  add_uniforms_to_table(&TextShaderProg->uniformTable, TextShaderProg);
-
-  /* Now add attribs into master table */
-  Tcl_InitHashTable(&TextShaderProg->attribTable, TCL_STRING_KEYS);
-  add_attribs_to_table(&TextShaderProg->attribTable, TextShaderProg);
-
-  return TCL_OK;
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " string ?-font name? ?-size pts?", NULL);
+        return TCL_ERROR;
+    }
+    
+    const char* string = argv[1];
+    int fontId = gFontSystem ? gFontSystem->defaultFont : FONS_INVALID;
+    float fontSize = 24.0f;
+    
+    /* Parse options */
+    for (int i = 2; i < argc - 1; i += 2) {
+        if (strcmp(argv[i], "-font") == 0) {
+            fontId = get_font_by_name(argv[i+1]);
+            if (fontId == FONS_INVALID) {
+                Tcl_AppendResult(interp, argv[0], ": unknown font: ", argv[i+1], NULL);
+                return TCL_ERROR;
+            }
+        } else if (strcmp(argv[i], "-size") == 0) {
+            double tempSize;
+            if (Tcl_GetDouble(interp, argv[i+1], &tempSize) != TCL_OK) {
+                return TCL_ERROR;
+            }
+            fontSize = (float)tempSize;
+        }
+    }
+    
+    if (fontId == FONS_INVALID) {
+        Tcl_AppendResult(interp, argv[0], ": no font loaded. Use textFont first.", NULL);
+        return TCL_ERROR;
+    }
+    
+    int id = textCreate(olist, string, fontId, fontSize);
+    if (id < 0) {
+        Tcl_SetResult(interp, (char*)"error creating text", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
+    return TCL_OK;
 }
+
+/* textString id newstring - Update text content */
+static int textstringCmd(ClientData clientData, Tcl_Interp *interp,
+                         int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST*)clientData;
+    int id;
+    
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " id ?string?", NULL);
+        return TCL_ERROR;
+    }
+    
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], TextID, "text")) < 0)
+        return TCL_ERROR;
+    
+    TEXT_OBJ* t = (TEXT_OBJ*)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    if (argc == 2) {
+        Tcl_SetResult(interp, t->string, TCL_VOLATILE);
+        return TCL_OK;
+    }
+    
+    free(t->string);
+    t->string = strdup(argv[2]);
+    t->dirty = 1;
+    
+    return TCL_OK;
+}
+
+/* textColor id r g b ?a? */
+static int textcolorCmd(ClientData clientData, Tcl_Interp *interp,
+                        int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST*)clientData;
+    int id;
+    double r, g, b, a = 1.0;
+    
+    if (argc < 5) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " id r g b ?a?", NULL);
+        return TCL_ERROR;
+    }
+    
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], TextID, "text")) < 0)
+        return TCL_ERROR;
+    
+    TEXT_OBJ* t = (TEXT_OBJ*)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    if (Tcl_GetDouble(interp, argv[2], &r) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetDouble(interp, argv[3], &g) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetDouble(interp, argv[4], &b) != TCL_OK) return TCL_ERROR;
+    if (argc > 5) {
+        if (Tcl_GetDouble(interp, argv[5], &a) != TCL_OK) return TCL_ERROR;
+    }
+    
+    t->color[0] = (float)r;
+    t->color[1] = (float)g;
+    t->color[2] = (float)b;
+    t->color[3] = (float)a;
+    
+    return TCL_OK;
+}
+
+/* textSize id ?pts? - Get or set font size */
+static int textsizeCmd(ClientData clientData, Tcl_Interp *interp,
+                       int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST*)clientData;
+    int id;
+    double size;
+    
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " id ?size?", NULL);
+        return TCL_ERROR;
+    }
+    
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], TextID, "text")) < 0)
+        return TCL_ERROR;
+    
+    TEXT_OBJ* t = (TEXT_OBJ*)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    if (argc == 2) {
+        Tcl_SetObjResult(interp, Tcl_NewDoubleObj(t->fontSize));
+        return TCL_OK;
+    }
+    
+    if (Tcl_GetDouble(interp, argv[2], &size) != TCL_OK) return TCL_ERROR;
+    
+    t->fontSize = (float)size;
+    t->dirty = 1;
+    
+    return TCL_OK;
+}
+
+/* textJustify id ?left|center|right? */
+static int textjustifyCmd(ClientData clientData, Tcl_Interp *interp,
+                          int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST*)clientData;
+    int id;
+    
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " id ?left|center|right?", NULL);
+        return TCL_ERROR;
+    }
+    
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], TextID, "text")) < 0)
+        return TCL_ERROR;
+    
+    TEXT_OBJ* t = (TEXT_OBJ*)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    if (argc == 2) {
+        const char* names[] = {"left", "center", "right"};
+        Tcl_SetResult(interp, (char*)names[t->justify], TCL_STATIC);
+        return TCL_OK;
+    }
+    
+    if (strcmp(argv[2], "left") == 0) {
+        t->justify = TEXT_JUSTIFY_LEFT;
+    } else if (strcmp(argv[2], "center") == 0) {
+        t->justify = TEXT_JUSTIFY_CENTER;
+    } else if (strcmp(argv[2], "right") == 0) {
+        t->justify = TEXT_JUSTIFY_RIGHT;
+    } else {
+        Tcl_AppendResult(interp, argv[0], ": invalid justification: ", argv[2], NULL);
+        return TCL_ERROR;
+    }
+    
+    t->dirty = 1;
+    return TCL_OK;
+}
+
+/* textInfo id - Get text metrics */
+static int textinfoCmd(ClientData clientData, Tcl_Interp *interp,
+                       int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST*)clientData;
+    int id;
+    
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " id", NULL);
+        return TCL_ERROR;
+    }
+    
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], TextID, "text")) < 0)
+        return TCL_ERROR;
+    
+    TEXT_OBJ* t = (TEXT_OBJ*)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    if (t->dirty) {
+        text_build_geometry(t);
+    }
+    
+    Tcl_Obj* dict = Tcl_NewDictObj();
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("width", -1), Tcl_NewDoubleObj(t->width));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("height", -1), Tcl_NewDoubleObj(t->height));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("ascender", -1), Tcl_NewDoubleObj(t->ascender));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("descender", -1), Tcl_NewDoubleObj(t->descender));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("fontSize", -1), Tcl_NewDoubleObj(t->fontSize));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("numChars", -1), Tcl_NewIntObj(strlen(t->string)));
+    
+    Tcl_SetObjResult(interp, dict);
+    return TCL_OK;
+}
+
+/* textFonts - List loaded fonts */
+static int textfontsCmd(ClientData clientData, Tcl_Interp *interp,
+                        int argc, char *argv[]) {
+    Tcl_Obj* list = Tcl_NewListObj(0, NULL);
+    
+    if (gFontSystem) {
+        for (int i = 0; i < gFontSystem->numFonts; i++) {
+            Tcl_ListObjAppendElement(interp, list, Tcl_NewStringObj(gFontSystem->fontNames[i], -1));
+        }
+    }
+    
+    Tcl_SetObjResult(interp, list);
+    return TCL_OK;
+}
+
+/****************************************************************/
+/*                       Module Init                            */
+/****************************************************************/
 
 #ifdef _WIN32
-EXPORT(int, Text_Init) _ANSI_ARGS_((Tcl_Interp *interp))
+EXPORT(int, Text_Init) (Tcl_Interp *interp)
 #else
 int Text_Init(Tcl_Interp *interp)
 #endif
 {
-
-  int dpi;
-  
-  OBJ_LIST *OBJList = getOBJList();
-  
-  if (
+    OBJ_LIST *OBJList = getOBJList();
+    
+    if (
 #ifdef USE_TCL_STUBS
-      Tcl_InitStubs(interp, "8.5-", 0)
+        Tcl_InitStubs(interp, "8.5-", 0)
 #else
-      Tcl_PkgRequire(interp, "Tcl", "8.5-", 0)
+        Tcl_PkgRequire(interp, "Tcl", "8.5-", 0)
 #endif
-      == NULL) {
-    return TCL_ERROR;
-  }
-  
-  if (TextID < 0) TextID = gobjRegisterType();
-
-  dpi = calculate_dpi();
-  
-  /*font = load_font(
-    "/usr/fonts/font_repository/adobe/MyriadPro-Bold.otf", 15, dpi); */
-  #ifndef APPLE_APPLICATION_FOLDER
-  font = load_font("/usr/local/stim2/fonts/NotoSans-Regular.ttf", 24, dpi);
-  #else
-  font = load_font("/Applications/stim2.app/Contents/Resources/fonts/NotoSans-Regular.ttf", 24, dpi);
-  
-  #endif
-
-  if (!font) {
-    return 0;
-  }
-
-  gladLoadGL();
-
-  textShaderCreate(interp);
-
-  Tcl_CreateCommand(interp, "text", (Tcl_CmdProc *) textCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateCommand(interp, "textcolor", (Tcl_CmdProc *) textcolorCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-
-  return TCL_OK;
+        == NULL) {
+        return TCL_ERROR;
+    }
+    
+    if (TextID < 0) {
+        TextID = gobjRegisterType();
+        
+        gladLoadGL();
+        
+        if (create_text_shader() < 0) {
+            Tcl_SetResult(interp, (char*)"error creating text shader", TCL_STATIC);
+            return TCL_ERROR;
+        }
+    }
+    
+    /* Initialize font system with default path */
+    const char* fontPath = getenv("STIM2_FONT_PATH");
+    static char fontPathBuf[1024];
+    
+    if (!fontPath) {
+#ifdef __APPLE__
+        /* Try to get path from application bundle */
+        CFBundleRef mainBundle = CFBundleGetMainBundle();
+        if (mainBundle) {
+            CFURLRef resourcesURL = CFBundleCopyResourcesDirectoryURL(mainBundle);
+            if (resourcesURL) {
+                if (CFURLGetFileSystemRepresentation(resourcesURL, TRUE, 
+                        (UInt8*)fontPathBuf, sizeof(fontPathBuf))) {
+                    strncat(fontPathBuf, "/fonts", sizeof(fontPathBuf) - strlen(fontPathBuf) - 1);
+                    fontPath = fontPathBuf;
+                }
+                CFRelease(resourcesURL);
+            }
+        }
+        /* Fallback for development */
+        if (!fontPath) {
+            struct stat st;
+            if (stat("/usr/local/stim2/fonts", &st) == 0) {
+                fontPath = "/usr/local/stim2/fonts";
+            } else {
+                fontPath = "./fonts";
+            }
+        }
+#elif defined(WIN32)
+        fontPath = "C:/stim2/fonts";
+#else
+        /* Linux: check install location, fallback to local */
+        struct stat st;
+        if (stat("/usr/local/stim2/fonts", &st) == 0) {
+            fontPath = "/usr/local/stim2/fonts";
+        } else {
+            fontPath = "./fonts";
+        }
+#endif
+    }
+    
+    if (init_font_system(fontPath) < 0) {
+        Tcl_SetResult(interp, (char*)"error initializing font system", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    /* Try to load a default font */
+    load_font("default", "NotoSans-Regular.ttf");
+    
+    /* Register commands */
+    Tcl_CreateCommand(interp, "text", (Tcl_CmdProc*)textCmd,
+                      (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "textFont", (Tcl_CmdProc*)textfontCmd,
+                      (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "textPath", (Tcl_CmdProc*)textpathCmd,
+                      (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "textString", (Tcl_CmdProc*)textstringCmd,
+                      (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "textColor", (Tcl_CmdProc*)textcolorCmd,
+                      (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "textSize", (Tcl_CmdProc*)textsizeCmd,
+                      (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "textJustify", (Tcl_CmdProc*)textjustifyCmd,
+                      (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "textInfo", (Tcl_CmdProc*)textinfoCmd,
+                      (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "textFonts", (Tcl_CmdProc*)textfontsCmd,
+                      (ClientData)OBJList, NULL);
+    
+    return TCL_OK;
 }
+
+#ifdef WIN32
+BOOL APIENTRY DllEntryPoint(HINSTANCE hInst, DWORD reason, LPVOID reserved) {
+    return TRUE;
+}
+#endif
