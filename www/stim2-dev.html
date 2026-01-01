@@ -1431,14 +1431,17 @@
                 renderControls();
                 
                 // Auto-run first setup or first exported proc
-                const setupNames = Object.keys(currentSetups);
-                const exportNames = Object.keys(currentExports);
-                
-                if (setupNames.length > 0) {
-                    runSetup(setupNames[0]);
-                } else if (exportNames.length > 0) {
-                    runLegacyProc(exportNames[0]);
-                }
+                // Use requestAnimationFrame to ensure DOM is updated first
+                requestAnimationFrame(() => {
+                    const setupNames = Object.keys(currentSetups);
+                    const exportNames = Object.keys(currentExports);
+                    
+                    if (setupNames.length > 0) {
+                        runSetup(setupNames[0]);
+                    } else if (exportNames.length > 0) {
+                        runLegacyProc(exportNames[0]);
+                    }
+                });
             } catch (e) {
                 console.error('Failed to load file:', e);
                 addLogEntry('error', `Failed to load ${filepath}: ${e.message}`);
@@ -1476,8 +1479,8 @@
                     html += '</div>';
                 }
                 
-                // Render active setup (or first if none active)
-                const setupName = activeSetup || setupNames[0];
+                // Validate activeSetup exists in current file, otherwise use first
+                const setupName = (activeSetup && currentSetups[activeSetup]) ? activeSetup : setupNames[0];
                 html += renderSetupControls(setupName);
             }
             
