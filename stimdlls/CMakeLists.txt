@@ -86,7 +86,7 @@ add_library(stimutils STATIC
     ${APP_DIR}/glad.c
 )
 
-# Image loading utilities (used by shader, text, mesh, spine)
+# Image loading utilities (used by shader, mesh, spine)
 add_library(stimimage STATIC
     ${SRC_DIR}/shaderimage.c
     ${SRC_DIR}/targa.c
@@ -162,13 +162,34 @@ endfunction()
 # Basic modules using just stimutils
 add_stim_module(polygon SOURCES ${SRC_DIR}/polygon.c)
 add_stim_module(image SOURCES ${SRC_DIR}/image.c)
-add_stim_module(svg SOURCES ${SRC_DIR}/svg.c)
+
+# =============================================================================
+# LunaSVG Integration via FetchContent
+# =============================================================================
+include(FetchContent)
+
+FetchContent_Declare(
+    lunasvg
+    GIT_REPOSITORY https://github.com/sammycage/lunasvg.git
+    GIT_TAG        v3.5.0
+    GIT_SHALLOW    TRUE
+)
+
+# Disable examples
+set(LUNASVG_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+FetchContent_MakeAvailable(lunasvg)
+
+# SVG module 
+add_stim_module(svg SOURCES ${SRC_DIR}/svg.cpp LIBS lunasvg::lunasvg)
+
+# Metagroup module
 add_stim_module(metagroup SOURCES ${SRC_DIR}/metagroup.c)
 
 # Shader module with image support
 add_stim_module(shader
     SOURCES ${SRC_DIR}/shader.c
-    LIBS stimimage ${DLSH}
+    LIBS stimimage 
 )
 
 # Mesh module with image support
@@ -224,17 +245,9 @@ else()
 endif()
 
 ###############################
-# Text module (not on Windows)
+# Text module 
 ###############################
-if(NOT WIN32)
-    if(LINUX)
-        find_package(ZLIB REQUIRED)
-    endif()
-    add_stim_module(text
-        SOURCES ${SRC_DIR}/text.c
-        LIBS stimimage ${FREETYPE} ${PNG} ${ZLIB_LIBRARIES}
-    )
-endif()
+add_stim_module(text SOURCES ${SRC_DIR}/text.c)
 
 ###############################
 # Video module (FFmpeg) - not on Windows
