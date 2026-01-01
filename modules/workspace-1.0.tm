@@ -6,6 +6,13 @@
 #   set ::workspace::system_examples_path /path/to/examples
 #   workspace::init
 #
+# New setup/adjuster system:
+#   workspace::reset
+#   workspace::setup proc_name {param specs...} -adjusters {adjuster_names...}
+#   workspace::adjuster name {param specs...} -target obj_name -proc proc_name
+#
+# Multiple setups per file supported - each with its own adjusters.
+#
 
 package require yajltcl
 
@@ -19,9 +26,14 @@ namespace eval ::workspace {
     # System examples path - set by stim2 startup before init
     variable system_examples_path ""
     
-    # Export tracking
+    # Legacy export tracking (for backwards compatibility)
     variable exports {}
     variable current_file ""
+    
+    # New setup/adjuster system
+    variable setups {}          ;# dict: setup_name -> {proc params adjusters file}
+    variable adjusters {}       ;# dict: adjuster_name -> {proc target params file setup}
+    variable active_setup ""    ;# currently active setup name
     
     # Notification callback
     variable notify_callback ""
@@ -79,6 +91,69 @@ proc ::workspace::encode_export_info {yh info} {
     
     $yh string "proc"
     $yh string [dict get $info proc]
+    
+    $yh string "params"
+    $yh array_open
+    foreach param [dict get $info params] {
+        encode_param $yh $param
+    }
+    $yh array_close
+    
+    $yh map_close
+}
+
+proc ::workspace::encode_setup_info {yh name info} {
+    $yh map_open
+    
+    $yh string "name"
+    $yh string $name
+    
+    $yh string "proc"
+    $yh string [dict get $info proc]
+    
+    $yh string "params"
+    $yh array_open
+    foreach param [dict get $info params] {
+        encode_param $yh $param
+    }
+    $yh array_close
+    
+    $yh string "adjusters"
+    $yh array_open
+    foreach adj [dict get $info adjusters] {
+        $yh string $adj
+    }
+    $yh array_close
+    
+    $yh map_close
+}
+
+proc ::workspace::encode_adjuster_info {yh name info} {
+    $yh map_open
+    
+    $yh string "name"
+    $yh string $name
+    
+    $yh string "proc"
+    $yh string [dict get $info proc]
+    
+    $yh string "target"
+    $yh string [dict get $info target]
+    
+    # Include uniform name if this is a shader uniform adjuster
+    if {[dict exists $info uniform]} {
+        $yh string "uniform"
+        $yh string [dict get $info uniform]
+    }
+    
+    $yh string "setup"
+    $yh string [dict get $info setup]
+    
+    # Flag if auto-generated
+    if {[dict exists $info auto_generated] && [dict get $info auto_generated]} {
+        $yh string "auto_generated"
+        $yh bool 1
+    }
     
     $yh string "params"
     $yh array_open
@@ -579,18 +654,26 @@ proc ::workspace::save {workspace_id filepath content} {
 }
 
 #
-# Export System
+# Reset - clears exports/setups/adjusters for current file
 #
 proc ::workspace::reset {} {
     variable initialized
     variable exports
+    variable setups
+    variable adjusters
+    variable active_setup
     variable current_file
     
     if {!$initialized} return
     
     if {$current_file eq ""} {
+        # Clear everything
         set exports {}
+        set setups {}
+        set adjusters {}
+        set active_setup ""
     } else {
+        # Clear only items from current file
         set new_exports {}
         dict for {procname info} $exports {
             if {[dict get $info file] ne $current_file} {
@@ -598,9 +681,180 @@ proc ::workspace::reset {} {
             }
         }
         set exports $new_exports
+        
+        set new_setups {}
+        dict for {name info} $setups {
+            if {[dict get $info file] ne $current_file} {
+                dict set new_setups $name $info
+            }
+        }
+        set setups $new_setups
+        
+        set new_adjusters {}
+        dict for {name info} $adjusters {
+            if {[dict get $info file] ne $current_file} {
+                dict set new_adjusters $name $info
+            }
+        }
+        set adjusters $new_adjusters
+        
+        # Clear active_setup if it was from this file
+        if {$active_setup ne "" && [dict exists $setups $active_setup]} {
+            if {[dict get [dict get $setups $active_setup] file] eq $current_file} {
+                set active_setup ""
+            }
+        }
     }
 }
 
+#
+# New Setup/Adjuster System
+#
+
+# workspace::setup proc_name {params...} ?-adjusters {adj_list}?
+proc ::workspace::setup {procname params args} {
+    variable initialized
+    variable setups
+    variable current_file
+    variable current_setup
+    
+    if {!$initialized} return
+    
+    # Parse options
+    set adjuster_list {}
+    set i 0
+    while {$i < [llength $args]} {
+        set opt [lindex $args $i]
+        switch -- $opt {
+            -adjusters {
+                incr i
+                set adjuster_list [lindex $args $i]
+            }
+            default {
+                error "Unknown option to workspace::setup: $opt"
+            }
+        }
+        incr i
+    }
+    
+    # Parse parameters
+    set parsed_params [parse_verbose_params $params]
+    
+    # Store setup info
+    dict set setups $procname [dict create \
+        proc $procname \
+        params $parsed_params \
+        adjusters $adjuster_list \
+        file $current_file]
+    
+    # Track current setup for adjuster registration
+    set current_setup $procname
+    
+    notify "setup" [dict create proc $procname file $current_file]
+}
+
+# workspace::adjuster name {params...} -target obj_name -proc proc_name
+proc ::workspace::adjuster {name params args} {
+    variable initialized
+    variable adjusters
+    variable current_file
+    variable current_setup
+    
+    if {!$initialized} return
+    
+    # Parse options
+    set target ""
+    set proc_name ""
+    set i 0
+    while {$i < [llength $args]} {
+        set opt [lindex $args $i]
+        switch -- $opt {
+            -target {
+                incr i
+                set target [lindex $args $i]
+            }
+            -proc {
+                incr i
+                set proc_name [lindex $args $i]
+            }
+            default {
+                error "Unknown option to workspace::adjuster: $opt"
+            }
+        }
+        incr i
+    }
+    
+    if {$proc_name eq ""} {
+        error "workspace::adjuster requires -proc option"
+    }
+    
+    # Parse parameters
+    set parsed_params [parse_verbose_params $params]
+    
+    # Determine which setup this adjuster belongs to
+    set setup_name ""
+    if {[info exists current_setup] && $current_setup ne ""} {
+        set setup_name $current_setup
+    }
+    
+    # Store adjuster info
+    dict set adjusters $name [dict create \
+        proc $proc_name \
+        target $target \
+        params $parsed_params \
+        file $current_file \
+        setup $setup_name]
+    
+    notify "adjuster" [dict create name $name proc $proc_name file $current_file]
+}
+
+# Invoke a setup proc with given arguments
+proc ::workspace::invoke_setup {setup_name args} {
+    variable setups
+    variable active_setup
+    
+    if {![dict exists $setups $setup_name]} {
+        error "Unknown setup: $setup_name"
+    }
+    
+    set info [dict get $setups $setup_name]
+    set procname [dict get $info proc]
+    
+    # Call the setup proc
+    set result [uplevel #0 [list $procname {*}$args]]
+    
+    # Mark this setup as active
+    set active_setup $setup_name
+    
+    return $result
+}
+
+# Invoke an adjuster - prepends target to args
+proc ::workspace::invoke_adjuster {adjuster_name args} {
+    variable adjusters
+    
+    if {![dict exists $adjusters $adjuster_name]} {
+        error "Unknown adjuster: $adjuster_name"
+    }
+    
+    set info [dict get $adjusters $adjuster_name]
+    set procname [dict get $info proc]
+    set target [dict get $info target]
+    
+    # Build argument list: target first (if specified), then the rest
+    if {$target ne ""} {
+        set call_args [list $target {*}$args]
+    } else {
+        set call_args $args
+    }
+    
+    # Call the proc
+    return [uplevel #0 [list $procname {*}$call_args]]
+}
+
+#
+# Legacy Export System (backwards compatibility)
+#
 proc ::workspace::export {procname args} {
     variable initialized
     variable exports
@@ -707,9 +961,13 @@ proc ::workspace::parse_verbose_params {spec_list} {
     return $params
 }
 
+#
+# File Activation
+#
 proc ::workspace::activate {workspace_id filepath} {
     variable initialized
     variable current_file
+    variable current_setup
     
     if {!$initialized} { init }
     
@@ -727,17 +985,25 @@ proc ::workspace::activate {workspace_id filepath} {
     }
     
     set current_file $filepath
+    set current_setup ""
     
     if {[catch {uplevel #0 [::list source $full_path]} err]} {
         set current_file ""
+        set current_setup ""
         error "Source error in $filepath: $err"
     }
     
     set current_file ""
+    set current_setup ""
     
-    return [get_file_exports $filepath]
+    return [get_file_info $filepath]
 }
 
+#
+# Query Functions
+#
+
+# Get all exports (legacy)
 proc ::workspace::get_exports {} {
     variable exports
     
@@ -757,6 +1023,7 @@ proc ::workspace::get_exports {} {
     return $json
 }
 
+# Get exports for a specific file (legacy)
 proc ::workspace::get_file_exports {filepath} {
     variable exports
     
@@ -778,6 +1045,83 @@ proc ::workspace::get_file_exports {filepath} {
     return $json
 }
 
+# Get complete file info (setups, adjusters, and legacy exports)
+proc ::workspace::get_file_info {filepath} {
+    variable exports
+    variable setups
+    variable adjusters
+    variable active_setup
+    
+    set yh [yajl create #auto]
+    $yh map_open
+    
+    # Setups
+    $yh string "setups"
+    $yh map_open
+    dict for {name info} $setups {
+        if {[dict get $info file] eq $filepath} {
+            $yh string $name
+            encode_setup_info $yh $name $info
+        }
+    }
+    $yh map_close
+    
+    # Adjusters
+    $yh string "adjusters"
+    $yh map_open
+    dict for {name info} $adjusters {
+        if {[dict get $info file] eq $filepath} {
+            $yh string $name
+            encode_adjuster_info $yh $name $info
+        }
+    }
+    $yh map_close
+    
+    # Legacy exports
+    $yh string "exports"
+    $yh map_open
+    dict for {procname info} $exports {
+        if {[dict get $info file] eq $filepath} {
+            $yh string $procname
+            encode_export_info $yh $info
+        }
+    }
+    $yh map_close
+    
+    # Active setup
+    $yh string "active_setup"
+    if {$active_setup ne ""} {
+        $yh string $active_setup
+    } else {
+        $yh null
+    }
+    
+    $yh map_close
+    
+    set json [$yh get]
+    $yh delete
+    
+    return $json
+}
+
+# Get current active setup
+proc ::workspace::get_active_setup {} {
+    variable active_setup
+    return $active_setup
+}
+
+# Set active setup (for frontend to track)
+proc ::workspace::set_active_setup {setup_name} {
+    variable setups
+    variable active_setup
+    
+    if {$setup_name ne "" && ![dict exists $setups $setup_name]} {
+        error "Unknown setup: $setup_name"
+    }
+    
+    set active_setup $setup_name
+}
+
 #
 # Notifications
 #
@@ -792,6 +1136,149 @@ proc ::workspace::notify {event data} {
     if {$notify_callback ne ""} {
         catch {{*}$notify_callback $event $data}
     }
+}
+
+#
+# Shader Uniform Auto-Discovery
+#
+# Generate adjusters automatically from shader object uniforms
+# Usage: workspace::shader_adjusters $obj_name ?-prefix prefix? ?-exclude {list}?
+#
+proc ::workspace::shader_adjusters {obj_name args} {
+    variable initialized
+    variable adjusters
+    variable current_file
+    variable current_setup
+    
+    if {!$initialized} return
+    
+    # Parse options
+    set prefix "${obj_name}_"
+    set exclude {time resolution projMat modelviewMat}  ;# Common auto-set uniforms
+    set include_samplers 0
+    
+    set i 0
+    while {$i < [llength $args]} {
+        set opt [lindex $args $i]
+        switch -- $opt {
+            -prefix {
+                incr i
+                set prefix [lindex $args $i]
+            }
+            -exclude {
+                incr i
+                set exclude [concat $exclude [lindex $args $i]]
+            }
+            -include {
+                incr i
+                # Only include these uniforms
+                set include_only [lindex $args $i]
+            }
+            -samplers {
+                set include_samplers 1
+            }
+            default {
+                error "Unknown option to workspace::shader_adjusters: $opt"
+            }
+        }
+        incr i
+    }
+    
+    # Get uniform names from the shader object
+    if {[catch {shaderObjUniformNames $obj_name} uniform_names]} {
+        error "Failed to get uniforms for '$obj_name': $uniform_names"
+    }
+    
+    # Get default values if available (need to get shader program name first)
+    set defaults {}
+    if {[catch {
+        # Try to get defaults - this may not work for all objects
+        set shader_prog [shaderObjProgram $obj_name]
+        if {$shader_prog ne ""} {
+            set defaults [shaderDefaultSettings $shader_prog]
+        }
+    }]} {
+        # Ignore errors - defaults are optional
+    }
+    
+    set generated {}
+    
+    foreach uname $uniform_names {
+        # Skip excluded uniforms
+        if {$uname in $exclude} continue
+        
+        # Skip if include_only is set and this isn't in it
+        if {[info exists include_only] && $uname ni $include_only} continue
+        
+        # Skip samplers unless requested
+        if {!$include_samplers && [string match "tex*" $uname]} continue
+        if {!$include_samplers && [string match "*sampler*" $uname]} continue
+        
+        # Create adjuster name
+        set adj_name "${prefix}${uname}"
+        
+        # Get default value if available
+        set default_val 0.0
+        if {[dict exists $defaults $uname]} {
+            set default_val [dict get $defaults $uname]
+        }
+        
+        # Create parameter spec - assume float for now
+        # Could be enhanced to detect type from uniform info
+        set param_spec [list value [list float -10.0 10.0 0.01 $default_val $uname]]
+        
+        # Parse and store
+        set parsed_params [parse_verbose_params $param_spec]
+        
+        # Determine setup
+        set setup_name ""
+        if {[info exists current_setup] && $current_setup ne ""} {
+            set setup_name $current_setup
+        }
+        
+        # Store adjuster
+        dict set adjusters $adj_name [dict create \
+            proc "shaderObjSetUniform" \
+            target $obj_name \
+            uniform $uname \
+            params $parsed_params \
+            file $current_file \
+            setup $setup_name \
+            auto_generated 1]
+        
+        lappend generated $adj_name
+    }
+    
+    return $generated
+}
+
+# Modified invoke_adjuster to handle shader uniforms specially
+proc ::workspace::invoke_adjuster {adjuster_name args} {
+    variable adjusters
+    
+    if {![dict exists $adjusters $adjuster_name]} {
+        error "Unknown adjuster: $adjuster_name"
+    }
+    
+    set info [dict get $adjusters $adjuster_name]
+    set procname [dict get $info proc]
+    set target [dict get $info target]
+    
+    # Special handling for auto-generated shader uniform adjusters
+    if {[dict exists $info uniform]} {
+        set uniform [dict get $info uniform]
+        # Call: shaderObjSetUniform $target $uniform $value
+        return [uplevel #0 [list $procname $target $uniform {*}$args]]
+    }
+    
+    # Standard adjuster: prepend target to args
+    if {$target ne ""} {
+        set call_args [list $target {*}$args]
+    } else {
+        set call_args $args
+    }
+    
+    return [uplevel #0 [list $procname {*}$call_args]]
 }
 
 package provide workspace $::workspace::version
