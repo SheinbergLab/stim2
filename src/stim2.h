@@ -4,6 +4,9 @@
  *
  */
 
+#ifndef STIM2_H
+#define STIM2_H
+
 #include "prmutil.h"
 
 #if defined(WIN32)
@@ -380,6 +383,7 @@ typedef struct {
   int nobj;			/* number of objects loaded         */
   GR_OBJ **objects;		/* array of object pointers         */
   int maxobj;			/* number objects allocated         */
+  void *nameInfo;               /* ObjNameInfo* - opaque b/c Tcl    */
 } OBJ_LIST;
 
 #define OL_VISIBLE(m)           ((m)->visible)
@@ -394,6 +398,7 @@ typedef struct {
 #define OL_OBJS(m)              ((m)->objects)
 #define OL_MAXOBJS(m)           ((m)->maxobj)
 #define OL_OBJ(m,i)             (OL_OBJS(m)[i])
+#define OL_NAMEINFO(m)          ((m)->nameInfo)
 
 #define OL_SX(m)                (OL_SCALE(m)[0])
 #define OL_SY(m)                (OL_SCALE(m)[1])
@@ -416,7 +421,8 @@ void objListSetSpin(OBJ_LIST *list, float spin);
 void objListSetRotAxis(OBJ_LIST *list, float x, float y, float z);
 void objListTranslate(OBJ_LIST *list, float x, float y, float z);
 
-
+void objNameClearRegistry(OBJ_LIST *list);
+  
 int gobjFindObj(OBJ_LIST *objlist, char *name, int *id);
 int gobjAppendNewObj(OBJ_LIST *olist, char *name);
 int  gobjUnloadObj(OBJ_LIST *list, int id);
@@ -662,3 +668,4 @@ extern int olistFillSpecTime(OBS_PERIOD_SPEC *, int slot, int n, int *times);
 }
 #endif
 
+#endif /* STIM2_H */

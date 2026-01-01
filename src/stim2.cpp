@@ -63,6 +63,7 @@
 
 #include "stim2.h"
 #include "rawapi.h"
+#include "objname.h"
 
 static int MainWin = 0;
 
@@ -846,6 +847,12 @@ int toggleAnimation(void)
   return(!OL_DYNAMIC(OBJList));
 }
 
+void objNameClearRegistry(OBJ_LIST *olist)
+{
+    if (OL_NAMEINFO(olist)) {
+      objNameClear((ObjNameInfo *) OL_NAMEINFO(olist));
+    }
+}
 /******************************************************************
  *                   Background Color Functions
  ******************************************************************/
@@ -1652,6 +1659,9 @@ proc setup_stim2_modules {} {
 setup_stim2_modules
 )");
 
+    // Add objid <-> name table support
+    OL_NAMEINFO(OBJList) = objNameInitCommands(interp, OBJList);
+    
 
     // Override puts command
     Tcl_Eval(interp, "rename puts _puts");

@@ -106,6 +106,8 @@ void objListReset(OBJ_LIST *list)
   OL_AX2(list) = 0.0;
   OL_AX3(list) = 0.0;
   OL_VISIBLE(list) = 1;
+
+  objNameClearRegistry(list);
   return;
 }
 
