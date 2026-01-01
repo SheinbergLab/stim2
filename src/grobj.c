@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "stim2.h"
+#include "objname.h"
 
 static char *typenames[256];	/* for holding typenames of objects  */
 static int ntypes = 0;		/* Number of currently defined types */
@@ -190,6 +191,13 @@ int gobjFindObj(OBJ_LIST *objlist, char *name, int *id)
     return 1;
   }
 
+  int id_by_name = objNameGet(OL_NAMEINFO(objlist), name);
+  if (id_by_name >= 0 && id_by_name < OL_NOBJS(objlist)) {
+    if (id) *id = id_by_name;
+    return 1;
+  }
+  
+  
   if (id) *id = -1;
   return 0;
 }
