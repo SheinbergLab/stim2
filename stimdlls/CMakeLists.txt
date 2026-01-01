@@ -76,18 +76,16 @@ find_package(OpenGL REQUIRED)
 include_directories(${OPENGL_INCLUDE_DIR})
 
 ###############################
-# Shared Utility Library
+# Shared Utility Sources (compiled into each module that needs them)
 ###############################
-# Build common utilities once as a static library
-add_library(stimutils STATIC
+set(STIMUTILS_SOURCES
     ${SRC_DIR}/shaderutils.c
     ${SRC_DIR}/bstrlib.c
     ${SRC_DIR}/glsw.c
     ${APP_DIR}/glad.c
 )
 
-# Image loading utilities (used by shader, mesh, spine)
-add_library(stimimage STATIC
+set(STIMIMAGE_SOURCES
     ${SRC_DIR}/shaderimage.c
     ${SRC_DIR}/targa.c
     ${SRC_DIR}/lodepng.c
@@ -131,12 +129,11 @@ endif()
 
 # Common link libraries
 if(APPLE)
-    set(BUNDLE_LOAD "-dynamiclib -undefined dynamic_lookup")
+    set(CMAKE_MODULE_LINKER_FLAGS "-undefined dynamic_lookup")
 endif()
 
 set(COMMON_LIBS
     ${DLSH}
-    ${BUNDLE_LOAD}
     ${GLFW}
     ${TCLLIB}
     ${OPENGL_LIBRARIES}
@@ -149,15 +146,23 @@ set(COMMON_LIBS
 # Helper function for modules
 ###############################
 function(add_stim_module name)
-    cmake_parse_arguments(MOD "NO_STIMUTILS" "" "SOURCES;LIBS;INCLUDES" ${ARGN})
+    cmake_parse_arguments(MOD "NO_STIMUTILS;WITH_IMAGE" "" "SOURCES;LIBS;INCLUDES" ${ARGN})
     
-    add_library(${name} SHARED ${MOD_SOURCES})
+    # Build source list
+    set(ALL_SOURCES ${MOD_SOURCES})
     
-    if(MOD_NO_STIMUTILS)
-        target_link_libraries(${name} ${COMMON_LIBS} ${MOD_LIBS})
-    else()
-        target_link_libraries(${name} stimutils ${COMMON_LIBS} ${MOD_LIBS})
+    if(NOT MOD_NO_STIMUTILS)
+        list(APPEND ALL_SOURCES ${STIMUTILS_SOURCES})
     endif()
+    
+    if(MOD_WITH_IMAGE)
+        list(APPEND ALL_SOURCES ${STIMIMAGE_SOURCES})
+    endif()
+    
+    # Use MODULE type - these are dynamically loaded plugins
+    add_library(${name} MODULE ${ALL_SOURCES})
+    
+    target_link_libraries(${name} ${COMMON_LIBS} ${MOD_LIBS})
     
     if(MOD_INCLUDES)
         target_include_directories(${name} PRIVATE ${MOD_INCLUDES})
@@ -166,9 +171,9 @@ function(add_stim_module name)
     # Remove 'lib' prefix on all platforms
     set_target_properties(${name} PROPERTIES PREFIX "")
     
-    # Linux: allow unresolved symbols (resolved at load time by host app)
-    if(UNIX AND NOT APPLE)
-        target_link_options(${name} PRIVATE "-Wl,--unresolved-symbols=ignore-in-shared-libs")
+    # Keep .so extension on Linux, .dylib on macOS
+    if(APPLE)
+        set_target_properties(${name} PROPERTIES SUFFIX ".dylib")
     endif()
 endfunction()
 
@@ -206,13 +211,13 @@ add_stim_module(metagroup SOURCES ${SRC_DIR}/metagroup.c)
 # Shader module with image support
 add_stim_module(shader
     SOURCES ${SRC_DIR}/shader.c
-    LIBS stimimage 
+    WITH_IMAGE
 )
 
 # Mesh module with image support
 add_stim_module(mesh
     SOURCES ${SRC_DIR}/mesh.c
-    LIBS stimimage
+    WITH_IMAGE
 )
 
 # Motion patch with simplex noise
@@ -223,7 +228,8 @@ add_stim_module(motionpatch
 # Spine with image support
 add_stim_module(spine
     SOURCES ${SRC_DIR}/spine.c
-    LIBS stimimage ${SPINE_LIB}
+    WITH_IMAGE
+    LIBS ${SPINE_LIB}
 )
 
 # Box2D (no stimutils needed)
