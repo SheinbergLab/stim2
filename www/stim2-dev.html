@@ -1145,7 +1145,13 @@
         let currentWorkspace = null;
         let currentFile = null;
         let currentFileInfo = null;
+        
+        // New: file info includes setups, adjusters, and legacy exports
+        let currentSetups = {};
+        let currentAdjusters = {};
         let currentExports = {};
+        let activeSetup = null;
+        
         let workspacesData = [];  // Store full tree data for search
         let liveUpdateTimer = null;
 
@@ -1412,15 +1418,26 @@
                 // Update info panel
                 updateInfoPanel(filepath, content);
                 
-                // Activate file and get exports
-                const exportsJson = await connection.eval(`workspace::activate "${workspaceId}" "${filepath}"`);
-                currentExports = JSON.parse(exportsJson);
-                renderControls(currentExports);
+                // Activate file and get exports/setups/adjusters
+                const fileInfoJson = await connection.eval(`workspace::activate "${workspaceId}" "${filepath}"`);
+                const fileInfo = JSON.parse(fileInfoJson);
                 
-                // Auto-run first exported proc with defaults
-                const procNames = Object.keys(currentExports);
-                if (procNames.length > 0) {
-                    runProc(procNames[0]);
+                // Store setups, adjusters, and legacy exports
+                currentSetups = fileInfo.setups || {};
+                currentAdjusters = fileInfo.adjusters || {};
+                currentExports = fileInfo.exports || {};
+                activeSetup = fileInfo.active_setup || null;
+                
+                renderControls();
+                
+                // Auto-run first setup or first exported proc
+                const setupNames = Object.keys(currentSetups);
+                const exportNames = Object.keys(currentExports);
+                
+                if (setupNames.length > 0) {
+                    runSetup(setupNames[0]);
+                } else if (exportNames.length > 0) {
+                    runLegacyProc(exportNames[0]);
                 }
             } catch (e) {
                 console.error('Failed to load file:', e);
@@ -1428,37 +1445,130 @@
             }
         }
 
-        function renderControls(exports) {
-            if (!exports || Object.keys(exports).length === 0) {
+        // ============================================================
+        // Controls Rendering - Setup/Adjuster System
+        // ============================================================
+        function renderControls() {
+            const setupNames = Object.keys(currentSetups);
+            const exportNames = Object.keys(currentExports);
+            
+            // No controls at all?
+            if (setupNames.length === 0 && exportNames.length === 0) {
                 controlsContent.innerHTML = '<div class="controls-placeholder">No exported controls</div>';
                 return;
             }
             
             let html = '';
             
-            for (const [procName, info] of Object.entries(exports)) {
-                html += `<div class="control-group" data-proc="${procName}">`;
-                html += `<div class="control-proc-name">${procName}</div>`;
-                
-                if (info.params && info.params.length > 0) {
-                    for (const param of info.params) {
-                        html += renderParamControl(procName, param);
+            // New setup/adjuster system
+            if (setupNames.length > 0) {
+                // Setup tabs (if multiple setups)
+                if (setupNames.length > 1) {
+                    html += '<div class="setup-tabs" style="display:flex;border-bottom:1px solid var(--border);margin-bottom:8px;">';
+                    for (const name of setupNames) {
+                        const isActive = name === activeSetup ? 'active' : '';
+                        const style = isActive ? 
+                            'color:var(--bg-primary);border-bottom:2px solid var(--bg-primary);' : 
+                            'color:var(--text-muted);border-bottom:2px solid transparent;';
+                        html += `<button style="padding:6px 12px;font-size:11px;background:transparent;border:none;cursor:pointer;${style}" 
+                                         onclick="switchSetup('${name}')">${name}</button>`;
                     }
+                    html += '</div>';
                 }
                 
-                html += `
-                    <div class="control-actions">
-                        <button class="primary" onclick="runProc('${procName}')">▶ Run</button>
-                    </div>
-                `;
-                html += '</div>';
+                // Render active setup (or first if none active)
+                const setupName = activeSetup || setupNames[0];
+                html += renderSetupControls(setupName);
+            }
+            
+            // Legacy exports (if any and no setups)
+            if (setupNames.length === 0 && exportNames.length > 0) {
+                for (const procName of exportNames) {
+                    html += renderLegacyProcControls(procName);
+                }
             }
             
             controlsContent.innerHTML = html;
         }
 
-        function renderParamControl(procName, param) {
-            const inputId = `param_${procName}_${param.name}`.replace(/::/g, '_').replace(/[^a-zA-Z0-9_]/g, '_');
+        function renderSetupControls(setupName) {
+            const setup = currentSetups[setupName];
+            if (!setup) return '';
+            
+            let html = '';
+            
+            // Setup section
+            html += '<div class="control-group">';
+            html += `<div class="control-proc-name">${setup.proc}</div>`;
+            
+            // Setup parameters
+            if (setup.params && setup.params.length > 0) {
+                for (const param of setup.params) {
+                    html += renderParamControl('setup', setupName, param);
+                }
+            }
+            
+            // Run button
+            html += `
+                <div class="control-actions">
+                    <button class="primary" onclick="runSetup('${setupName}')">▶ Run Setup</button>
+                </div>
+            `;
+            html += '</div>';
+            
+            // Adjusters section (only show adjusters for this setup)
+            const setupAdjusters = setup.adjusters || [];
+            if (setupAdjusters.length > 0) {
+                html += '<div class="control-group">';
+                html += '<div class="control-proc-name" style="color:var(--text-muted);font-size:10px;">ADJUSTERS</div>';
+                
+                for (const adjName of setupAdjusters) {
+                    const adj = currentAdjusters[adjName];
+                    if (!adj) continue;
+                    
+                    // Show adjuster params with label indicating target
+                    if (adj.params && adj.params.length > 0) {
+                        for (const param of adj.params) {
+                            // Add target info to label
+                            const labelSuffix = adj.target ? ` (${adj.target})` : '';
+                            const paramWithLabel = {...param};
+                            paramWithLabel.label = (param.label || param.name) + labelSuffix;
+                            html += renderParamControl('adjuster', adjName, paramWithLabel);
+                        }
+                    }
+                }
+                
+                html += '</div>';
+            }
+            
+            return html;
+        }
+
+        function renderLegacyProcControls(procName) {
+            const info = currentExports[procName];
+            if (!info) return '';
+            
+            let html = `<div class="control-group" data-proc="${procName}">`;
+            html += `<div class="control-proc-name">${procName}</div>`;
+            
+            if (info.params && info.params.length > 0) {
+                for (const param of info.params) {
+                    html += renderParamControl('legacy', procName, param);
+                }
+            }
+            
+            html += `
+                <div class="control-actions">
+                    <button class="primary" onclick="runLegacyProc('${procName}')">▶ Run</button>
+                </div>
+            `;
+            html += '</div>';
+            
+            return html;
+        }
+
+        function renderParamControl(type, parentName, param) {
+            const inputId = `param_${type}_${parentName}_${param.name}`.replace(/[^a-zA-Z0-9_]/g, '_');
             const defaultVal = param.default !== undefined ? param.default : (param.min !== undefined ? param.min : '');
             const label = param.label || param.name;
             const unit = param.unit || '';
@@ -1476,9 +1586,10 @@
                     html += `
                         <input type="range" 
                                id="${inputId}" 
-                               data-proc="${procName}"
+                               data-control-type="${type}"
+                               data-parent="${parentName}"
                                data-param="${param.name}"
-                               data-type="${param.type}"
+                               data-paramtype="${param.type}"
                                min="${min}" 
                                max="${max}" 
                                step="${step}" 
@@ -1493,9 +1604,10 @@
                     html += `
                         <input type="checkbox" 
                                id="${inputId}"
-                               data-proc="${procName}"
+                               data-control-type="${type}"
+                               data-parent="${parentName}"
                                data-param="${param.name}"
-                               data-type="bool"
+                               data-paramtype="bool"
                                ${defaultVal ? 'checked' : ''}
                                onchange="onParamChange(this)">
                     `;
@@ -1505,9 +1617,10 @@
                     html += `
                         <input type="text" 
                                id="${inputId}"
-                               data-proc="${procName}"
+                               data-control-type="${type}"
+                               data-parent="${parentName}"
                                data-param="${param.name}"
-                               data-type="string"
+                               data-paramtype="string"
                                value="${defaultVal}"
                                onkeydown="if(event.key==='Enter'){onParamChange(this);event.preventDefault();}">
                     `;
@@ -1516,9 +1629,10 @@
                 case 'choice':
                     const choices = param.choices || [];
                     html += `<select id="${inputId}" 
-                                     data-proc="${procName}"
+                                     data-control-type="${type}"
+                                     data-parent="${parentName}"
                                      data-param="${param.name}"
-                                     data-type="choice"
+                                     data-paramtype="choice"
                                      onchange="onParamChange(this)">`;
                     for (const choice of choices) {
                         const selected = choice === defaultVal ? 'selected' : '';
@@ -1530,9 +1644,10 @@
                 default:
                     html += `<input type="text" 
                                     id="${inputId}"
-                                    data-proc="${procName}"
+                                    data-control-type="${type}"
+                                    data-parent="${parentName}"
                                     data-param="${param.name}"
-                                    data-type="${param.type}"
+                                    data-paramtype="${param.type}"
                                     value="${defaultVal}"
                                     onchange="onParamChange(this)">`;
             }
@@ -1541,6 +1656,9 @@
             return html;
         }
 
+        // ============================================================
+        // Parameter Change Handling
+        // ============================================================
         function onParamChange(el) {
             // Update displayed value for sliders
             const valSpan = document.getElementById(el.id + '_val');
@@ -1548,20 +1666,106 @@
                 valSpan.textContent = el.value;
             }
             
-            // Live update if enabled - immediate, no throttle
+            // Live update if enabled
             if (document.getElementById('liveUpdate').checked) {
-                runProc(el.dataset.proc);
+                const type = el.dataset.controlType;
+                const parentName = el.dataset.parent;
+                
+                if (type === 'setup') {
+                    runSetup(parentName);
+                } else if (type === 'adjuster') {
+                    runAdjuster(parentName);
+                } else if (type === 'legacy') {
+                    runLegacyProc(parentName);
+                }
             }
         }
 
-        function runProc(procName) {
+        // ============================================================
+        // Setup/Adjuster/Legacy Execution
+        // ============================================================
+        function switchSetup(setupName) {
+            activeSetup = setupName;
+            renderControls();
+            runSetup(setupName);
+        }
+
+        function runSetup(setupName) {
+            const setup = currentSetups[setupName];
+            if (!setup) return;
+            
+            const args = collectParamValues('setup', setupName, setup.params);
+            const cmd = `workspace::invoke_setup ${setupName} ${args.join(' ')}`;
+            
+            connection.eval(cmd).then(async result => {
+                activeSetup = setupName;
+                if (result) {
+                    addLogEntry('', result);
+                }
+                
+                // Re-fetch file info to get any auto-generated adjusters
+                try {
+                    const fileInfoJson = await connection.eval(`workspace::get_file_info "${currentFile}"`);
+                    const fileInfo = JSON.parse(fileInfoJson);
+                    
+                    // Update adjusters (setups and exports don't change)
+                    const newAdjusters = fileInfo.adjusters || {};
+                    
+                    // Check if adjusters changed
+                    const oldKeys = Object.keys(currentAdjusters).sort().join(',');
+                    const newKeys = Object.keys(newAdjusters).sort().join(',');
+                    
+                    if (oldKeys !== newKeys) {
+                        currentAdjusters = newAdjusters;
+                        renderControls();
+                        addLogEntry('info', 'Controls updated with auto-generated adjusters');
+                    }
+                } catch (e) {
+                    // Ignore errors - auto-refresh is optional
+                    console.log('Could not refresh adjusters:', e);
+                }
+            }).catch(e => {
+                addLogEntry('error', e.message);
+            });
+        }
+
+        function runAdjuster(adjusterName) {
+            const adj = currentAdjusters[adjusterName];
+            if (!adj) return;
+            
+            const args = collectParamValues('adjuster', adjusterName, adj.params);
+            const cmd = `workspace::invoke_adjuster ${adjusterName} ${args.join(' ')}`;
+            
+            connection.eval(cmd).then(result => {
+                if (result) {
+                    addLogEntry('', result);
+                }
+            }).catch(e => {
+                addLogEntry('error', e.message);
+            });
+        }
+
+        function runLegacyProc(procName) {
             const info = currentExports[procName];
             if (!info) return;
             
+            const args = collectParamValues('legacy', procName, info.params);
+            const cmd = `${procName} ${args.join(' ')}`;
+            
+            connection.eval(cmd).then(result => {
+                if (result) {
+                    addLogEntry('', result);
+                }
+            }).catch(e => {
+                addLogEntry('error', e.message);
+            });
+        }
+
+        function collectParamValues(type, parentName, params) {
             const args = [];
             
-            for (const param of info.params) {
-                const inputId = `param_${procName}_${param.name}`.replace(/::/g, '_').replace(/[^a-zA-Z0-9_]/g, '_');
+            for (const param of (params || [])) {
+                const inputId = `param_${type}_${parentName}_${param.name}`.replace(/[^a-zA-Z0-9_]/g, '_');
                 const el = document.getElementById(inputId);
                 if (!el) continue;
                 
@@ -1582,14 +1786,7 @@
                 args.push(value);
             }
             
-            const cmd = `${procName} ${args.join(' ')}`;
-            connection.eval(cmd).then(result => {
-                if (result) {
-                    addLogEntry('', result);
-                }
-            }).catch(e => {
-                addLogEntry('error', e.message);
-            });
+            return args;
         }
 
         function refreshWorkspaces() {
@@ -1599,7 +1796,10 @@
             // Clear current selection
             currentWorkspace = null;
             currentFile = null;
+            currentSetups = {};
+            currentAdjusters = {};
             currentExports = {};
+            activeSetup = null;
             
             // Clear controls panel
             controlsContent.innerHTML = '<div class="controls-placeholder">Select a file to see controls</div>';
