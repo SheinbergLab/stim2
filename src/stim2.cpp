@@ -93,7 +93,7 @@ static int RefreshRate;
 static float FrameDuration;
 int     winWidth = 640;
 static int      winWidth_2;
-int     winHeight = 480;
+int     winHeight = 340;
 static int      winX = 10;
 static int      winY = 10;
 static int      currentEye = 0; /* flag denoting which eye's being drawn */
@@ -2845,7 +2845,7 @@ main(int argc, char *argv[]) {
   bool fullscreen = false;
   bool help = false;
   bool borderless = false;
-  int width = 640, height = 480;
+  int width = 640, height = 340;
   int xpos = 30, ypos = 30;
   float refresh = 60;
   int interval = 2;
