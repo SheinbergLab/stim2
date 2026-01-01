@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <tcl.h>
 #include <stim2.h>
 #include "objname.h"
