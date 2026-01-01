@@ -158,6 +158,7 @@ endif()
 set(STIM2_SOURCES
     src/stim2.cpp
     src/objgroup.c
+    src/objname.c
     src/grobj.c
     src/tclproc.c
     src/prmutil.c
@@ -351,6 +352,14 @@ elseif(APPLE)
         COMPONENT stim2
     )
 
+    # Add fonts
+    message("Bundling fonts from fonts/")
+    install(
+        DIRECTORY fonts/
+        DESTINATION ${APP_BUNDLE}/Contents/Resources/fonts
+        COMPONENT stim2
+    )
+
     # Add config
     set(CONFIG_SCRIPT config/stim2.cfg)
     message("Bundling config script: ${CONFIG_SCRIPT}")
@@ -480,6 +489,14 @@ else()
     install(
         DIRECTORY assets/
         DESTINATION "/usr/local/stim2/assets"
+        COMPONENT stim2
+    )
+    
+    # Add fonts
+    message("Bundling assets from fonts/")
+    install(
+        DIRECTORY fonts/
+        DESTINATION "/usr/local/stim2/fonts"
         COMPONENT stim2
     )
     
