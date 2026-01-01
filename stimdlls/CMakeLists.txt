@@ -1,296 +1,185 @@
-cmake_minimum_required(VERSION 3.15)
-project(stimdlls)
+#!/usr/bin/env tclsh
+#
+# testspine.tcl - Test script for spine module
+#
+# Demonstrates:
+#   - Loading spine characters with new scaling API
+#   - Creating copies for multiple instances
+#   - Animation control
+#   - New bounding box extraction for physics integration
+#
 
-set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_BUILD_TYPE Release)
+# Uncomment to load module if not auto-loaded
+# load_modules spine
 
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+#----------------------------------------------------------------------
+# Configuration
+#----------------------------------------------------------------------
 
-###############################
-# Platform Detection
-###############################
-option(STIM2_USE_GLES "use GLES" OFF)
+# Character height in degrees visual angle
+set CHARACTER_HEIGHT 3.0
 
-if(UNIX AND NOT APPLE)
-    set(LINUX TRUE)
-endif()
+# Grid layout - spacing should be >= character size to avoid overlap
+set GRID_COLS 5
+set GRID_ROWS 3
+set GRID_SPACING_X 4.0
+set GRID_SPACING_Y 4.0
 
-# Auto-detect Raspberry Pi
-if(LINUX AND (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm"))
-    message(STATUS "Linux ARM detected - assuming Raspberry Pi, enabling GLES")
-    set(STIM2_USE_GLES ON)
-endif()
+# Center characters vertically? (Spine origin is usually at feet)
+set CENTER_VERTICALLY 1
 
-message(STATUS "Platform: ${CMAKE_SYSTEM_NAME} / ${CMAKE_SYSTEM_PROCESSOR}")
-message(STATUS "STIM2_USE_GLES: ${STIM2_USE_GLES}")
-
-###############################
-# Common Definitions
-###############################
-add_definitions(-DUSE_TCL_STUBS)
-
-if(STIM2_USE_GLES)
-    add_definitions(-DSTIM2_USE_GLES=1)
-endif()
-
-if(LINUX)
-    add_definitions(-DLINUX)
-endif()
-
-###############################
-# Paths
-###############################
-set(APP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../src")
-set(SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
-
-# Common include directories
-include_directories(
-    ${SRC_DIR}
-    ${APP_DIR}
-    ../../dlsh/src/
-    ../../dlsh/src/lablib
-)
-
-# Platform-specific paths
-if(WIN32)
-    include_directories(c:/usr/local/include c:/usr/local/include/freetype)
-    link_directories(c:/usr/local/lib/$ENV{VSCMD_ARG_TGT_ARCH})
-elseif(APPLE)
-    include_directories(
-        /usr/local/include
-        /usr/local/include/freetype2
-        /opt/homebrew/include
-        /opt/homebrew/include/freetype2
-        /opt/homebrew/include/tcl-tk
-    )
-    link_directories(/usr/local/lib /opt/homebrew/lib)
-    set(CMAKE_SKIP_RPATH TRUE)
-else()
-    include_directories(/usr/local/include /usr/include/freetype2)
-    link_directories(/usr/local/lib)
-endif()
-
-# OpenGL
-set(OpenGL_GL_PREFERENCE GLVND)
-find_package(OpenGL REQUIRED)
-include_directories(${OPENGL_INCLUDE_DIR})
-
-###############################
-# Shared Utility Library
-###############################
-# Build common utilities once as a static library
-add_library(stimutils STATIC
-    ${SRC_DIR}/shaderutils.c
-    ${SRC_DIR}/bstrlib.c
-    ${SRC_DIR}/glsw.c
-    ${APP_DIR}/glad.c
-)
-
-# Image loading utilities (used by shader, mesh, spine)
-add_library(stimimage STATIC
-    ${SRC_DIR}/shaderimage.c
-    ${SRC_DIR}/targa.c
-    ${SRC_DIR}/lodepng.c
-)
-
-###############################
-# Platform-specific Libraries
-###############################
-if(WIN32)
-    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-        set(DLSH libdlsh.lib)
-        set(GLFW glfw3.lib)
-        set(TCLLIB tclstub.lib)
-        set(APP_LIB stim2.lib)
-        set(SPINE_LIB spine-c.lib)
-        set(BOX2D_LIB libbox2d.lib)
-        set(FREETYPE freetype.lib)
-        set(PNG libpng16.lib)
-        set(BOX2D_DEF_FILE "${SRC_DIR}/Box2Dstim.def")
-        set(PRMUTIL "${APP_DIR}/prmutil.c")
-    endif()
-elseif(APPLE)
-    set(DLSH dlsh)
-    set(GLFW glfw3)
-    set(TCLLIB tclstub)
-    set(SPINE_LIB spine-c)
-    set(BOX2D_LIB box2D)
-    find_library(FREETYPE NAMES "libfreetype.a")
-    find_library(PNG NAMES "libpng16.a")
-else()
-    # Linux
-    set(DLSH dlsh)
-    set(GLFW glfw3)
-    set(TCLLIB tclstub)
-    set(SPINE_LIB spine-c)
-    find_library(BOX2D_LIB NAMES "libbox2d.a")
-    find_library(LIBDL dl)
-    find_library(LIBPTHREAD pthread)
-    find_library(FREETYPE freetype)    
-endif()
-
-# Common link libraries
-if(APPLE)
-    set(BUNDLE_LOAD "-dynamiclib -undefined dynamic_lookup")
-endif()
-
-set(COMMON_LIBS
-    ${DLSH}
-    ${BUNDLE_LOAD}
-    ${GLFW}
-    ${TCLLIB}
-    ${OPENGL_LIBRARIES}
-    ${LIBDL}
-    ${LIBPTHREAD}
-    ${APP_LIB}
-)
-
-###############################
-# Helper function for modules
-###############################
-function(add_stim_module name)
-    cmake_parse_arguments(MOD "NO_STIMUTILS" "" "SOURCES;LIBS;INCLUDES" ${ARGN})
+#----------------------------------------------------------------------
+# Find spine example files
+#----------------------------------------------------------------------
+proc find_spine_path {} {
+    set search_paths {
+        "./examples/spine/spineboy"
+        "./spine/spineboy"
+        "/Volumes/qpcs/stim2/examples/spine/spineboy"
+        "/shared/qpcs/stim2/examples/spine/spineboy"
+    }
     
-    add_library(${name} SHARED ${MOD_SOURCES})
+    foreach p $search_paths {
+        if {[file exists $p]} {
+            return $p
+        }
+    }
     
-    if(MOD_NO_STIMUTILS)
-        target_link_libraries(${name} ${COMMON_LIBS} ${MOD_LIBS})
-    else()
-        target_link_libraries(${name} stimutils ${COMMON_LIBS} ${MOD_LIBS})
-    endif()
+    error "Could not find spineboy example files"
+}
+
+#----------------------------------------------------------------------
+# Setup scene with grid of spine characters
+#----------------------------------------------------------------------
+proc setup {skel_file atlas_file {height 3.0}} {
+    global GRID_COLS GRID_ROWS GRID_SPACING_X GRID_SPACING_Y
     
-    if(MOD_INCLUDES)
-        target_include_directories(${name} PRIVATE ${MOD_INCLUDES})
-    endif()
+    resetObjList
+    glistInit 2
     
-    # Remove 'lib' prefix on all platforms
-    set_target_properties(${name} PROPERTIES PREFIX "")
+    # Create the original spine object
+    set orig [sp::create $skel_file $atlas_file]
     
-    # Linux: allow unresolved symbols (resolved at load time by host app)
-    if(LINUX)
-        target_link_options(${name} PRIVATE "-Wl,--unresolved-symbols=ignore-in-shared-libs")
-    endif()
-endfunction()
+    # Scale to desired height in degrees
+    sp::fitToHeight $orig $height
+    puts "Spine character scaled to $height degrees (scale: [sp::getScale $orig])"
+    
+    # Report size
+    set size [sp::getSize $orig]
+    puts "Character size: [lindex $size 0] x [lindex $size 1] degrees"
+    
+    # Check for bounding boxes (for physics integration)
+    set bboxes [sp::listBoundingBoxes $orig]
+    if {[llength $bboxes] > 0} {
+        puts "Available bounding boxes:"
+        foreach bb $bboxes {
+            puts "  - [lindex $bb 0]: [lindex $bb 1]"
+        }
+    }
+    
+    # Create grid of copies
+    for {set row 0} {$row < $GRID_ROWS} {incr row} {
+        for {set col 0} {$col < $GRID_COLS} {incr col} {
+            set obj [sp::copy $orig]
+            
+            # Set up animation - idle then walk after random delay
+            sp::setAnimationByName $obj idle 0 1
+            sp::addAnimationByName $obj walk 0 1 [expr {2.0 + 3.0 * rand()}]
+            
+            # Position in grid (centered around origin)
+            set x [expr {($col - $GRID_COLS/2.0 + 0.5) * $GRID_SPACING_X}]
+            set y [expr {($row - $GRID_ROWS/2.0 + 0.5) * $GRID_SPACING_Y}]
+            
+            # Offset to center vertically (Spine origin is at feet)
+            if {$CENTER_VERTICALLY} {
+                set y [expr {$y - $height/2.0}]
+            }
+            
+            translateObj $obj $x $y
+            
+            glistAddObject $obj 0
+        }
+    }
+    
+    glistSetDynamic 0 1
+    
+    return $orig
+}
 
-###############################
-# Modules
-###############################
+#----------------------------------------------------------------------
+# Demo: Extract bounding boxes for physics
+#----------------------------------------------------------------------
+proc show_bounding_boxes {obj} {
+    set boxes [sp::getBoundingBoxes $obj]
+    
+    if {[llength $boxes] == 0} {
+        puts "No active bounding boxes in current pose"
+        return
+    }
+    
+    puts "Current bounding box polygons:"
+    foreach box $boxes {
+        set slot [lindex $box 0]
+        set name [lindex $box 1]
+        set verts [lindex $box 2]
+        
+        puts "  $slot / $name:"
+        puts "    Vertices: [llength $verts] floats ([expr {[llength $verts]/2}] points)"
+        
+        # Print first few vertices
+        if {[llength $verts] >= 4} {
+            puts "    First point: ([lindex $verts 0], [lindex $verts 1])"
+            puts "    Second point: ([lindex $verts 2], [lindex $verts 3])"
+        }
+    }
+}
 
-# Basic modules using just stimutils
-add_stim_module(polygon SOURCES ${SRC_DIR}/polygon.c)
-add_stim_module(image SOURCES ${SRC_DIR}/image.c)
+#----------------------------------------------------------------------
+# Display control
+#----------------------------------------------------------------------
+proc clearscreen {} {
+    glistSetVisible 0
+    redraw
+}
 
-# =============================================================================
-# LunaSVG Integration via FetchContent
-# =============================================================================
-include(FetchContent)
+proc see {{group 0}} {
+    glistSetVisible 1
+    glistSetCurGroup $group
+    redraw
+}
 
-FetchContent_Declare(
-    lunasvg
-    GIT_REPOSITORY https://github.com/sammycage/lunasvg.git
-    GIT_TAG        v3.5.0
-    GIT_SHALLOW    TRUE
-)
+#----------------------------------------------------------------------
+# Main
+#----------------------------------------------------------------------
+set path [find_spine_path]
+puts "Using spine files from: $path"
 
-# Disable examples
-set(LUNASVG_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+# Available characters (uncomment to switch)
+set character "spineboy-pro"
+# set character "stretchyman"
+# set character "vine-pro"  
+# set character "coin-pro"
+# set character "skeleton"
 
-FetchContent_MakeAvailable(lunasvg)
+set skel_file [file join $path ${character}.json]
+set atlas_file [file join $path spineboy.atlas]
 
-# SVG module 
-add_stim_module(svg SOURCES ${SRC_DIR}/svg.cpp LIBS lunasvg::lunasvg)
+# Verify files exist
+if {![file exists $skel_file]} {
+    error "Skeleton file not found: $skel_file"
+}
+if {![file exists $atlas_file]} {
+    error "Atlas file not found: $atlas_file"
+}
 
-# Metagroup module
-add_stim_module(metagroup SOURCES ${SRC_DIR}/metagroup.c)
+# Setup and display
+set orig [setup $skel_file $atlas_file $CHARACTER_HEIGHT]
+see 0
 
-# Shader module with image support
-add_stim_module(shader
-    SOURCES ${SRC_DIR}/shader.c
-    LIBS stimimage 
-)
-
-# Mesh module with image support
-add_stim_module(mesh
-    SOURCES ${SRC_DIR}/mesh.c
-    LIBS stimimage
-)
-
-# Motion patch with simplex noise
-add_stim_module(motionpatch
-    SOURCES ${SRC_DIR}/motionpatch.c ${SRC_DIR}/open-simplex-noise.c
-)
-
-# Spine with image support
-add_stim_module(spine
-    SOURCES ${SRC_DIR}/spine.c
-    LIBS stimimage ${SPINE_LIB}
-)
-
-# Box2D (no stimutils needed)
-if(WIN32)
-    add_stim_module(box2d 
-        NO_STIMUTILS
-        SOURCES ${SRC_DIR}/box2d.c ${APP_DIR}/glad.c
-        LIBS ${BOX2D_LIB} "-def:${BOX2D_DEF_FILE}"
-    )
-else()
-    add_stim_module(box2d 
-        NO_STIMUTILS
-        SOURCES ${SRC_DIR}/box2d.c ${APP_DIR}/glad.c
-        LIBS ${BOX2D_LIB}
-    )
-endif()
-
-# World - 2D game world system
-set(WORLD_SOURCES
-    ${SRC_DIR}/world.c
-    ${SRC_DIR}/world_camera.c
-    ${SRC_DIR}/world_atlas.c
-    ${SRC_DIR}/world_render.c
-    ${SRC_DIR}/world_sprite.c
-    ${SRC_DIR}/world_spritesheet.c    
-    ${SRC_DIR}/world_tilemap.c    
-    ${SRC_DIR}/tmx_xml.cpp
-    ${SRC_DIR}/aseprite_json.cpp
-    ${APP_DIR}/glad.c
-)
-
-add_stim_module(world
-    NO_STIMUTILS
-    SOURCES ${WORLD_SOURCES}
-    INCLUDES ${SRC_DIR}
-    LIBS ${BOX2D_LIB}
-)
-
-find_package(tinyxml2 QUIET)
-if(tinyxml2_FOUND)
-    target_link_libraries(world tinyxml2::tinyxml2)
-else()
-    target_sources(world PRIVATE ${SRC_DIR}/tinyxml2.cpp)
-endif()
-
-###############################
-# Text module 
-###############################
-add_stim_module(text SOURCES ${SRC_DIR}/text.c)
-
-###############################
-# Video module (FFmpeg) - not on Windows
-###############################
-if(NOT WIN32)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(FFMPEG REQUIRED libavformat libavcodec libswscale libavutil)
-
-    add_stim_module(video
-        SOURCES ${SRC_DIR}/video.c
-        INCLUDES ${FFMPEG_INCLUDE_DIRS}
-        LIBS ${FFMPEG_LIBRARIES}
-    )
-
-    # Apple needs rpath for FFmpeg libs
-    if(APPLE)
-        add_custom_command(TARGET video POST_BUILD
-            COMMAND ${CMAKE_INSTALL_NAME_TOOL} -add_rpath "/opt/homebrew/lib" $<TARGET_FILE:video>
-        )
-    endif()
-endif()
+puts ""
+puts "Commands:"
+puts "  see ?group?         - Show display group"
+puts "  clearscreen         - Hide all"
+puts "  show_bounding_boxes \$orig - Show physics polygons"
+puts "  sp::getSize \$orig   - Get current size in degrees"
+puts "  sp::setScale \$orig val - Set scale directly"
