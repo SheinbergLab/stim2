@@ -1,534 +1,296 @@
 cmake_minimum_required(VERSION 3.15)
-set(CMAKE_CXX_STANDARD 17)
+project(stimdlls)
 
-if(NOT DEFINED PROJECT_VERSION)
-    set(PROJECT_VERSION 0.0.0)
-endif()
-project(stim2 VERSION ${PROJECT_VERSION})
-
+set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_BUILD_TYPE Release)
-# Uncomment for debug builds:
-# set(CMAKE_BUILD_TYPE Debug)
 
-# Platform detection for GLES
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+###############################
+# Platform Detection
+###############################
 option(STIM2_USE_GLES "use GLES" OFF)
-if (CMAKE_SYSTEM_NAME MATCHES "Linux")
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
-        message(STATUS "Linux and aarch/arm -- assuming Raspberry Pi, setting STIM2_USE_GLES.")
-        set(STIM2_USE_GLES ON)
+
+if(UNIX AND NOT APPLE)
+    set(LINUX TRUE)
+endif()
+
+# Auto-detect Raspberry Pi
+if(LINUX AND (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm"))
+    message(STATUS "Linux ARM detected - assuming Raspberry Pi, enabling GLES")
+    set(STIM2_USE_GLES ON)
+endif()
+
+message(STATUS "Platform: ${CMAKE_SYSTEM_NAME} / ${CMAKE_SYSTEM_PROCESSOR}")
+message(STATUS "STIM2_USE_GLES: ${STIM2_USE_GLES}")
+
+###############################
+# Common Definitions
+###############################
+add_definitions(-DUSE_TCL_STUBS)
+
+if(STIM2_USE_GLES)
+    add_definitions(-DSTIM2_USE_GLES=1)
+endif()
+
+if(LINUX)
+    add_definitions(-DLINUX)
+endif()
+
+###############################
+# Paths
+###############################
+set(APP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../src")
+set(SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+# Common include directories
+include_directories(
+    ${SRC_DIR}
+    ${APP_DIR}
+    ../../dlsh/src/
+    ../../dlsh/src/lablib
+)
+
+# Platform-specific paths
+if(WIN32)
+    include_directories(c:/usr/local/include c:/usr/local/include/freetype)
+    link_directories(c:/usr/local/lib/$ENV{VSCMD_ARG_TGT_ARCH})
+elseif(APPLE)
+    include_directories(
+        /usr/local/include
+        /usr/local/include/freetype2
+        /opt/homebrew/include
+        /opt/homebrew/include/freetype2
+        /opt/homebrew/include/tcl-tk
+    )
+    link_directories(/usr/local/lib /opt/homebrew/lib)
+    set(CMAKE_SKIP_RPATH TRUE)
+else()
+    include_directories(/usr/local/include /usr/include/freetype2)
+    link_directories(/usr/local/lib)
+endif()
+
+# OpenGL
+set(OpenGL_GL_PREFERENCE GLVND)
+find_package(OpenGL REQUIRED)
+include_directories(${OPENGL_INCLUDE_DIR})
+
+###############################
+# Shared Utility Library
+###############################
+# Build common utilities once as a static library
+add_library(stimutils STATIC
+    ${SRC_DIR}/shaderutils.c
+    ${SRC_DIR}/bstrlib.c
+    ${SRC_DIR}/glsw.c
+    ${APP_DIR}/glad.c
+)
+
+# Image loading utilities (used by shader, mesh, spine)
+add_library(stimimage STATIC
+    ${SRC_DIR}/shaderimage.c
+    ${SRC_DIR}/targa.c
+    ${SRC_DIR}/lodepng.c
+)
+
+###############################
+# Platform-specific Libraries
+###############################
+if(WIN32)
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(DLSH libdlsh.lib)
+        set(GLFW glfw3.lib)
+        set(TCLLIB tclstub.lib)
+        set(APP_LIB stim2.lib)
+        set(SPINE_LIB spine-c.lib)
+        set(BOX2D_LIB libbox2d.lib)
+        set(FREETYPE freetype.lib)
+        set(PNG libpng16.lib)
+        set(BOX2D_DEF_FILE "${SRC_DIR}/Box2Dstim.def")
+        set(PRMUTIL "${APP_DIR}/prmutil.c")
     endif()
+elseif(APPLE)
+    set(DLSH dlsh)
+    set(GLFW glfw3)
+    set(TCLLIB tclstub)
+    set(SPINE_LIB spine-c)
+    set(BOX2D_LIB box2D)
+    find_library(FREETYPE NAMES "libfreetype.a")
+    find_library(PNG NAMES "libpng16.a")
+else()
+    # Linux
+    set(DLSH dlsh)
+    set(GLFW glfw3)
+    set(TCLLIB tclstub)
+    set(SPINE_LIB spine-c)
+    find_library(BOX2D_LIB NAMES "libbox2d.a")
+    find_library(LIBDL dl)
+    find_library(LIBPTHREAD pthread)
+    find_library(FREETYPE freetype)    
 endif()
-message(STATUS "${CMAKE_SYSTEM_NAME} and ${CMAKE_SYSTEM_PROCESSOR}: STIM2_USE_GLES=${STIM2_USE_GLES}")
 
-if (STIM2_USE_GLES)
-    add_definitions(-DSTIM2_USE_GLES)
+# Common link libraries
+if(APPLE)
+    set(BUNDLE_LOAD "-dynamiclib -undefined dynamic_lookup")
 endif()
 
-# ImGui configuration
-add_definitions(-DIMGUI_IMPL_OPENGL_LOADER_GLAD)
-set(IMGUI_DIR "imgui")
+set(COMMON_LIBS
+    ${DLSH}
+    ${BUNDLE_LOAD}
+    ${GLFW}
+    ${TCLLIB}
+    ${OPENGL_LIBRARIES}
+    ${LIBDL}
+    ${LIBPTHREAD}
+    ${APP_LIB}
+)
+
+###############################
+# Helper function for modules
+###############################
+function(add_stim_module name)
+    cmake_parse_arguments(MOD "NO_STIMUTILS" "" "SOURCES;LIBS;INCLUDES" ${ARGN})
+    
+    add_library(${name} SHARED ${MOD_SOURCES})
+    
+    if(MOD_NO_STIMUTILS)
+        target_link_libraries(${name} ${COMMON_LIBS} ${MOD_LIBS})
+    else()
+        target_link_libraries(${name} stimutils ${COMMON_LIBS} ${MOD_LIBS})
+    endif()
+    
+    if(MOD_INCLUDES)
+        target_include_directories(${name} PRIVATE ${MOD_INCLUDES})
+    endif()
+    
+    # Remove 'lib' prefix on all platforms
+    set_target_properties(${name} PROPERTIES PREFIX "")
+    
+    # Linux: allow unresolved symbols (resolved at load time by host app)
+    if(UNIX AND NOT APPLE)
+        target_link_options(${name} PRIVATE "-Wl,--unresolved-symbols=ignore-in-shared-libs")
+    endif()
+endfunction()
+
+###############################
+# Modules
+###############################
+
+# Basic modules using just stimutils
+add_stim_module(polygon SOURCES ${SRC_DIR}/polygon.c)
+add_stim_module(image SOURCES ${SRC_DIR}/image.c)
 
 # =============================================================================
-# uWebSockets and uSockets setup
+# LunaSVG Integration via FetchContent
 # =============================================================================
 include(FetchContent)
 
-# Set timeouts for FetchContent
-set(FETCHCONTENT_QUIET OFF)
-set(CMAKE_TIMEOUT 120)
-
 FetchContent_Declare(
-    uwebsockets
-    GIT_REPOSITORY https://github.com/uNetworking/uWebSockets.git
-    GIT_TAG        v20.62.0
-    GIT_SHALLOW    TRUE
-    GIT_SUBMODULES ""
-    TIMEOUT        120
-)
-
-FetchContent_Declare(
-    usockets
-    GIT_REPOSITORY https://github.com/uNetworking/uSockets.git
-    GIT_TAG        v0.8.8
-    GIT_SHALLOW    TRUE
-    GIT_SUBMODULES ""
-    TIMEOUT        120
-)
-
-FetchContent_Declare(
-    json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG        v3.11.3
+    lunasvg
+    GIT_REPOSITORY https://github.com/sammycage/lunasvg.git
+    GIT_TAG        v3.5.0
     GIT_SHALLOW    TRUE
 )
 
-FetchContent_MakeAvailable(usockets uwebsockets json)
+# Disable examples
+set(LUNASVG_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
-# Add uWebSockets include directories
-include_directories(${uwebsockets_SOURCE_DIR}/src)
-include_directories(${usockets_SOURCE_DIR}/src)
+FetchContent_MakeAvailable(lunasvg)
 
-# Disable SSL support in uWebSockets (we don't need it)
-add_definitions(-DUWS_NO_ZLIB)
-add_definitions(-DLIBUS_NO_SSL)
+# SVG module 
+add_stim_module(svg SOURCES ${SRC_DIR}/svg.cpp LIBS lunasvg::lunasvg)
 
-# Build uSockets library
-set(USOCKETS_SOURCES
-    ${usockets_SOURCE_DIR}/src/bsd.c
-    ${usockets_SOURCE_DIR}/src/context.c
-    ${usockets_SOURCE_DIR}/src/loop.c
-    ${usockets_SOURCE_DIR}/src/socket.c
+# Metagroup module
+add_stim_module(metagroup SOURCES ${SRC_DIR}/metagroup.c)
+
+# Shader module with image support
+add_stim_module(shader
+    SOURCES ${SRC_DIR}/shader.c
+    LIBS stimimage 
 )
 
-# Platform-specific event loop
-if(APPLE OR WIN32)
-    list(APPEND USOCKETS_SOURCES ${usockets_SOURCE_DIR}/src/eventing/libuv.c)
-    set(WITH_LIBUV 1)
-else()
-    list(APPEND USOCKETS_SOURCES ${usockets_SOURCE_DIR}/src/eventing/epoll_kqueue.c)
-    set(WITH_LIBUV 0)
-endif()
+# Mesh module with image support
+add_stim_module(mesh
+    SOURCES ${SRC_DIR}/mesh.c
+    LIBS stimimage
+)
 
-# Check for additional source files
-if(EXISTS ${usockets_SOURCE_DIR}/src/loop_data.c)
-    list(APPEND USOCKETS_SOURCES ${usockets_SOURCE_DIR}/src/loop_data.c)
-endif()
+# Motion patch with simplex noise
+add_stim_module(motionpatch
+    SOURCES ${SRC_DIR}/motionpatch.c ${SRC_DIR}/open-simplex-noise.c
+)
 
-# NOTE: NOT adding SSL support - we don't need it for stim2
-# (SSL files would be src/crypto/openssl.c and src/crypto/sni_tree.cpp)
+# Spine with image support
+add_stim_module(spine
+    SOURCES ${SRC_DIR}/spine.c
+    LIBS stimimage ${SPINE_LIB}
+)
 
-message(STATUS "Building uSockets with sources: ${USOCKETS_SOURCES}")
-
-# Create uSockets library
-add_library(usockets STATIC ${USOCKETS_SOURCES})
-
-# NO SSL support - we don't need it for stim2
-# (This avoids OpenSSL dependency)
-
-# Platform-specific event loop configuration
+# Box2D (no stimutils needed)
 if(WIN32)
-    target_compile_definitions(usockets PRIVATE LIBUS_USE_LIBUV)
-    set(USOCKETS_LIBS ws2_32)
-elseif(APPLE)
-    target_compile_definitions(usockets PRIVATE LIBUS_USE_LIBUV)
-    find_library(LIBUV_LIBRARIES NAMES uv libuv REQUIRED)
-    if(NOT LIBUV_LIBRARIES)
-        message(FATAL_ERROR "libuv is required on macOS. Install with: brew install libuv")
-    endif()
-    target_link_libraries(usockets PRIVATE ${LIBUV_LIBRARIES})
-    set(USOCKETS_LIBS ${LIBUV_LIBRARIES})
+    add_stim_module(box2d 
+        NO_STIMUTILS
+        SOURCES ${SRC_DIR}/box2d.c ${APP_DIR}/glad.c
+        LIBS ${BOX2D_LIB} "-def:${BOX2D_DEF_FILE}"
+    )
 else()
-    target_compile_definitions(usockets PRIVATE LIBUS_USE_EPOLL)
-    set(USOCKETS_LIBS)
+    add_stim_module(box2d 
+        NO_STIMUTILS
+        SOURCES ${SRC_DIR}/box2d.c ${APP_DIR}/glad.c
+        LIBS ${BOX2D_LIB}
+    )
 endif()
 
-# Add compile flags for uSockets
+# World - 2D game world system
+set(WORLD_SOURCES
+    ${SRC_DIR}/world.c
+    ${SRC_DIR}/world_camera.c
+    ${SRC_DIR}/world_atlas.c
+    ${SRC_DIR}/world_render.c
+    ${SRC_DIR}/world_sprite.c
+    ${SRC_DIR}/world_spritesheet.c    
+    ${SRC_DIR}/world_tilemap.c    
+    ${SRC_DIR}/tmx_xml.cpp
+    ${SRC_DIR}/aseprite_json.cpp
+    ${APP_DIR}/glad.c
+)
+
+add_stim_module(world
+    NO_STIMUTILS
+    SOURCES ${WORLD_SOURCES}
+    INCLUDES ${SRC_DIR}
+    LIBS ${BOX2D_LIB}
+)
+
+find_package(tinyxml2 QUIET)
+if(tinyxml2_FOUND)
+    target_link_libraries(world tinyxml2::tinyxml2)
+else()
+    target_sources(world PRIVATE ${SRC_DIR}/tinyxml2.cpp)
+endif()
+
+###############################
+# Text module 
+###############################
+add_stim_module(text SOURCES ${SRC_DIR}/text.c)
+
+###############################
+# Video module (FFmpeg) - not on Windows
+###############################
 if(NOT WIN32)
-    target_compile_options(usockets PRIVATE 
-        $<$<COMPILE_LANGUAGE:C>:-std=c11>
-        -flto
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(FFMPEG REQUIRED libavformat libavcodec libswscale libavutil)
+
+    add_stim_module(video
+        SOURCES ${SRC_DIR}/video.c
+        INCLUDES ${FFMPEG_INCLUDE_DIRS}
+        LIBS ${FFMPEG_LIBRARIES}
     )
-endif()
 
-# =============================================================================
-# Platform-specific include and link directories
-# =============================================================================
-if(WIN32)
-    include_directories(c:/usr/local/include ${IMGUI_DIR} ${IMGUI_DIR}/backends)
-    link_directories(c:/usr/local/lib/$ENV{VSCMD_ARG_TGT_ARCH})
-    add_definitions(-DNOMINMAX -D_WIN32)
-elseif(APPLE)
-    include_directories(
-        "/usr/local/include" 
-        "/opt/homebrew/include" 
-        "/opt/homebrew/include/tcl-tk" 
-        ${IMGUI_DIR} 
-        ${IMGUI_DIR}/backends
-    )
-    link_directories("/usr/local/lib" "/opt/homebrew/lib")
-else()
-    include_directories(/usr/local/include ${IMGUI_DIR} ${IMGUI_DIR}/backends)
-    link_directories(/usr/local/lib)
-    set(LIBDL dl)
-endif()
-
-# =============================================================================
-# Main executable
-# =============================================================================
-set(STIM2_SOURCES
-    src/stim2.cpp
-    src/objgroup.c
-    src/objname.c
-    src/grobj.c
-    src/tclproc.c
-    src/prmutil.c
-    src/timer.cpp
-    src/glad.c
-    src/rawapi.c
-    src/imgui_console.cpp
-    src/WebSocketServer.cpp
-    src/TclCompletion.cpp
-    ${IMGUI_DIR}/imgui.cpp
-    ${IMGUI_DIR}/imgui_demo.cpp
-    ${IMGUI_DIR}/imgui_draw.cpp
-    ${IMGUI_DIR}/imgui_tables.cpp
-    ${IMGUI_DIR}/imgui_widgets.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
-)
-
-if(APPLE)
-    list(APPEND STIM2_SOURCES src/SleepWakeHandler.mm)
-    add_executable(stim2 MACOSX_BUNDLE ${STIM2_SOURCES})
-else()
-    add_executable(stim2 ${STIM2_SOURCES})
-endif()
-
-# Export symbols for shared objects loaded at runtime
-set_property(TARGET stim2 PROPERTY ENABLE_EXPORTS ON)
-
-# =============================================================================
-# Dependencies
-# =============================================================================
-set(OpenGL_GL_PREFERENCE GLVND)
-find_package(OpenGL REQUIRED)
-include_directories(${OPENGL_INCLUDE_DIR} ${TCL_INCLUDE_DIR} src)
-
-# =============================================================================
-# Platform-specific library configuration
-# =============================================================================
-if(WIN32)
-    set(GLFW_LIB glfw3)
-    set(TCLLIB tcl90)
-    set(DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/src/stim2.def")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /NODEFAULTLIB:MSVCRTD /def:${DEF_FILE}")
-    
-    target_link_libraries(stim2 
-        ${GLFW_LIB} 
-        ${TCLLIB} 
-        ${OPENGL_LIBRARIES} 
-        zlibstatic
-        usockets
-        ${USOCKETS_LIBS}
-        nlohmann_json::nlohmann_json
-    )
-    
-elseif(APPLE)
-    find_library(GLFW_LIB NAMES "libglfw3.a" REQUIRED)
-    find_library(TCLLIB "tcl9.0" REQUIRED)
-    
-    get_filename_component(LIBTCL_ACTUAL ${TCLLIB} REALPATH)
-    get_filename_component(LIBTCL_DIR ${LIBTCL_ACTUAL} DIRECTORY)
-    
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -framework Cocoa -framework IOKit -framework OpenGL -framework QuartzCore")
-    
-    # Export symbols for dynamically loaded modules (stimdlls)
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-export_dynamic")
-    
-    target_link_libraries(stim2 
-        ${GLFW_LIB} 
-        ${TCLLIB} 
-        ${OPENGL_LIBRARIES} 
-        z
-        usockets
-        ${USOCKETS_LIBS}
-        nlohmann_json::nlohmann_json
-    )
-    
-else()
-    # Linux
-    set(GLFW_LIB glfw3)
-    find_library(GLFW NAMES "libglfw3.a")
-    find_library(LIBDL dl REQUIRED)
-    find_library(LIBPTHREAD pthread REQUIRED)
-    find_library(TCLLIB tcl9.0 REQUIRED)
-    
-    add_link_options("-rdynamic")
-    
-    target_link_libraries(stim2 
-        ${GLFW_LIB} 
-        ${TCLLIB} 
-        ${OPENGL_LIBRARIES} 
-        ${LIBDL} 
-        ${LIBPTHREAD} 
-        z
-        usockets
-        ${USOCKETS_LIBS}
-        nlohmann_json::nlohmann_json
-    )
-endif()
-
-# =============================================================================
-# Installation
-# =============================================================================
-set(CPACK_PACKAGE_NAME stim2)
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Multiplatform OpenGL presentation program.")
-set(CPACK_PACKAGE_CONTACT SheinbergLab)
-set(CPACK_PACKAGE_VENDOR SheinbergLab)
-set(CPACK_COMPONENTS_ALL stim2)
-
-if(WIN32)
-    install(TARGETS stim2 DESTINATION bin)
-    
-elseif(APPLE)
-    # macOS bundle configuration
-    set_target_properties(stim2 PROPERTIES
-        MACOSX_BUNDLE TRUE
-        MACOSX_BUNDLE_BUNDLE_NAME stim2
-        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
-        MACOSX_BUNDLE_GUI_IDENTIFIER org.sheinberglab.stim2
-        MACOSX_BUNDLE_ICON_FILE stim2
-    )
-    
-    # Copy app icon
-    target_sources(stim2 PRIVATE ${CMAKE_SOURCE_DIR}/macos/stim2.icns)
-    set_source_files_properties(${CMAKE_SOURCE_DIR}/macos/stim2.icns 
-        PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
-    
-    set(CMAKE_SKIP_RPATH TRUE)
-    set(APP_BUNDLE ${CMAKE_BINARY_DIR}/Release/stim2.app)
-    
-    # Fix up bundle
-    install(
-        CODE "include(BundleUtilities)
-        set(BU_CHMOD_BUNDLE_ITEMS ON)
-        fixup_bundle(\"${APP_BUNDLE}\" \"\" \"\")"
-        COMPONENT stim2
-    )
-    
-    # Copy TCL library files
-    if(LIBTCL_DIR)
-        install(
-            DIRECTORY ${LIBTCL_DIR}/tcl9.0/
-            DESTINATION ${APP_BUNDLE}/Contents/lib/tcl9.0
-            COMPONENT stim2
+    # Apple needs rpath for FFmpeg libs
+    if(APPLE)
+        add_custom_command(TARGET video POST_BUILD
+            COMMAND ${CMAKE_INSTALL_NAME_TOOL} -add_rpath "/opt/homebrew/lib" $<TARGET_FILE:video>
         )
     endif()
-    
-    # Add stimdlls
-    file(GLOB STIMDLLS stimdlls/build/Release/*.dylib)
-    message("Bundling STIMDLLS: ${STIMDLLS}")
-    install(
-        FILES ${STIMDLLS}
-        DESTINATION ${APP_BUNDLE}/Contents/MacOS/stimdlls
-        COMPONENT stim2
-    )
-    
-    # Add shaders
-    file(GLOB STIM_SHADERS shaders/*.glsl)
-    message("Bundling shaders: ${STIM_SHADERS}")
-    install(
-        FILES ${STIM_SHADERS}
-        DESTINATION ${APP_BUNDLE}/Contents/Resources/shaders
-        COMPONENT stim2
-    )
-    
-    # Add modules (Tcl modules for workspace system)
-    message("Bundling modules from modules/")
-    install(
-        DIRECTORY modules/
-        DESTINATION ${APP_BUNDLE}/Contents/Resources/modules
-        COMPONENT stim2
-        FILES_MATCHING 
-        PATTERN "*.tm"
-    )
-    
-    # Add examples
-    message("Bundling examples from examples/")
-    install(
-        DIRECTORY examples/
-        DESTINATION ${APP_BUNDLE}/Contents/Resources/examples
-        COMPONENT stim2
-        FILES_MATCHING 
-        PATTERN "*.tcl"
-        PATTERN "INDEX"
-    )
-
-    # Add assets
-    message("Bundling assets from assets/")
-    install(
-        DIRECTORY assets/
-        DESTINATION ${APP_BUNDLE}/Contents/Resources/assets
-        COMPONENT stim2
-    )
-
-    # Add fonts
-    message("Bundling fonts from fonts/")
-    install(
-        DIRECTORY fonts/
-        DESTINATION ${APP_BUNDLE}/Contents/Resources/fonts
-        COMPONENT stim2
-    )
-
-    # Add config
-    set(CONFIG_SCRIPT config/stim2.cfg)
-    message("Bundling config script: ${CONFIG_SCRIPT}")
-    install(
-        FILES ${CONFIG_SCRIPT}
-        DESTINATION ${APP_BUNDLE}/Contents/Resources
-        COMPONENT stim2
-    )
-    
-    # Add www directory for WebSocket console (preserves subdirectories)
-    message("Bundling web console from www/")
-    install(
-        DIRECTORY www/
-        DESTINATION ${APP_BUNDLE}/Contents/Resources/www
-        COMPONENT stim2
-        FILES_MATCHING 
-        PATTERN "*.html"
-        PATTERN "*.css"
-        PATTERN "*.js"
-    )
-    
-    # Make stimdlls relocatable
-    set(DYLIBBUNDLER_COMMAND "dylibbundler --bundle-deps -s /usr/local/lib -s deps/bink/lib/macos --dest-dir ${APP_BUNDLE}/Contents/Frameworks --install-path @rpath")
-    install(
-        CODE "file(GLOB BUNDLE_STIMDLLS ${APP_BUNDLE}/Contents/MacOS/stimdlls/*.dylib)"
-        CODE "list(JOIN BUNDLE_STIMDLLS \" -x \" FIX_FILES)"
-        CODE "separate_arguments(FIX_FILES_ARGS UNIX_COMMAND \$\{FIX_FILES\})"
-        CODE "message(\"Fixing stimdlls:\")"
-        CODE "execute_process(COMMAND_ECHO STDOUT COMMAND ${DYLIBBUNDLER_COMMAND} -x \$\{FIX_FILES_ARGS\})"
-        CODE "execute_process(COMMAND_ECHO STDOUT COMMAND ${CMAKE_INSTALL_NAME_TOOL} -add_rpath @executable_path/../Frameworks $<TARGET_FILE:stim2>)"
-        CODE "execute_process(COMMAND_ECHO STDOUT COMMAND rm -f ${APP_BUNDLE}/Contents/Frameworks/libdlsh.dylib)"
-        COMPONENT stim2
-    )
-    
-    # Code signing (if configured)
-    if(DEFINED "CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM")
-        set(CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--strict --timestamp --options=runtime")
-        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_INJECT_BASE_ENTITLEMENTS "NO")
-        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Manual")
-        set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0")
-        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "Developer ID Application")
-        
-        set(CODESIGN_COMMAND /usr/bin/codesign --force --verify ${CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS} --entitlements ${CMAKE_CURRENT_SOURCE_DIR}/macos/stim2.entitlements --sign)
-        install(
-            CODE "file(GLOB BUNDLE_DYLIBS ${APP_BUNDLE}/Contents/Frameworks/*.dylib)"
-            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" \$\{BUNDLE_DYLIBS\})"
-            CODE "file(GLOB BUNDLE_STIMDLLS ${APP_BUNDLE}/Contents/MacOS/stimdlls/*.dylib)"
-            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" \$\{BUNDLE_STIMDLLS\})"
-            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" ${APP_BUNDLE}/Contents/MacOS/stim2)"
-            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" ${APP_BUNDLE})"
-            COMPONENT stim2
-        )
-    endif()
-    
-    install(TARGETS stim2 BUNDLE DESTINATION . COMPONENT stim2)
-    
-else()
-    # Linux
-    set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
-    
-    # Distro suffix for Debian packages
-    if(NOT DEFINED DISTRO_SUFFIX)
-        set(DISTRO_SUFFIX "")
-    endif()
-    
-    # Normalize architecture name
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
-        set(PACKAGE_ARCH "arm64")
-    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
-        set(PACKAGE_ARCH "amd64")
-    else()
-        set(PACKAGE_ARCH ${CMAKE_SYSTEM_PROCESSOR})
-    endif()
-    
-    if(DISTRO_SUFFIX)
-        set(CPACK_DEBIAN_FILE_NAME "${PROJECT_NAME}_${PROJECT_VERSION}_${PACKAGE_ARCH}_${DISTRO_SUFFIX}.deb")
-    else()
-        set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
-    endif()
-    
-    set(CPACK_DEBIAN_PACKAGE_DEPENDS "zlib1g, libc6, libdecor-0-0, libegl1, libglx0, libopengl0, libwayland-client0, libwayland-cursor0, libwayland-egl1, libx11-6, libx11-xcb1, libxcursor1, libxext6, libxi6, libxinerama1, libxkbcommon0, libxrandr2, libxrender1, mesa-utils, libgl1-mesa-dri, libegl-mesa0, libopenal1, libfreetype6, cage, mpv")
-    set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA ${CMAKE_CURRENT_SOURCE_DIR}/dpkg/postinst)
-    
-    install(TARGETS stim2 DESTINATION "/usr/local/stim2")
-    
-    # Add stimdlls
-    file(GLOB STIMDLLS stimdlls/build/*.so)
-    message("Adding STIMDLLS: ${STIMDLLS}")
-    install(
-        FILES ${STIMDLLS}
-        DESTINATION "/usr/local/stim2/stimdlls"
-        COMPONENT stim2
-    )
-    
-    # Add shaders
-    file(GLOB STIM_SHADERS shaders/*.glsl)
-    message("Adding shaders: ${STIM_SHADERS}")
-    install(
-        FILES ${STIM_SHADERS}
-        DESTINATION "/usr/local/stim2/shaders"
-        COMPONENT stim2
-    )
-    
-    # Add modules (Tcl modules for workspace system)
-    message("Bundling modules from modules/")
-    install(
-        DIRECTORY modules/
-        DESTINATION "/usr/local/stim2/modules"
-        COMPONENT stim2
-        FILES_MATCHING 
-        PATTERN "*.tm"
-    )
-    
-    # Add examples
-    message("Bundling examples from examples/")
-    install(
-        DIRECTORY examples/
-        DESTINATION "/usr/local/stim2/examples"
-        COMPONENT stim2
-        FILES_MATCHING 
-        PATTERN "*.tcl"
-        PATTERN "INDEX"
-    )
-
-    # Add assets
-    message("Bundling assets from assets/")
-    install(
-        DIRECTORY assets/
-        DESTINATION "/usr/local/stim2/assets"
-        COMPONENT stim2
-    )
-    
-    # Add fonts
-    message("Bundling assets from fonts/")
-    install(
-        DIRECTORY fonts/
-        DESTINATION "/usr/local/stim2/fonts"
-        COMPONENT stim2
-    )
-    
-    # Add www directory for WebSocket console (preserves subdirectories)
-    message("Bundling web console from www/")
-    install(
-        DIRECTORY www/
-        DESTINATION "/usr/local/stim2/www"
-        COMPONENT stim2
-        FILES_MATCHING 
-        PATTERN "*.html"
-        PATTERN "*.css"
-        PATTERN "*.js"
-    )
-    
-    # Add config
-    set(CONFIG_SCRIPT config/linux.cfg)
-    message("Bundling config script: ${CONFIG_SCRIPT}")
-    install(
-        FILES ${CONFIG_SCRIPT}
-        DESTINATION /usr/local/stim2/config
-        COMPONENT stim2
-    )
-    
-    # Add systemd service
-    set(SYSTEMD_SCRIPT systemd/stim2.service)
-    message("Bundling systemd service: ${SYSTEMD_SCRIPT}")
-    install(
-        FILES ${SYSTEMD_SCRIPT}
-        DESTINATION /usr/local/stim2/systemd
-        COMPONENT stim2
-    )
 endif()
-
-include(CPack)
