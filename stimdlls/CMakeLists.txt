@@ -110,7 +110,6 @@ if(WIN32)
         set(PRMUTIL "${APP_DIR}/prmutil.c")
     endif()
 elseif(APPLE)
-    set(BUNDLE_LOAD "-dynamiclib -undefined dynamic_lookup")
     set(DLSH dlsh)
     set(GLFW glfw3)
     set(TCLLIB tclstub)
@@ -131,6 +130,10 @@ else()
 endif()
 
 # Common link libraries
+if(APPLE)
+    set(BUNDLE_LOAD "-dynamiclib -undefined dynamic_lookup")
+endif()
+
 set(COMMON_LIBS
     ${DLSH}
     ${BUNDLE_LOAD}
@@ -146,13 +149,27 @@ set(COMMON_LIBS
 # Helper function for modules
 ###############################
 function(add_stim_module name)
-    cmake_parse_arguments(MOD "" "" "SOURCES;LIBS" ${ARGN})
+    cmake_parse_arguments(MOD "NO_STIMUTILS" "" "SOURCES;LIBS;INCLUDES" ${ARGN})
     
     add_library(${name} SHARED ${MOD_SOURCES})
-    target_link_libraries(${name} stimutils ${COMMON_LIBS} ${MOD_LIBS})
+    
+    if(MOD_NO_STIMUTILS)
+        target_link_libraries(${name} ${COMMON_LIBS} ${MOD_LIBS})
+    else()
+        target_link_libraries(${name} stimutils ${COMMON_LIBS} ${MOD_LIBS})
+    endif()
+    
+    if(MOD_INCLUDES)
+        target_include_directories(${name} PRIVATE ${MOD_INCLUDES})
+    endif()
     
     # Remove 'lib' prefix on all platforms
     set_target_properties(${name} PROPERTIES PREFIX "")
+    
+    # Linux: allow unresolved symbols (resolved at load time by host app)
+    if(LINUX)
+        target_link_options(${name} PRIVATE "-Wl,--unresolved-symbols=ignore-in-shared-libs")
+    endif()
 endfunction()
 
 ###############################
@@ -209,13 +226,19 @@ add_stim_module(spine
     LIBS stimimage ${SPINE_LIB}
 )
 
-# Box2D (no shader utils needed)
-add_library(box2d SHARED ${SRC_DIR}/box2d.c ${APP_DIR}/glad.c)
-set_target_properties(box2d PROPERTIES PREFIX "")
+# Box2D (no stimutils needed)
 if(WIN32)
-    target_link_libraries(box2d ${COMMON_LIBS} ${BOX2D_LIB} "-def:${BOX2D_DEF_FILE}")
+    add_stim_module(box2d 
+        NO_STIMUTILS
+        SOURCES ${SRC_DIR}/box2d.c ${APP_DIR}/glad.c
+        LIBS ${BOX2D_LIB} "-def:${BOX2D_DEF_FILE}"
+    )
 else()
-    target_link_libraries(box2d ${COMMON_LIBS} ${BOX2D_LIB})
+    add_stim_module(box2d 
+        NO_STIMUTILS
+        SOURCES ${SRC_DIR}/box2d.c ${APP_DIR}/glad.c
+        LIBS ${BOX2D_LIB}
+    )
 endif()
 
 # World - 2D game world system
@@ -232,10 +255,12 @@ set(WORLD_SOURCES
     ${APP_DIR}/glad.c
 )
 
-add_library(world SHARED ${WORLD_SOURCES})
-set_target_properties(world PROPERTIES PREFIX "")
-target_include_directories(world PRIVATE ${SRC_DIR})
-target_link_libraries(world ${COMMON_LIBS} ${BOX2D_LIB})
+add_stim_module(world
+    NO_STIMUTILS
+    SOURCES ${WORLD_SOURCES}
+    INCLUDES ${SRC_DIR}
+    LIBS ${BOX2D_LIB}
+)
 
 find_package(tinyxml2 QUIET)
 if(tinyxml2_FOUND)
@@ -256,15 +281,14 @@ if(NOT WIN32)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(FFMPEG REQUIRED libavformat libavcodec libswscale libavutil)
 
-    add_library(video SHARED ${SRC_DIR}/video.c)
-    target_link_libraries(video stimutils ${COMMON_LIBS} ${FFMPEG_LIBRARIES})
-    target_include_directories(video PRIVATE ${FFMPEG_INCLUDE_DIRS})
-    set_target_properties(video PROPERTIES PREFIX "")
+    add_stim_module(video
+        SOURCES ${SRC_DIR}/video.c
+        INCLUDES ${FFMPEG_INCLUDE_DIRS}
+        LIBS ${FFMPEG_LIBRARIES}
+    )
 
+    # Apple needs rpath for FFmpeg libs
     if(APPLE)
-        set_target_properties(video PROPERTIES
-            LINK_FLAGS "-Wl,-flat_namespace -Wl,-undefined,dynamic_lookup"
-        )
         add_custom_command(TARGET video POST_BUILD
             COMMAND ${CMAKE_INSTALL_NAME_TOOL} -add_rpath "/opt/homebrew/lib" $<TARGET_FILE:video>
         )
