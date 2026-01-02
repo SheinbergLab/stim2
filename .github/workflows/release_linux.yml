@@ -42,7 +42,7 @@ jobs:
       - name: Install build tools and dependencies
         run: |
           apt update
-          apt install -y sudo wget git ca-certificates
+          apt install -y sudo wget git ca-certificates curl
           
           sudo apt update
           sudo apt install -y build-essential cmake pkg-config cmake-data
@@ -91,9 +91,12 @@ jobs:
 
       - name: Install our dg and dlsh libs and headers into the build environment
         run: |
-          DLSH_VERSION=0.0.48
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dg_${DLSH_VERSION}_${{ matrix.arch }}.deb
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dlsh_${DLSH_VERSION}_${{ matrix.arch }}.deb
+          # Get latest dlsh version from SheinbergLab
+          DLSH_VERSION=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep '"tag_name"' | cut -d '"' -f 4)
+          echo "Using dlsh version: $DLSH_VERSION"
+          
+          wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-dg_${DLSH_VERSION}_${{ matrix.arch }}.deb
+          wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-dlsh_${DLSH_VERSION}_${{ matrix.arch }}.deb
           sudo dpkg --install dlsh-dg_${DLSH_VERSION}_${{ matrix.arch }}.deb
           sudo dpkg --install dlsh-dlsh_${DLSH_VERSION}_${{ matrix.arch }}.deb
 
