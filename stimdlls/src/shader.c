@@ -54,7 +54,6 @@
 #include <string.h>
 #include <math.h>
 #include <tcl.h>
-#include <math.h>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h> 
@@ -670,24 +669,29 @@ static int parse_uniforms_string(Tcl_Interp *interp, Tcl_HashTable *dtable,
 }
 
 /*
- * Helper: prepend version directive to shader source
+ * Helper: prepend version directive and precision qualifiers to shader source
+ * 
+ * GLES requires precision qualifiers for floats in fragment shaders.
+ * Desktop GL ignores them, so adding them is safe for portability.
  */
-static char *prepend_version(const char *source)
+static char *prepend_shader_preamble(const char *source)
 {
-    const char *version;
+    const char *preamble;
     char *result;
     size_t len;
 
 #ifndef STIM2_USE_GLES
-    version = "#version 330\n";
+    preamble = "#version 330\n";
 #else
-    version = "#version 300 es\n";
+    preamble = "#version 300 es\n"
+               "precision highp float;\n"
+               "precision highp int;\n";
 #endif
 
-    len = strlen(version) + strlen(source) + 1;
+    len = strlen(preamble) + strlen(source) + 1;
     result = malloc(len);
     if (result) {
-        strcpy(result, version);
+        strcpy(result, preamble);
         strcat(result, source);
     }
     return result;
@@ -714,9 +718,9 @@ static int shaderBuildInlineCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    /* Prepend version directives */
-    vertex_src = prepend_version(argv[1]);
-    fragment_src = prepend_version(argv[2]);
+    /* Prepend version directives and precision qualifiers */
+    vertex_src = prepend_shader_preamble(argv[1]);
+    fragment_src = prepend_shader_preamble(argv[2]);
 
     if (!vertex_src || !fragment_src) {
         Tcl_AppendResult(interp, argv[0], ": memory allocation failed", NULL);
@@ -824,6 +828,8 @@ static int shaderBuildCmd(ClientData clientData, Tcl_Interp *interp,
 
 static void delete_vao_info(VAO_INFO *vinfo)
 {
+  if (!vinfo) return;
+  
   if (vinfo->npoints) {
     glDeleteBuffers(1, &vinfo->points_vbo);
     free(vinfo->points);
@@ -833,6 +839,7 @@ static void delete_vao_info(VAO_INFO *vinfo)
     free(vinfo->texcoords);
   }
   glDeleteVertexArrays(1, &vinfo->vao);
+  free(vinfo);
 }
 
 static int shader_prog_delete(SHADER_PROG *sp)
@@ -887,7 +894,7 @@ static int shaderDeleteAllCmd(ClientData clientData, Tcl_Interp *interp,
   /* Free all loaded textures as well */
   imageListReset();
   
-  return 0;
+  return TCL_OK;
 }
 
 
@@ -1043,6 +1050,7 @@ static int uniform_set(Tcl_Interp *interp, Tcl_HashTable *table,
   }
 
   listObj = Tcl_NewStringObj(valstr, -1);
+  Tcl_IncrRefCount(listObj);
 
   // Determine the total number of individual numbers required based on the type
   switch (uinfo->type) {
