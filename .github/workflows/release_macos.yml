@@ -20,7 +20,7 @@ jobs:
       - name: Install cmake build tool and dependencies.
         run: |
           brew update
-          brew install cmake dylibbundler tcl-tk@9 glm ffmpeg
+          brew install cmake dylibbundler tcl-tk@9 glm ffmpeg jq
 
       - name: Check out our code
         uses: actions/checkout@v4
@@ -55,7 +55,7 @@ jobs:
       - name: Install our dg and dlsh libs and headers into the build environment.
         run: |
           # Get latest dlsh version from SheinbergLab
-          DLSH_VERSION=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep '"tag_name"' | cut -d '"' -f 4)
+          DLSH_VERSION=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | jq -r '.tag_name')
           echo "Using dlsh version: $DLSH_VERSION"
           
           wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-arm64-signed.pkg
