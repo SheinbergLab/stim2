@@ -1,2 +1,3 @@
-polygon "Polygons"
-image   "Images"
+polygon     "Polygons"
+image       "Images"
+motionpatch "Motion"
