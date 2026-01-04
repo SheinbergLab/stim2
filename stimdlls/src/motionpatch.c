@@ -98,6 +98,8 @@ typedef struct {
   UNIFORM_INFO *uColor2;        /* set if we have "uColor" uniform */
   UNIFORM_INFO *pointSize;
   UNIFORM_INFO *samplerMaskMode;/* 0: ignore, 1: use alpha, 2: use 1-alpha */
+  UNIFORM_INFO *maskRotation;   /* rotation angle for mask texture (radians) */
+  float mask_rotation;          /* current mask rotation value */
   
   SHADER_PROG *program;
   Tcl_HashTable uniformTable;	/* local unique version */
@@ -150,7 +152,11 @@ void motionpatchDraw(GR_OBJ *g)
     /* so shader knows how to deal with the sampler mask */
     memcpy(s->samplerMaskMode->val, &s->samplermaskmode, sizeof(int));
   }
-    
+
+  if (s->maskRotation) {
+    memcpy(s->maskRotation->val, &s->mask_rotation, sizeof(float));
+  }
+
   glUseProgram(sp->program);
   update_uniforms(&s->uniformTable);
 
@@ -428,6 +434,7 @@ int motionpatchCreate(OBJ_LIST *objlist, SHADER_PROG *sp,
   s->color1[0] = s->color1[1] = s->color1[2] = s->color1[3] = 1.;
   s->color2[0] = s->color2[1] = s->color2[2] = s->color2[3] = 1.;
   s->pointsize = 1.0;
+  s->mask_rotation = 0.0;
   s->samplermaskmode = SMASK_NONE;
   
   s->num_dots = n;
@@ -524,7 +531,10 @@ int motionpatchCreate(OBJ_LIST *objlist, SHADER_PROG *sp,
     s->samplerMaskMode = Tcl_GetHashValue(entryPtr);
     s->samplerMaskMode->val = calloc(1,sizeof(int));
   }
-
+   if ((entryPtr = Tcl_FindHashEntry(&s->uniformTable, "maskRotation"))) {
+     s->maskRotation = Tcl_GetHashValue(entryPtr);
+     s->maskRotation->val = calloc(1, sizeof(float));
+   }
   s->texid[0] = -1;		/* initialize to no texture sampler */
 
   return(gobjAddObj(objlist, obj));
@@ -954,6 +964,32 @@ static int motionpatchColorCmd(ClientData clientData, Tcl_Interp *interp,
   return(TCL_OK);
 }
 
+static int motionpatchMaskRotationCmd(ClientData clientData, Tcl_Interp *interp,
+                                      int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id;
+  double rotation;
+  
+  if (argc < 3) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+                     " motionpatch rotation_radians", NULL);
+    return TCL_ERROR;
+  }
+  
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+  
+  if (Tcl_GetDouble(interp, argv[2], &rotation) != TCL_OK) return TCL_ERROR;
+  s->mask_rotation = rotation;
+  
+  return(TCL_OK);
+}
+
+
 int motionpatchShaderCreate(Tcl_Interp *interp)
 {
   MotionpatchShaderProg = (SHADER_PROG *) calloc(1, sizeof(SHADER_PROG));
@@ -991,13 +1027,18 @@ int motionpatchShaderCreate(Tcl_Interp *interp)
 
     "uniform sampler2D tex0;"
     "uniform int samplerMaskMode;"
+    "uniform float maskRotation;"
     "in vec2 texcoord;"
     "uniform vec4 uColor1;"
     "uniform vec4 uColor2;"
     "out vec4 frag_color;"
     "void main () {"
-    " vec3 texColor = texture(tex0, vec2(texcoord.s, 1.0-texcoord.t)).rgb;"
-    " float texAlpha = texture(tex0, vec2(texcoord.s, 1.0-texcoord.t)).a;"
+    " vec2 tc = texcoord - 0.5;"
+    " float c = cos(maskRotation);"
+    " float s = sin(maskRotation);"
+    " vec2 rotated = vec2(c * tc.x - s * tc.y, s * tc.x + c * tc.y) + 0.5;"
+    " vec3 texColor = texture(tex0, vec2(rotated.s, 1.0-rotated.t)).rgb;"
+    " float texAlpha = texture(tex0, vec2(rotated.s, 1.0-rotated.t)).a;"
     " float alpha = 1.0;"
     " vec3 color;"
     " if (samplerMaskMode == 0) { alpha = uColor1.a; color = uColor1.rgb; }"
@@ -1089,6 +1130,9 @@ int Motionpatch_Init(Tcl_Interp *interp)
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "motionpatch_samplermaskmode", 
 		    (Tcl_CmdProc *) motionpatchSamplerMaskModeCmd, 
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_maskrotation", 
+		    (Tcl_CmdProc *) motionpatchMaskRotationCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "motionpatch_maskradius", 
 		    (Tcl_CmdProc *) motionpatchMaskRadiusCmd, 
