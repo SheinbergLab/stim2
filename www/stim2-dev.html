@@ -30,7 +30,7 @@
             --text-dim: #666;
             --status-connected: #52c41a;
             --status-error: #ff4d4f;
-            --nav-width: 220px;
+            --nav-width: 260px;
             --info-width: 280px;
         }
 
@@ -126,8 +126,8 @@
         /* Left Column - Navigator */
         .nav-column {
             width: var(--nav-width);
-            min-width: 150px;
-            max-width: 350px;
+            min-width: 180px;
+            max-width: 400px;
             display: flex;
             flex-direction: column;
             background: var(--bg-panel);
@@ -278,7 +278,7 @@
 
         .nav-controls-container {
             flex: 1;
-            min-height: 80px;
+            min-height: 150px;
             display: flex;
             flex-direction: column;
             border-top: 1px solid var(--border);
@@ -381,6 +381,342 @@
 
         .tree-error {
             color: var(--status-error);
+        }
+
+        /* ============================================================
+           CONTROLS PANEL STYLES 
+           ============================================================ */
+        
+        /* Setup selector - dropdown style */
+        .setup-selector {
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .setup-selector label {
+            display: block;
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+        
+        .setup-selector select {
+            width: 100%;
+            padding: 6px 8px;
+            background: var(--bg-app);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text);
+            font-size: 11px;
+            cursor: pointer;
+        }
+        
+        .setup-selector select:focus {
+            outline: none;
+            border-color: var(--bg-primary);
+        }
+        
+        /* Setup parameters section */
+        .setup-section {
+            margin-bottom: 12px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .setup-section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        
+        .setup-section-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-header);
+            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
+        }
+        
+        .setup-run-btn {
+            padding: 4px 10px;
+            background: var(--bg-primary);
+            color: #fff;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 10px;
+        }
+        
+        .setup-run-btn:hover {
+            background: var(--bg-primary-hover);
+        }
+        
+        /* Adjuster groups */
+        .adjuster-group {
+            margin-bottom: 12px;
+        }
+        
+        .adjuster-group-header {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            margin-bottom: 6px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .adjuster-group-header .target-badge {
+            font-size: 9px;
+            background: var(--bg-button);
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-weight: normal;
+            text-transform: none;
+        }
+
+        /* Control parameters */
+        .control-group {
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .control-group:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .control-proc-name {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-header);
+            margin-bottom: 8px;
+            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
+        }
+
+        .control-param {
+            margin-bottom: 8px;
+        }
+
+        .control-param:last-child {
+            margin-bottom: 0;
+        }
+
+        .control-param label {
+            display: block;
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-bottom: 3px;
+        }
+
+        .control-param-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .control-param input[type="range"] {
+            flex: 1;
+            height: 4px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: var(--border);
+            border-radius: 2px;
+            outline: none;
+        }
+
+        .control-param input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--bg-primary);
+            cursor: pointer;
+        }
+
+        .control-param input[type="text"],
+        .control-param input[type="number"] {
+            flex: 1;
+            background: var(--bg-app);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            color: var(--text);
+            padding: 4px 6px;
+            font-size: 11px;
+        }
+
+        .control-param select {
+            flex: 1;
+            background: var(--bg-app);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            color: var(--text);
+            padding: 4px 6px;
+            font-size: 11px;
+        }
+
+        .control-param-value {
+            min-width: 45px;
+            text-align: right;
+            font-size: 10px;
+            color: var(--text);
+            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
+        }
+
+        .control-param-unit {
+            font-size: 9px;
+            color: var(--text-muted);
+            min-width: 20px;
+        }
+
+        /* Color picker styles */
+        .color-picker-control {
+            margin-bottom: 8px;
+        }
+        
+        .color-picker-control label {
+            display: block;
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+        
+        .color-picker-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .color-picker-input {
+            width: 40px;
+            height: 28px;
+            padding: 0;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            cursor: pointer;
+            background: none;
+        }
+        
+        .color-picker-input::-webkit-color-swatch-wrapper {
+            padding: 2px;
+        }
+        
+        .color-picker-input::-webkit-color-swatch {
+            border: none;
+            border-radius: 2px;
+        }
+        
+        .color-picker-values {
+            display: flex;
+            gap: 4px;
+            font-size: 10px;
+            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
+            color: var(--text-muted);
+        }
+        
+        .color-picker-hex {
+            background: var(--bg-app);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            padding: 2px 6px;
+            color: var(--text);
+            font-size: 10px;
+            width: 70px;
+        }
+
+        /* Boolean toggle switch */
+        .toggle-switch {
+            position: relative;
+            width: 36px;
+            height: 18px;
+            background: var(--border);
+            border-radius: 9px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .toggle-switch.active {
+            background: var(--bg-primary);
+        }
+        
+        .toggle-switch::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 14px;
+            height: 14px;
+            background: #fff;
+            border-radius: 50%;
+            transition: transform 0.2s;
+        }
+        
+        .toggle-switch.active::after {
+            transform: translateX(18px);
+        }
+        
+        .toggle-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .toggle-label {
+            font-size: 11px;
+            color: var(--text);
+        }
+
+        .control-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .control-actions button {
+            flex: 1;
+            padding: 4px 8px;
+            background: var(--bg-button);
+            color: var(--text);
+            border: 1px solid var(--border-light);
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 10px;
+        }
+
+        .control-actions button:hover {
+            background: var(--bg-button-hover);
+        }
+
+        .control-actions button.primary {
+            background: var(--bg-primary);
+            border-color: var(--bg-primary);
+            color: #fff;
+        }
+
+        .control-actions button.primary:hover {
+            background: var(--bg-primary-hover);
+        }
+
+        /* Live update toggle */
+        .live-update-toggle {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 10px;
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+
+        .live-update-toggle input {
+            margin: 0;
         }
 
         /* Editor Panel */
@@ -504,171 +840,6 @@
             margin-bottom: 4px;
         }
 
-        .info-section {
-            margin-bottom: 12px;
-        }
-
-        .info-section:last-child {
-            margin-bottom: 0;
-        }
-
-        .info-label {
-            color: var(--text-muted);
-            font-size: 10px;
-            text-transform: uppercase;
-            margin-bottom: 4px;
-        }
-
-        .info-value {
-            color: var(--text);
-            line-height: 1.4;
-        }
-
-        .info-desc {
-            color: var(--text-muted);
-            font-style: italic;
-        }
-
-        /* Controls Panel */
-        .live-update-toggle {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            font-size: 10px;
-            color: var(--text-muted);
-            cursor: pointer;
-        }
-
-        .live-update-toggle input {
-            margin: 0;
-        }
-
-        .control-group {
-            margin-bottom: 12px;
-            padding-bottom: 12px;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .control-group:last-child {
-            border-bottom: none;
-            margin-bottom: 0;
-            padding-bottom: 0;
-        }
-
-        .control-proc-name {
-            font-size: 11px;
-            font-weight: 600;
-            color: var(--text-header);
-            margin-bottom: 8px;
-            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
-        }
-
-        .control-param {
-            margin-bottom: 8px;
-        }
-
-        .control-param:last-child {
-            margin-bottom: 0;
-        }
-
-        .control-param label {
-            display: block;
-            font-size: 10px;
-            color: var(--text-muted);
-            margin-bottom: 3px;
-        }
-
-        .control-param-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .control-param input[type="range"] {
-            flex: 1;
-            height: 4px;
-            -webkit-appearance: none;
-            appearance: none;
-            background: var(--border);
-            border-radius: 2px;
-            outline: none;
-        }
-
-        .control-param input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            appearance: none;
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            background: var(--bg-primary);
-            cursor: pointer;
-        }
-
-        .control-param input[type="text"],
-        .control-param input[type="number"] {
-            flex: 1;
-            background: var(--bg-app);
-            border: 1px solid var(--border);
-            border-radius: 3px;
-            color: var(--text);
-            padding: 4px 6px;
-            font-size: 11px;
-        }
-
-        .control-param select {
-            flex: 1;
-            background: var(--bg-app);
-            border: 1px solid var(--border);
-            border-radius: 3px;
-            color: var(--text);
-            padding: 4px 6px;
-            font-size: 11px;
-        }
-
-        .control-param-value {
-            min-width: 50px;
-            text-align: right;
-            font-size: 10px;
-            color: var(--text);
-            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
-        }
-
-        .control-param-unit {
-            font-size: 9px;
-            color: var(--text-muted);
-        }
-
-        .control-actions {
-            display: flex;
-            gap: 6px;
-            margin-top: 8px;
-        }
-
-        .control-actions button {
-            flex: 1;
-            padding: 4px 8px;
-            background: var(--bg-button);
-            color: var(--text);
-            border: 1px solid var(--border-light);
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 10px;
-        }
-
-        .control-actions button:hover {
-            background: var(--bg-button-hover);
-        }
-
-        .control-actions button.primary {
-            background: var(--bg-primary);
-            border-color: var(--bg-primary);
-            color: #fff;
-        }
-
-        .control-actions button.primary:hover {
-            background: var(--bg-primary-hover);
-        }
-
         /* Log Panel (bottom right) */
         .log-panel {
             flex: 1;
@@ -704,54 +875,6 @@
             color: #d29922;
         }
 
-        /* Scrollbars */
-        .examples-tree::-webkit-scrollbar,
-        .log-output::-webkit-scrollbar,
-        .info-content::-webkit-scrollbar,
-        #terminal-container::-webkit-scrollbar {
-            width: 8px;
-        }
-
-        .examples-tree::-webkit-scrollbar-track,
-        .log-output::-webkit-scrollbar-track,
-        .info-content::-webkit-scrollbar-track,
-        #terminal-container::-webkit-scrollbar-track {
-            background: #1e1e1e;
-        }
-
-        .examples-tree::-webkit-scrollbar-thumb,
-        .log-output::-webkit-scrollbar-thumb,
-        .info-content::-webkit-scrollbar-thumb,
-        #terminal-container::-webkit-scrollbar-thumb {
-            background: #3e3e42;
-            border-radius: 4px;
-        }
-
-        .examples-tree::-webkit-scrollbar-thumb:hover,
-        .log-output::-webkit-scrollbar-thumb:hover,
-        .info-content::-webkit-scrollbar-thumb:hover,
-        #terminal-container::-webkit-scrollbar-thumb:hover {
-            background: #4e4e52;
-        }
-
-        /* Keyboard shortcuts footer */
-        .shortcuts-bar {
-            padding: 4px 10px;
-            background: var(--bg-header);
-            border-top: 1px solid var(--border);
-            font-size: 10px;
-            color: var(--text-dim);
-            flex-shrink: 0;
-        }
-
-        .shortcuts-bar kbd {
-            background: #333;
-            padding: 1px 4px;
-            border-radius: 2px;
-            margin: 0 2px;
-            color: var(--text-muted);
-        }
-
         /* Editor status bar */
         .editor-status-bar {
             display: flex;
@@ -761,10 +884,6 @@
             background: var(--bg-header);
             border-top: 1px solid var(--border);
             font-size: 10px;
-            flex-shrink: 0;
-        }
-
-        .editor-shortcuts {
             color: var(--text-dim);
         }
 
@@ -772,8 +891,7 @@
             background: #333;
             padding: 1px 4px;
             border-radius: 2px;
-            margin: 0 2px;
-            color: var(--text-muted);
+            margin-right: 2px;
         }
 
         .editor-info {
@@ -788,16 +906,17 @@
             color: #d29922;
         }
 
-        /* Lint results panel */
+        /* Lint results */
         .lint-results {
             display: none;
-            max-height: 120px;
-            overflow-y: auto;
-            background: #1a1a1a;
+            position: absolute;
+            bottom: 28px;
+            left: 0;
+            right: 0;
+            max-height: 150px;
+            background: var(--bg-panel);
             border-top: 1px solid var(--border);
-            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
-            font-size: 11px;
-            flex-shrink: 0;
+            overflow-y: auto;
         }
 
         .lint-results.visible {
@@ -808,18 +927,15 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 4px 10px;
+            padding: 6px 10px;
             background: var(--bg-header);
             border-bottom: 1px solid var(--border);
-            position: sticky;
-            top: 0;
         }
 
         .lint-results-title {
-            font-size: 10px;
+            font-size: 11px;
             font-weight: 600;
             color: var(--text-header);
-            text-transform: uppercase;
         }
 
         .lint-results-close {
@@ -828,23 +944,25 @@
             color: var(--text-muted);
             cursor: pointer;
             font-size: 14px;
-            line-height: 1;
-            padding: 0 4px;
-        }
-
-        .lint-results-close:hover {
-            color: #fff;
         }
 
         .lint-results-body {
-            padding: 6px 0;
+            padding: 4px 0;
+        }
+
+        .lint-results-empty {
+            padding: 10px;
+            color: var(--status-connected);
+            text-align: center;
         }
 
         .lint-item {
             display: flex;
-            align-items: flex-start;
-            padding: 3px 10px;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 10px;
             cursor: pointer;
+            font-size: 11px;
         }
 
         .lint-item:hover {
@@ -852,8 +970,7 @@
         }
 
         .lint-item-icon {
-            margin-right: 8px;
-            flex-shrink: 0;
+            font-size: 10px;
         }
 
         .lint-item-icon.error {
@@ -866,32 +983,61 @@
 
         .lint-item-location {
             color: var(--text-muted);
-            margin-right: 8px;
-            flex-shrink: 0;
             min-width: 50px;
         }
 
         .lint-item-message {
             color: var(--text);
-            flex: 1;
         }
 
-        .lint-results-empty {
-            padding: 12px 10px;
-            color: var(--status-connected);
-            text-align: center;
+        /* Scrollbars */
+        .examples-tree::-webkit-scrollbar,
+        .log-output::-webkit-scrollbar,
+        .info-content::-webkit-scrollbar,
+        .controls-content::-webkit-scrollbar,
+        #terminal-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .examples-tree::-webkit-scrollbar-track,
+        .log-output::-webkit-scrollbar-track,
+        .info-content::-webkit-scrollbar-track,
+        .controls-content::-webkit-scrollbar-track,
+        #terminal-container::-webkit-scrollbar-track {
+            background: #1e1e1e;
+        }
+
+        .examples-tree::-webkit-scrollbar-thumb,
+        .log-output::-webkit-scrollbar-thumb,
+        .info-content::-webkit-scrollbar-thumb,
+        .controls-content::-webkit-scrollbar-thumb,
+        #terminal-container::-webkit-scrollbar-thumb {
+            background: #3e3e42;
+            border-radius: 4px;
+        }
+
+        .examples-tree::-webkit-scrollbar-thumb:hover,
+        .log-output::-webkit-scrollbar-thumb:hover,
+        .info-content::-webkit-scrollbar-thumb:hover,
+        .controls-content::-webkit-scrollbar-thumb:hover,
+        #terminal-container::-webkit-scrollbar-thumb:hover {
+            background: #4e4e52;
         }
     </style>
 </head>
 <body>
-    <!-- Status Bar -->
+    <!-- Top Status Bar -->
     <div class="status-bar">
         <h1>stim2</h1>
         <div class="status-indicator" id="statusIndicator"></div>
         <span class="status-text" id="connectionStatus">Connecting...</span>
-        <div class="status-spacer"></div>
-        <button onclick="refreshWorkspaces()" title="Refresh workspaces">↻ Refresh</button>
+        <span class="status-spacer"></span>
+        <div class="status-info">
+            <span>State: <span class="value" id="stateValue">-</span></span>
+            <span>FPS: <span class="value" id="fpsValue">-</span></span>
+        </div>
         <button onclick="reconnect()">Reconnect</button>
+        <button onclick="refreshWorkspaces()">Refresh</button>
     </div>
 
     <!-- Main 3-Column Layout -->
@@ -997,11 +1143,11 @@
                         </div>
                         <div class="status-row">
                             <span class="status-label">State</span>
-                            <span class="status-value" id="stateValue">-</span>
+                            <span class="status-value" id="stateValue2">-</span>
                         </div>
                         <div class="status-row">
                             <span class="status-label">FPS</span>
-                            <span class="status-value" id="fpsValue">-</span>
+                            <span class="status-value" id="fpsValue2">-</span>
                         </div>
                     </div>
                 </div>
@@ -1048,7 +1194,7 @@
             constructor() {
                 this.ws = null;
                 this.requestId = 0;
-                this.callbacks = new Map();
+                this.pending = new Map();
                 this.onStatusUpdate = null;
             }
 
@@ -1059,45 +1205,56 @@
                 this.ws = new WebSocket(wsUrl);
                 
                 this.ws.onopen = () => {
+                    console.log('WebSocket connected');
                     updateConnectionStatus(true);
-                    // Load workspaces once connected
                     loadWorkspaces();
                 };
                 
                 this.ws.onclose = () => {
+                    console.log('WebSocket disconnected');
                     updateConnectionStatus(false);
-                    setTimeout(() => this.connect(), 3000);
+                };
+                
+                this.ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    updateConnectionStatus(false);
                 };
                 
                 this.ws.onmessage = (event) => {
                     try {
                         const msg = JSON.parse(event.data);
-                        this.handleMessage(msg);
+                        
+                        if (msg.type === 'status' && this.onStatusUpdate) {
+                            this.onStatusUpdate(msg);
+                            if (stateValue) stateValue.textContent = msg.state || '-';
+                            if (fpsValue) fpsValue.textContent = msg.fps ? msg.fps.toFixed(1) : '-';
+                            const sv2 = document.getElementById('stateValue2');
+                            const fv2 = document.getElementById('fpsValue2');
+                            if (sv2) sv2.textContent = msg.state || '-';
+                            if (fv2) fv2.textContent = msg.fps ? msg.fps.toFixed(1) : '-';
+                        }
+                        
+                        if (msg.type === 'response' && msg.requestId && this.pending.has(msg.requestId)) {
+                            const { resolve, reject } = this.pending.get(msg.requestId);
+                            this.pending.delete(msg.requestId);
+                            
+                            if (msg.status === 'ok') {
+                                resolve(msg.result || '');
+                            } else {
+                                reject(new Error(msg.error || 'Unknown error'));
+                            }
+                        }
+                        
+                        if (msg.type === 'log') {
+                            addLogEntry(msg.level, msg.message);
+                        }
                     } catch (e) {
                         console.error('Failed to parse message:', e);
                     }
                 };
             }
 
-            handleMessage(msg) {
-                if (msg.type === 'response') {
-                    const callback = this.callbacks.get(msg.requestId);
-                    if (callback) {
-                        if (msg.status === 'ok') {
-                            callback.resolve(msg.result || '');
-                        } else {
-                            callback.reject(new Error(msg.error || 'Unknown error'));
-                        }
-                        this.callbacks.delete(msg.requestId);
-                    }
-                } else if (msg.type === 'log') {
-                    addLogEntry(msg.level, msg.message);
-                } else if (msg.type === 'status' && this.onStatusUpdate) {
-                    this.onStatusUpdate(msg);
-                }
-            }
-
-            eval(script) {
+            eval(code) {
                 return new Promise((resolve, reject) => {
                     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
                         reject(new Error('Not connected'));
@@ -1105,13 +1262,21 @@
                     }
                     
                     const reqId = `req_${++this.requestId}`;
-                    this.callbacks.set(reqId, { resolve, reject });
+                    this.pending.set(reqId, { resolve, reject });
                     
-                    this.ws.send(JSON.stringify({
-                        cmd: 'eval',
-                        script: script,
-                        requestId: reqId
+                    this.ws.send(JSON.stringify({ 
+                        cmd: 'eval', 
+                        script: code,
+                        requestId: reqId 
                     }));
+                    
+                    // Timeout after 30 seconds
+                    setTimeout(() => {
+                        if (this.pending.has(reqId)) {
+                            this.pending.delete(reqId);
+                            reject(new Error('Request timeout'));
+                        }
+                    }, 30000);
                 });
             }
             
@@ -1121,81 +1286,101 @@
         }
 
         // ============================================================
-        // UI State
+        // Global State
         // ============================================================
-        const statusIndicator = document.getElementById('statusIndicator');
-        const statusDot = document.getElementById('statusDot');
-        const connectionStatus = document.getElementById('connectionStatus');
-        const connectionStatusText = document.getElementById('connectionStatusText');
-        const stateValue = document.getElementById('stateValue');
-        const fpsValue = document.getElementById('fpsValue');
-        const logOutput = document.getElementById('logOutput');
-        const workspacesTree = document.getElementById('workspacesTree');
-        const controlsContent = document.getElementById('controlsContent');
-        const infoContent = document.getElementById('infoContent');
-        const editorPanel = document.getElementById('editorPanel');
-        const terminalPanel = document.getElementById('terminalPanel');
-        const navTreeContainer = document.getElementById('navTreeContainer');
-        const navControlsContainer = document.getElementById('navControlsContainer');
-        const searchInput = document.getElementById('searchInput');
-
         let connection = null;
-        let terminal = null;
         let editor = null;
+        let terminal = null;
+        
+        // File browser state
         let currentWorkspace = null;
         let currentFile = null;
         let currentFileInfo = null;
         
-        // New: file info includes setups, adjusters, and legacy exports
-        let currentSetups = {};
-        let currentAdjusters = {};
-        let currentExports = {};
+        // Controls state
+        let currentSetups = {};      // setup_name -> {proc, params, adjusters, label}
+        let currentAdjusters = {};   // adjuster_name -> {proc, target, params, setup, uniform, label}
+        let currentExports = {};     // Legacy: proc_name -> {proc, params}
         let activeSetup = null;
-        
-        let workspacesData = [];  // Store full tree data for search
-        let liveUpdateTimer = null;
+
+        // DOM references
+        let workspacesTree, navTreeContainer, navControlsContainer, controlsContent;
+        let searchInput, infoContent, logOutput;
+        let statusIndicator, statusDot, connectionStatus;
+        let stateValue, fpsValue;
 
         // ============================================================
         // Initialization
         // ============================================================
-        async function init() {
+        function init() {
+            // Get DOM references
+            workspacesTree = document.getElementById('workspacesTree');
+            navTreeContainer = document.getElementById('navTreeContainer');
+            navControlsContainer = document.getElementById('navControlsContainer');
+            controlsContent = document.getElementById('controlsContent');
+            searchInput = document.getElementById('searchInput');
+            infoContent = document.getElementById('infoContent');
+            logOutput = document.getElementById('logOutput');
+            statusIndicator = document.getElementById('statusIndicator');
+            statusDot = document.getElementById('statusDot');
+            connectionStatus = document.getElementById('connectionStatus');
+            stateValue = document.getElementById('stateValue');
+            fpsValue = document.getElementById('fpsValue');
+
+            // Initialize connection
             connection = new Stim2Connection();
             connection.onStatusUpdate = (msg) => {
-                stateValue.textContent = msg.state || '-';
-                fpsValue.textContent = msg.fps ? msg.fps.toFixed(1) : '-';
+                // Status updates handled in connection class
             };
             connection.connect();
 
-            terminal = new TclTerminal('terminal-container', connection, {
-                interpreter: 'stim2',
-                welcomeMessage: 'stim2 Tcl Terminal',
-                showWelcome: true,
-                useLinkedSubprocess: false
-            });
-
-            editor = new TclEditor('editor-container', {
-                theme: 'dark',
-                fontSize: '12px',
-                tabSize: 4
-            });
-
-            document.getElementById('editor-container').addEventListener('editor-ready', () => {
-                editor.setWebSocket(connection);
-                editor.setOnExecute(executeSnippet);
-            }, { once: true });
-
+            // Initialize editor
+            initEditor();
+            
+            // Initialize terminal
+            initTerminal();
+            
+            // Setup resize handlers
             setupResizeHandlers();
+        }
+
+        function initEditor() {
+            const container = document.getElementById('editor-container');
+            
+            if (typeof TclEditor !== 'undefined') {
+                editor = new TclEditor(container, {
+                    onRun: async (code) => {
+                        await executeSnippet(code);
+                    }
+                });
+                editor.setWebSocket(connection);
+            } else {
+                container.innerHTML = '<div style="padding:20px;color:#999;">Editor not loaded</div>';
+            }
+        }
+
+        function initTerminal() {
+            if (typeof TclTerminal !== 'undefined') {
+                terminal = new TclTerminal('terminal-container', connection, {
+                    interpreter: 'stim2',
+                    welcomeMessage: 'stim2 Tcl Terminal',
+                    showWelcome: true,
+                    useLinkedSubprocess: false
+                });
+            }
         }
 
         // ============================================================
         // Resize Handlers
         // ============================================================
         function setupResizeHandlers() {
-            // Horizontal resize (editor/terminal split)
-            setupVerticalResize('hResizeHandle', editorPanel, terminalPanel, 'height', 100, 80);
+            // Editor/Terminal resize
+            const editorPanel = document.getElementById('editorPanel');
+            const terminalPanel = document.getElementById('terminalPanel');
+            setupVerticalResize('hResizeHandle', editorPanel, terminalPanel, 'height', 150, 80);
             
             // Left column resize
-            setupHorizontalResize('leftResizeHandle', 'navColumn', 150, 400, 'left');
+            setupHorizontalResize('leftResizeHandle', 'navColumn', 180, 400, 'left');
             
             // Right column resize
             setupHorizontalResize('rightResizeHandle', 'infoColumn', 200, 400, 'right');
@@ -1224,8 +1409,8 @@
                 if (!isResizing) return;
                 const delta = e.clientY - startY;
                 const navColumn = document.getElementById('navColumn');
-                const availableHeight = navColumn.offsetHeight - 44 - 4 - 32; // search, handle, controls header
-                const newTreeHeight = Math.max(80, Math.min(availableHeight - 80, startTreeHeight + delta));
+                const availableHeight = navColumn.offsetHeight - 44 - 4 - 32;
+                const newTreeHeight = Math.max(80, Math.min(availableHeight - 150, startTreeHeight + delta));
                 treeContainer.style.flex = 'none';
                 treeContainer.style.height = newTreeHeight + 'px';
             });
@@ -1307,10 +1492,7 @@
             workspacesTree.innerHTML = '<div class="tree-loading">Loading workspaces...</div>';
             
             try {
-                // Initialize workspace system
                 await connection.eval('workspace::init');
-                
-                // Get list of workspaces
                 const result = await connection.eval('workspace::list_workspaces');
                 const data = JSON.parse(result);
                 
@@ -1321,7 +1503,6 @@
                 
                 workspacesTree.innerHTML = '';
                 
-                // For each workspace, scan and render
                 for (const ws of data.workspaces) {
                     if (!ws.exists) continue;
                     
@@ -1366,13 +1547,12 @@
                     const dirEl = document.createElement('div');
                     dirEl.className = 'tree-category';
                     
-                    // Use title if available, otherwise folder name
                     const displayName = item.title || item.name;
                     
                     const header = document.createElement('div');
                     header.className = 'tree-category-header';
                     header.innerHTML = `<span class="tree-category-icon">▼</span>📁 ${displayName}`;
-                    header.title = item.name; // Show folder name on hover
+                    header.title = item.name;
                     header.onclick = (e) => {
                         if (e.target === header || e.target.classList.contains('tree-category-icon')) {
                             dirEl.classList.toggle('collapsed');
@@ -1392,10 +1572,9 @@
                 } else {
                     const fileEl = document.createElement('div');
                     fileEl.className = 'tree-item';
-                    // Use title if available, otherwise fall back to filename
                     const displayName = item.title || item.name;
                     fileEl.innerHTML = `<span class="tree-item-icon">📄</span>${displayName}`;
-                    fileEl.title = item.name; // Show filename on hover
+                    fileEl.title = item.name;
                     fileEl.onclick = () => selectFile(workspaceId, item.path, fileEl);
                     container.appendChild(fileEl);
                 }
@@ -1403,26 +1582,21 @@
         }
 
         async function selectFile(workspaceId, filepath, element) {
-            // Update selection UI
             document.querySelectorAll('.tree-item.selected').forEach(el => el.classList.remove('selected'));
             element.classList.add('selected');
             
             currentWorkspace = workspaceId;
             currentFile = filepath;
             
-            // Load file content into editor
             try {
                 const content = await connection.eval(`workspace::load "${workspaceId}" "${filepath}"`);
                 editor.setValue(content);
                 
-                // Update info panel
                 updateInfoPanel(filepath, content);
                 
-                // Activate file and get exports/setups/adjusters
                 const fileInfoJson = await connection.eval(`workspace::activate "${workspaceId}" "${filepath}"`);
                 const fileInfo = JSON.parse(fileInfoJson);
                 
-                // Store setups, adjusters, and legacy exports
                 currentSetups = fileInfo.setups || {};
                 currentAdjusters = fileInfo.adjusters || {};
                 currentExports = fileInfo.exports || {};
@@ -1430,8 +1604,7 @@
                 
                 renderControls();
                 
-                // Auto-run first setup or first exported proc
-                // Use requestAnimationFrame to ensure DOM is updated first
+                // Auto-run first setup
                 requestAnimationFrame(() => {
                     const setupNames = Object.keys(currentSetups);
                     const exportNames = Object.keys(currentExports);
@@ -1449,13 +1622,12 @@
         }
 
         // ============================================================
-        // Controls Rendering - Setup/Adjuster System
+        // Controls Rendering - NEW VERSION
         // ============================================================
         function renderControls() {
             const setupNames = Object.keys(currentSetups);
             const exportNames = Object.keys(currentExports);
             
-            // No controls at all?
             if (setupNames.length === 0 && exportNames.length === 0) {
                 controlsContent.innerHTML = '<div class="controls-placeholder">No exported controls</div>';
                 return;
@@ -1465,21 +1637,22 @@
             
             // New setup/adjuster system
             if (setupNames.length > 0) {
-                // Setup tabs (if multiple setups)
+                // Setup selector dropdown (if multiple setups)
                 if (setupNames.length > 1) {
-                    html += '<div class="setup-tabs" style="display:flex;border-bottom:1px solid var(--border);margin-bottom:8px;">';
+                    html += '<div class="setup-selector">';
+                    html += '<label>Configuration</label>';
+                    html += '<select id="setupSelector" onchange="switchSetup(this.value)">';
                     for (const name of setupNames) {
-                        const isActive = name === activeSetup ? 'active' : '';
-                        const style = isActive ? 
-                            'color:var(--bg-primary);border-bottom:2px solid var(--bg-primary);' : 
-                            'color:var(--text-muted);border-bottom:2px solid transparent;';
-                        html += `<button style="padding:6px 12px;font-size:11px;background:transparent;border:none;cursor:pointer;${style}" 
-                                         onclick="switchSetup('${name}')">${name}</button>`;
+                        const setup = currentSetups[name];
+                        const label = setup.label || name;
+                        const selected = name === activeSetup ? 'selected' : '';
+                        html += `<option value="${name}" ${selected}>${label}</option>`;
                     }
+                    html += '</select>';
                     html += '</div>';
                 }
                 
-                // Validate activeSetup exists in current file, otherwise use first
+                // Render active setup controls
                 const setupName = (activeSetup && currentSetups[activeSetup]) ? activeSetup : setupNames[0];
                 html += renderSetupControls(setupName);
             }
@@ -1492,6 +1665,9 @@
             }
             
             controlsContent.innerHTML = html;
+            
+            // Initialize any color pickers
+            initColorPickers();
         }
 
         function renderSetupControls(setupName) {
@@ -1500,9 +1676,12 @@
             
             let html = '';
             
-            // Setup section
-            html += '<div class="control-group">';
-            html += `<div class="control-proc-name">${setup.proc}</div>`;
+            // Setup section with parameters
+            html += '<div class="setup-section">';
+            html += '<div class="setup-section-header">';
+            html += `<span class="setup-section-title">${setup.label || setup.proc}</span>`;
+            html += `<button class="setup-run-btn" onclick="runSetup('${setupName}')">▶ Run</button>`;
+            html += '</div>';
             
             // Setup parameters
             if (setup.params && setup.params.length > 0) {
@@ -1510,41 +1689,194 @@
                     html += renderParamControl('setup', setupName, param);
                 }
             }
-            
-            // Run button
-            html += `
-                <div class="control-actions">
-                    <button class="primary" onclick="runSetup('${setupName}')">▶ Run Setup</button>
-                </div>
-            `;
             html += '</div>';
             
-            // Adjusters section (only show adjusters for this setup)
+            // Adjusters section - group by adjuster name/label
             const setupAdjusters = setup.adjusters || [];
             if (setupAdjusters.length > 0) {
-                html += '<div class="control-group">';
-                html += '<div class="control-proc-name" style="color:var(--text-muted);font-size:10px;">ADJUSTERS</div>';
+                // Group adjusters by a logical category (for now, one group per adjuster)
+                const adjGroups = groupAdjusters(setupAdjusters);
                 
-                for (const adjName of setupAdjusters) {
-                    const adj = currentAdjusters[adjName];
-                    if (!adj) continue;
-                    
-                    // Show adjuster params with label indicating target
-                    if (adj.params && adj.params.length > 0) {
-                        for (const param of adj.params) {
-                            // Add target info to label
-                            const labelSuffix = adj.target ? ` (${adj.target})` : '';
-                            const paramWithLabel = {...param};
-                            paramWithLabel.label = (param.label || param.name) + labelSuffix;
-                            html += renderParamControl('adjuster', adjName, paramWithLabel);
-                        }
-                    }
+                for (const group of adjGroups) {
+                    html += renderAdjusterGroup(group);
                 }
-                
-                html += '</div>';
             }
             
             return html;
+        }
+        
+        // Group adjusters logically - could be extended to group by target, etc.
+        function groupAdjusters(adjusterNames) {
+            const groups = [];
+            
+            for (const adjName of adjusterNames) {
+                const adj = currentAdjusters[adjName];
+                if (!adj) continue;
+                
+                // Check if this is a color adjuster (has r, g, b params)
+                const isColor = isColorAdjuster(adj);
+                
+                groups.push({
+                    name: adjName,
+                    label: adj.label || adjName,
+                    target: adj.target,
+                    adjuster: adj,
+                    isColor: isColor
+                });
+            }
+            
+            return groups;
+        }
+        
+        function isColorAdjuster(adj) {
+            if (!adj.params || adj.params.length < 3) return false;
+            const names = adj.params.map(p => p.name.toLowerCase());
+            return names.includes('r') && names.includes('g') && names.includes('b');
+        }
+        
+        function renderAdjusterGroup(group) {
+            const adj = group.adjuster;
+            let html = '<div class="adjuster-group">';
+            
+            // Header with label and target badge
+            html += '<div class="adjuster-group-header">';
+            html += `<span>${group.label}</span>`;
+            if (group.target) {
+                html += `<span class="target-badge">${group.target}</span>`;
+            }
+            html += '</div>';
+            
+            // Render as color picker or individual params
+            if (group.isColor) {
+                html += renderColorPicker(group.name, adj);
+            } else {
+                // Regular params
+                for (const param of (adj.params || [])) {
+                    html += renderParamControl('adjuster', group.name, param);
+                }
+            }
+            
+            html += '</div>';
+            return html;
+        }
+        
+        function renderColorPicker(adjusterName, adj) {
+            // Extract RGB values from params
+            const rParam = adj.params.find(p => p.name.toLowerCase() === 'r');
+            const gParam = adj.params.find(p => p.name.toLowerCase() === 'g');
+            const bParam = adj.params.find(p => p.name.toLowerCase() === 'b');
+            const aParam = adj.params.find(p => p.name.toLowerCase() === 'a');
+            
+            const r = rParam ? (rParam.default || 1) : 1;
+            const g = gParam ? (gParam.default || 1) : 1;
+            const b = bParam ? (bParam.default || 1) : 1;
+            
+            // Convert 0-1 to hex
+            const hexColor = rgbToHex(r, g, b);
+            
+            const inputId = `colorpicker_${adjusterName}`.replace(/[^a-zA-Z0-9_]/g, '_');
+            
+            let html = '<div class="color-picker-control">';
+            html += '<div class="color-picker-row">';
+            html += `<input type="color" class="color-picker-input" id="${inputId}" 
+                            value="${hexColor}" 
+                            data-adjuster="${adjusterName}"
+                            data-has-alpha="${aParam ? 'true' : 'false'}"
+                            onchange="onColorPickerChange(this)">`;
+            html += `<input type="text" class="color-picker-hex" id="${inputId}_hex" value="${hexColor}" 
+                            onchange="onColorHexChange(this, '${inputId}')">`;
+            html += `<span class="color-picker-values" id="${inputId}_rgb">${r.toFixed(2)}, ${g.toFixed(2)}, ${b.toFixed(2)}</span>`;
+            html += '</div>';
+            
+            // Alpha slider if present
+            if (aParam) {
+                const a = aParam.default !== undefined ? aParam.default : 1;
+                html += `<div class="control-param" style="margin-top:6px;">`;
+                html += `<label>Alpha</label>`;
+                html += `<div class="control-param-row">`;
+                html += `<input type="range" id="${inputId}_alpha" 
+                                min="0" max="1" step="0.01" value="${a}"
+                                data-adjuster="${adjusterName}"
+                                oninput="onColorAlphaChange(this, '${inputId}')">`;
+                html += `<span class="control-param-value" id="${inputId}_alpha_val">${a.toFixed(2)}</span>`;
+                html += `</div></div>`;
+            }
+            
+            html += '</div>';
+            
+            // Store hidden inputs for the actual values
+            html += `<input type="hidden" id="${inputId}_r" value="${r}" data-control-type="adjuster" data-parent="${adjusterName}" data-param="r">`;
+            html += `<input type="hidden" id="${inputId}_g" value="${g}" data-control-type="adjuster" data-parent="${adjusterName}" data-param="g">`;
+            html += `<input type="hidden" id="${inputId}_b" value="${b}" data-control-type="adjuster" data-parent="${adjusterName}" data-param="b">`;
+            if (aParam) {
+                html += `<input type="hidden" id="${inputId}_a" value="${aParam.default || 1}" data-control-type="adjuster" data-parent="${adjusterName}" data-param="a">`;
+            }
+            
+            return html;
+        }
+        
+        function rgbToHex(r, g, b) {
+            const toHex = (v) => {
+                const h = Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16);
+                return h.length === 1 ? '0' + h : h;
+            };
+            return '#' + toHex(r) + toHex(g) + toHex(b);
+        }
+        
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            if (!result) return { r: 1, g: 1, b: 1 };
+            return {
+                r: parseInt(result[1], 16) / 255,
+                g: parseInt(result[2], 16) / 255,
+                b: parseInt(result[3], 16) / 255
+            };
+        }
+        
+        function onColorPickerChange(el) {
+            const inputId = el.id;
+            const hex = el.value;
+            const rgb = hexToRgb(hex);
+            
+            // Update displays
+            document.getElementById(inputId + '_hex').value = hex;
+            document.getElementById(inputId + '_rgb').textContent = 
+                `${rgb.r.toFixed(2)}, ${rgb.g.toFixed(2)}, ${rgb.b.toFixed(2)}`;
+            
+            // Update hidden inputs
+            document.getElementById(inputId + '_r').value = rgb.r;
+            document.getElementById(inputId + '_g').value = rgb.g;
+            document.getElementById(inputId + '_b').value = rgb.b;
+            
+            // Trigger adjuster if live update
+            if (document.getElementById('liveUpdate').checked) {
+                runAdjuster(el.dataset.adjuster);
+            }
+        }
+        
+        function onColorHexChange(hexInput, pickerId) {
+            let hex = hexInput.value;
+            if (!hex.startsWith('#')) hex = '#' + hex;
+            
+            // Validate hex
+            if (/^#[0-9A-Fa-f]{6}$/.test(hex)) {
+                document.getElementById(pickerId).value = hex;
+                onColorPickerChange(document.getElementById(pickerId));
+            }
+        }
+        
+        function onColorAlphaChange(el, pickerId) {
+            const val = parseFloat(el.value);
+            document.getElementById(pickerId + '_alpha_val').textContent = val.toFixed(2);
+            document.getElementById(pickerId + '_a').value = val;
+            
+            if (document.getElementById('liveUpdate').checked) {
+                runAdjuster(el.dataset.adjuster);
+            }
+        }
+        
+        function initColorPickers() {
+            // Any post-render initialization for color pickers
         }
 
         function renderLegacyProcControls(procName) {
@@ -1598,21 +1930,24 @@
                                step="${step}" 
                                value="${defaultVal}"
                                oninput="onParamChange(this)">
-                        <span class="control-param-value" id="${inputId}_val">${defaultVal}</span>
+                        <span class="control-param-value" id="${inputId}_val">${formatValue(defaultVal, param.type)}</span>
                         ${unit ? `<span class="control-param-unit">${unit}</span>` : ''}
                     `;
                     break;
                     
                 case 'bool':
                     html += `
-                        <input type="checkbox" 
-                               id="${inputId}"
-                               data-control-type="${type}"
-                               data-parent="${parentName}"
-                               data-param="${param.name}"
-                               data-paramtype="bool"
-                               ${defaultVal ? 'checked' : ''}
-                               onchange="onParamChange(this)">
+                        <div class="toggle-row" style="width:100%">
+                            <span class="toggle-label">${defaultVal ? 'On' : 'Off'}</span>
+                            <div class="toggle-switch ${defaultVal ? 'active' : ''}" 
+                                 id="${inputId}"
+                                 data-control-type="${type}"
+                                 data-parent="${parentName}"
+                                 data-param="${param.name}"
+                                 data-paramtype="bool"
+                                 data-value="${defaultVal ? '1' : '0'}"
+                                 onclick="onToggleChange(this)"></div>
+                        </div>
                     `;
                     break;
                     
@@ -1658,6 +1993,16 @@
             html += '</div></div>';
             return html;
         }
+        
+        function formatValue(val, type) {
+            if (type === 'float') {
+                const num = parseFloat(val);
+                if (Math.abs(num) >= 100) return num.toFixed(1);
+                if (Math.abs(num) >= 10) return num.toFixed(2);
+                return num.toFixed(3);
+            }
+            return val;
+        }
 
         // ============================================================
         // Parameter Change Handling
@@ -1666,8 +2011,31 @@
             // Update displayed value for sliders
             const valSpan = document.getElementById(el.id + '_val');
             if (valSpan) {
-                valSpan.textContent = el.value;
+                valSpan.textContent = formatValue(el.value, el.dataset.paramtype);
             }
+            
+            // Live update if enabled
+            if (document.getElementById('liveUpdate').checked) {
+                const type = el.dataset.controlType;
+                const parentName = el.dataset.parent;
+                
+                if (type === 'setup') {
+                    runSetup(parentName);
+                } else if (type === 'adjuster') {
+                    runAdjuster(parentName);
+                } else if (type === 'legacy') {
+                    runLegacyProc(parentName);
+                }
+            }
+        }
+        
+        function onToggleChange(el) {
+            const isActive = el.classList.toggle('active');
+            el.dataset.value = isActive ? '1' : '0';
+            
+            // Update label
+            const label = el.parentElement.querySelector('.toggle-label');
+            if (label) label.textContent = isActive ? 'On' : 'Off';
             
             // Live update if enabled
             if (document.getElementById('liveUpdate').checked) {
@@ -1711,10 +2079,7 @@
                     const fileInfoJson = await connection.eval(`workspace::get_file_info "${currentFile}"`);
                     const fileInfo = JSON.parse(fileInfoJson);
                     
-                    // Update adjusters (setups and exports don't change)
                     const newAdjusters = fileInfo.adjusters || {};
-                    
-                    // Check if adjusters changed
                     const oldKeys = Object.keys(currentAdjusters).sort().join(',');
                     const newKeys = Object.keys(newAdjusters).sort().join(',');
                     
@@ -1724,19 +2089,97 @@
                         addLogEntry('info', 'Controls updated with auto-generated adjusters');
                     }
                 } catch (e) {
-                    // Ignore errors - auto-refresh is optional
                     console.log('Could not refresh adjusters:', e);
+                }
+                
+                // Fetch current adjuster values and sync UI
+                try {
+                    const valuesJson = await connection.eval('workspace::get_active_adjuster_values');
+                    const values = JSON.parse(valuesJson);
+                    syncAdjusterUI(values);
+                } catch (e) {
+                    console.log('Could not sync adjuster values:', e);
                 }
             }).catch(e => {
                 addLogEntry('error', e.message);
             });
+        }
+        
+        // Sync UI controls with actual object values
+        function syncAdjusterUI(values) {
+            for (const [adjName, paramValues] of Object.entries(values)) {
+                const adj = currentAdjusters[adjName];
+                if (!adj) continue;
+                
+                // Check if this is a color adjuster
+                if (isColorAdjuster(adj)) {
+                    const colorPickerId = `colorpicker_${adjName}`.replace(/[^a-zA-Z0-9_]/g, '_');
+                    const colorPicker = document.getElementById(colorPickerId);
+                    
+                    if (colorPicker && paramValues.r !== undefined) {
+                        const r = paramValues.r;
+                        const g = paramValues.g;
+                        const b = paramValues.b;
+                        
+                        // Update color picker
+                        const hex = rgbToHex(r, g, b);
+                        colorPicker.value = hex;
+                        
+                        // Update displays
+                        const hexInput = document.getElementById(colorPickerId + '_hex');
+                        const rgbDisplay = document.getElementById(colorPickerId + '_rgb');
+                        if (hexInput) hexInput.value = hex;
+                        if (rgbDisplay) rgbDisplay.textContent = `${r.toFixed(2)}, ${g.toFixed(2)}, ${b.toFixed(2)}`;
+                        
+                        // Update hidden inputs
+                        const rInput = document.getElementById(colorPickerId + '_r');
+                        const gInput = document.getElementById(colorPickerId + '_g');
+                        const bInput = document.getElementById(colorPickerId + '_b');
+                        if (rInput) rInput.value = r;
+                        if (gInput) gInput.value = g;
+                        if (bInput) bInput.value = b;
+                        
+                        // Alpha if present
+                        if (paramValues.a !== undefined) {
+                            const aInput = document.getElementById(colorPickerId + '_a');
+                            const aSlider = document.getElementById(colorPickerId + '_alpha');
+                            const aVal = document.getElementById(colorPickerId + '_alpha_val');
+                            if (aInput) aInput.value = paramValues.a;
+                            if (aSlider) aSlider.value = paramValues.a;
+                            if (aVal) aVal.textContent = paramValues.a.toFixed(2);
+                        }
+                    }
+                } else {
+                    // Regular params - update sliders/inputs
+                    for (const [paramName, paramVal] of Object.entries(paramValues)) {
+                        const inputId = `param_adjuster_${adjName}_${paramName}`.replace(/[^a-zA-Z0-9_]/g, '_');
+                        const el = document.getElementById(inputId);
+                        if (el) {
+                            if (el.type === 'range' || el.type === 'number' || el.type === 'text') {
+                                el.value = paramVal;
+                                // Update value display
+                                const valSpan = document.getElementById(inputId + '_val');
+                                if (valSpan) {
+                                    valSpan.textContent = formatValue(paramVal, el.dataset.paramtype);
+                                }
+                            } else if (el.classList.contains('toggle-switch')) {
+                                const isOn = paramVal ? true : false;
+                                el.classList.toggle('active', isOn);
+                                el.dataset.value = isOn ? '1' : '0';
+                                const label = el.parentElement.querySelector('.toggle-label');
+                                if (label) label.textContent = isOn ? 'On' : 'Off';
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         function runAdjuster(adjusterName) {
             const adj = currentAdjusters[adjusterName];
             if (!adj) return;
             
-            const args = collectParamValues('adjuster', adjusterName, adj.params);
+            const args = collectAdjusterValues(adjusterName, adj);
             const cmd = `workspace::invoke_adjuster ${adjusterName} ${args.join(' ')}`;
             
             connection.eval(cmd).then(result => {
@@ -1746,6 +2189,53 @@
             }).catch(e => {
                 addLogEntry('error', e.message);
             });
+        }
+        
+        function collectAdjusterValues(adjusterName, adj) {
+            const args = [];
+            
+            // Check if this is a color adjuster with a color picker
+            const colorPickerId = `colorpicker_${adjusterName}`.replace(/[^a-zA-Z0-9_]/g, '_');
+            const colorPicker = document.getElementById(colorPickerId);
+            
+            if (colorPicker && isColorAdjuster(adj)) {
+                // Get values from hidden inputs
+                const r = document.getElementById(colorPickerId + '_r');
+                const g = document.getElementById(colorPickerId + '_g');
+                const b = document.getElementById(colorPickerId + '_b');
+                const a = document.getElementById(colorPickerId + '_a');
+                
+                if (r) args.push(r.value);
+                if (g) args.push(g.value);
+                if (b) args.push(b.value);
+                if (a) args.push(a.value);
+            } else {
+                // Standard param collection
+                for (const param of (adj.params || [])) {
+                    const inputId = `param_adjuster_${adjusterName}_${param.name}`.replace(/[^a-zA-Z0-9_]/g, '_');
+                    const el = document.getElementById(inputId);
+                    if (!el) continue;
+                    
+                    let value;
+                    switch (param.type) {
+                        case 'bool':
+                            // Handle toggle switches
+                            value = el.dataset.value || (el.checked ? '1' : '0');
+                            break;
+                        case 'string':
+                            value = `"${el.value.replace(/"/g, '\\"')}"`;
+                            break;
+                        case 'choice':
+                            value = `"${el.value}"`;
+                            break;
+                        default:
+                            value = el.value;
+                    }
+                    args.push(value);
+                }
+            }
+            
+            return args;
         }
 
         function runLegacyProc(procName) {
@@ -1775,7 +2265,8 @@
                 let value;
                 switch (param.type) {
                     case 'bool':
-                        value = el.checked ? '1' : '0';
+                        // Handle toggle switches
+                        value = el.dataset.value || (el.checked ? '1' : '0');
                         break;
                     case 'string':
                         value = `"${el.value.replace(/"/g, '\\"')}"`;
@@ -1793,10 +2284,7 @@
         }
 
         function refreshWorkspaces() {
-            // Clear search
             searchInput.value = '';
-            
-            // Clear current selection
             currentWorkspace = null;
             currentFile = null;
             currentSetups = {};
@@ -1804,10 +2292,7 @@
             currentExports = {};
             activeSetup = null;
             
-            // Clear controls panel
             controlsContent.innerHTML = '<div class="controls-placeholder">Select a file to see controls</div>';
-            
-            // Reload workspaces
             loadWorkspaces();
         }
 
@@ -1820,13 +2305,11 @@
             const categories = workspacesTree.querySelectorAll('.tree-category');
             
             if (q === '') {
-                // Show all
                 items.forEach(el => el.classList.remove('hidden'));
                 categories.forEach(el => el.classList.remove('collapsed'));
                 return;
             }
             
-            // Hide/show items based on match
             items.forEach(el => {
                 const name = el.textContent.toLowerCase();
                 if (name.includes(q)) {
@@ -1836,18 +2319,8 @@
                 }
             });
             
-            // Expand all categories to show matches, hide empty ones
             categories.forEach(cat => {
                 cat.classList.remove('collapsed');
-                const visibleItems = cat.querySelectorAll('.tree-item:not(.hidden)');
-                const childCategories = cat.querySelectorAll(':scope > .tree-items > .tree-category');
-                let hasVisible = visibleItems.length > 0;
-                childCategories.forEach(child => {
-                    if (child.querySelectorAll('.tree-item:not(.hidden)').length > 0) {
-                        hasVisible = true;
-                    }
-                });
-                // Keep all visible for now - could hide empty containers
             });
         }
 
@@ -1872,7 +2345,7 @@
                         description += text;
                     }
                 } else if (line.trim() && !line.startsWith('#')) {
-                    break;  // Stop at first non-comment line
+                    break;
                 }
             }
             
@@ -1909,12 +2382,14 @@
                 statusIndicator.classList.add('connected');
                 statusDot.classList.add('connected');
                 connectionStatus.textContent = 'Connected';
-                if (connectionStatusText) connectionStatusText.textContent = 'Connected';
+                const cst = document.getElementById('connectionStatusText');
+                if (cst) cst.textContent = 'Connected';
             } else {
                 statusIndicator.classList.remove('connected');
                 statusDot.classList.remove('connected');
                 connectionStatus.textContent = 'Disconnected';
-                if (connectionStatusText) connectionStatusText.textContent = 'Disconnected';
+                const cst = document.getElementById('connectionStatusText');
+                if (cst) cst.textContent = 'Disconnected';
             }
         }
 
@@ -1999,7 +2474,6 @@
             
             try {
                 const results = editor.lint();
-                console.log('Lint results:', results);  // Debug
                 showLintResults(results);
             } catch (e) {
                 console.error('Lint error:', e);
@@ -2011,23 +2485,17 @@
             const lintResults = document.getElementById('lintResults');
             const editorInfo = document.getElementById('editorInfo');
             
-            // TclLinter returns { isValid, errors: [], warnings: [], summary }
             let errors = [];
             let warnings = [];
             
             if (results) {
-                if (Array.isArray(results.errors)) {
-                    errors = results.errors;
-                }
-                if (Array.isArray(results.warnings)) {
-                    warnings = results.warnings;
-                }
+                if (Array.isArray(results.errors)) errors = results.errors;
+                if (Array.isArray(results.warnings)) warnings = results.warnings;
             }
             
             const allIssues = [...errors, ...warnings];
             
             if (allIssues.length === 0) {
-                // No issues found
                 lintResults.innerHTML = `
                     <div class="lint-results-header">
                         <span class="lint-results-title">Lint Results</span>
@@ -2039,7 +2507,6 @@
                 editorInfo.textContent = 'No issues';
                 editorInfo.className = 'editor-info';
                 
-                // Auto-hide after 2 seconds if no issues
                 setTimeout(() => {
                     if (lintResults.querySelector('.lint-results-empty')) {
                         hideLintResults();
@@ -2048,7 +2515,6 @@
                 return;
             }
             
-            // Sort by line number
             allIssues.sort((a, b) => (a.line || 0) - (b.line || 0));
             
             let html = `
@@ -2078,7 +2544,6 @@
             lintResults.innerHTML = html;
             lintResults.classList.add('visible');
             
-            // Update status
             if (errors.length > 0) {
                 editorInfo.textContent = `${errors.length} error${errors.length > 1 ? 's' : ''}, ${warnings.length} warning${warnings.length !== 1 ? 's' : ''}`;
                 editorInfo.className = 'editor-info has-errors';
@@ -2140,8 +2605,7 @@
             }
             connection = new Stim2Connection();
             connection.onStatusUpdate = (msg) => {
-                stateValue.textContent = msg.state || '-';
-                fpsValue.textContent = msg.fps ? msg.fps.toFixed(1) : '-';
+                // handled in class
             };
             connection.connect();
             
