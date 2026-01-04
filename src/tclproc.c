@@ -21,9 +21,14 @@
 #include <string.h>
 #include <math.h>
 #include <tcl.h>
+#include <string.h>
+#include <sys/stat.h>
 
 #include "stim2.h"
 #include "objname.h"
+
+/* Global asset search paths - Tcl list stored as string */
+static Tcl_Obj *assetSearchPaths = NULL;
 
 #ifdef WIN32
 static int strcasecmp(char *a,char *b) { return stricmp(a,b); }
@@ -173,6 +178,228 @@ int sendTclMouseXCommand(int key, int down)
   }
 }
 #endif
+
+
+/*
+ * Helper: check if path exists in list, return index or -1
+ */
+static Tcl_Size findPathIndex(Tcl_Interp *interp, const char *path)
+{
+    if (assetSearchPaths == NULL) return -1;
+    
+    Tcl_Size len;
+    Tcl_ListObjLength(interp, assetSearchPaths, &len);
+    
+    for (Tcl_Size i = 0; i < len; i++) {
+        Tcl_Obj *elem;
+        Tcl_ListObjIndex(interp, assetSearchPaths, i, &elem);
+        if (strcmp(Tcl_GetString(elem), path) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/*
+ * assetPath - manage asset search paths
+ *   assetPath              - return current paths as list
+ *   assetPath add path     - prepend path to search list (moves to front if exists)
+ *   assetPath append path  - append path to search list (no-op if exists)
+ *   assetPath remove path  - remove path from list
+ *   assetPath clear        - clear all paths
+ *   assetPath list         - same as no args
+ */
+static int assetPathCmd(ClientData clientData, Tcl_Interp *interp,
+                        int objc, Tcl_Obj *const objv[])
+{
+    if (assetSearchPaths == NULL) {
+        assetSearchPaths = Tcl_NewListObj(0, NULL);
+        Tcl_IncrRefCount(assetSearchPaths);
+    }
+    
+    if (objc == 1 || (objc == 2 && strcmp(Tcl_GetString(objv[1]), "list") == 0)) {
+        /* Return current paths */
+        Tcl_SetObjResult(interp, assetSearchPaths);
+        return TCL_OK;
+    }
+    
+    const char *subcmd = Tcl_GetString(objv[1]);
+    
+    if (strcmp(subcmd, "add") == 0 || strcmp(subcmd, "prepend") == 0) {
+        if (objc != 3) {
+            Tcl_WrongNumArgs(interp, 2, objv, "path");
+            return TCL_ERROR;
+        }
+        
+        const char *newPath = Tcl_GetString(objv[2]);
+        Tcl_Size existingIndex = findPathIndex(interp, newPath);
+        
+        /* Build new list with this path at front */
+        Tcl_Obj *newList = Tcl_NewListObj(0, NULL);
+        Tcl_ListObjAppendElement(interp, newList, objv[2]);
+        
+        Tcl_Size len;
+        Tcl_ListObjLength(interp, assetSearchPaths, &len);
+        for (Tcl_Size i = 0; i < len; i++) {
+            /* Skip if this is the existing entry (we already added at front) */
+            if (i == existingIndex) continue;
+            
+            Tcl_Obj *elem;
+            Tcl_ListObjIndex(interp, assetSearchPaths, i, &elem);
+            Tcl_ListObjAppendElement(interp, newList, elem);
+        }
+        
+        Tcl_DecrRefCount(assetSearchPaths);
+        assetSearchPaths = newList;
+        Tcl_IncrRefCount(assetSearchPaths);
+        return TCL_OK;
+    }
+    
+    if (strcmp(subcmd, "append") == 0) {
+        if (objc != 3) {
+            Tcl_WrongNumArgs(interp, 2, objv, "path");
+            return TCL_ERROR;
+        }
+        
+        const char *newPath = Tcl_GetString(objv[2]);
+        
+        /* Skip if already exists anywhere in list */
+        if (findPathIndex(interp, newPath) >= 0) {
+            return TCL_OK;
+        }
+        
+        /* Append to list */
+        Tcl_Obj *newList = Tcl_DuplicateObj(assetSearchPaths);
+        Tcl_ListObjAppendElement(interp, newList, objv[2]);
+        
+        Tcl_DecrRefCount(assetSearchPaths);
+        assetSearchPaths = newList;
+        Tcl_IncrRefCount(assetSearchPaths);
+        return TCL_OK;
+    }
+    
+    if (strcmp(subcmd, "clear") == 0) {
+        Tcl_DecrRefCount(assetSearchPaths);
+        assetSearchPaths = Tcl_NewListObj(0, NULL);
+        Tcl_IncrRefCount(assetSearchPaths);
+        return TCL_OK;
+    }
+    
+    if (strcmp(subcmd, "remove") == 0) {
+        if (objc != 3) {
+            Tcl_WrongNumArgs(interp, 2, objv, "path");
+            return TCL_ERROR;
+        }
+        const char *removePath = Tcl_GetString(objv[2]);
+        Tcl_Obj *newList = Tcl_NewListObj(0, NULL);
+        
+        Tcl_Size len;
+        Tcl_ListObjLength(interp, assetSearchPaths, &len);
+        for (Tcl_Size i = 0; i < len; i++) {
+            Tcl_Obj *elem;
+            Tcl_ListObjIndex(interp, assetSearchPaths, i, &elem);
+            if (strcmp(Tcl_GetString(elem), removePath) != 0) {
+                Tcl_ListObjAppendElement(interp, newList, elem);
+            }
+        }
+        
+        Tcl_DecrRefCount(assetSearchPaths);
+        assetSearchPaths = newList;
+        Tcl_IncrRefCount(assetSearchPaths);
+        return TCL_OK;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_ObjPrintf("unknown subcommand \"%s\": must be add, append, remove, clear, or list", subcmd));
+    return TCL_ERROR;
+}
+
+/*
+ * assetFind - find an asset file
+ *   assetFind filename     - search paths for file, return full path
+ *   assetFind subdir/file  - can include subdirectory
+ *
+ * Search order:
+ *   1. If absolute path or starts with ./ or ../, use directly
+ *   2. Search each path in assetSearchPaths
+ *   3. Return error if not found
+ */
+static int assetFindCmd(ClientData clientData, Tcl_Interp *interp,
+                        int objc, Tcl_Obj *const objv[])
+{
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "filename");
+        return TCL_ERROR;
+    }
+    
+    const char *filename = Tcl_GetString(objv[1]);
+    struct stat st;
+    
+    /* Check if it's already an absolute or explicit relative path */
+    if (filename[0] == '/' || 
+        (filename[0] == '.' && (filename[1] == '/' || 
+         (filename[1] == '.' && filename[2] == '/')))) {
+        if (stat(filename, &st) == 0 && S_ISREG(st.st_mode)) {
+            Tcl_SetObjResult(interp, objv[1]);
+            return TCL_OK;
+        }
+        Tcl_SetObjResult(interp, Tcl_ObjPrintf("asset not found: %s", filename));
+        return TCL_ERROR;
+    }
+    
+#ifdef _WIN32
+    /* Windows absolute path check */
+    if (filename[0] != '\0' && filename[1] == ':') {
+        if (stat(filename, &st) == 0 && S_ISREG(st.st_mode)) {
+            Tcl_SetObjResult(interp, objv[1]);
+            return TCL_OK;
+        }
+        Tcl_SetObjResult(interp, Tcl_ObjPrintf("asset not found: %s", filename));
+        return TCL_ERROR;
+    }
+#endif
+    
+    /* Search through asset paths */
+    if (assetSearchPaths != NULL) {
+        Tcl_Size len;
+        Tcl_ListObjLength(interp, assetSearchPaths, &len);
+        
+        for (Tcl_Size i = 0; i < len; i++) {
+            Tcl_Obj *pathObj;
+            Tcl_ListObjIndex(interp, assetSearchPaths, i, &pathObj);
+            
+            Tcl_Obj *fullPath = Tcl_ObjPrintf("%s/%s", 
+                Tcl_GetString(pathObj), filename);
+            Tcl_IncrRefCount(fullPath);
+            
+            const char *fullPathStr = Tcl_GetString(fullPath);
+            if (stat(fullPathStr, &st) == 0 && S_ISREG(st.st_mode)) {
+                Tcl_SetObjResult(interp, fullPath);
+                Tcl_DecrRefCount(fullPath);
+                return TCL_OK;
+            }
+            Tcl_DecrRefCount(fullPath);
+        }
+    }
+    
+    /* Build helpful error message */
+    Tcl_Size pathCount = 0;
+    if (assetSearchPaths != NULL) {
+        Tcl_ListObjLength(interp, assetSearchPaths, &pathCount);
+    }
+    Tcl_SetObjResult(interp, Tcl_ObjPrintf("asset not found: %s (searched %d paths)", 
+        filename, (int)pathCount));
+    return TCL_ERROR;
+}
+
+/*
+ * Register asset commands - call from addTclCommands()
+ */
+static void addAssetCommands(Tcl_Interp *interp)
+{
+    Tcl_CreateObjCommand(interp, "assetPath", assetPathCmd, NULL, NULL);
+    Tcl_CreateObjCommand(interp, "assetFind", assetFindCmd, NULL, NULL);
+}
+
 
 /*********************************************************************/
 /*                          Ping Command                             */
@@ -615,22 +842,21 @@ static int scaleObjCmd(ClientData clientData, Tcl_Interp *interp,
   GR_OBJ *o;
   int id;
   double x, y, z;
-
-  if (argc < 3) {
-    Tcl_SetResult(interp, "usage: scaleObj objid x [y [z]]", TCL_STATIC);
+  
+  if (argc < 2) {
+    Tcl_SetResult(interp, "usage: scaleObj objid ?x [y [z]]?", TCL_STATIC);
     return TCL_ERROR;
   }
   
   if (findObj(interp, olist, argv[1], &id) != TCL_OK) 
     return TCL_ERROR;
-
   o = OL_OBJ(olist,id);
   if (!o) {
     Tcl_SetResult(interp, "scaleObj: invalid object specified", TCL_STATIC);
     return TCL_ERROR;
   }
-
-
+  
+  /* Getter */
   if (argc == 2) {
     static char buf[32];
     sprintf(buf, "%.4f %.4f %.4f",
@@ -639,6 +865,7 @@ static int scaleObjCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
   }
   
+  /* Setter */
   if (Tcl_GetDouble(interp, argv[2], &x) != TCL_OK) return TCL_ERROR;
   if (argc > 3) {
 	if (Tcl_GetDouble(interp, argv[3], &y) != TCL_OK) return TCL_ERROR;
@@ -648,9 +875,7 @@ static int scaleObjCmd(ClientData clientData, Tcl_Interp *interp,
 	if (Tcl_GetDouble(interp, argv[4], &z) != TCL_OK) return TCL_ERROR;
   }
   else z = x;
-
   gobjScaleObj(o, x, y, z);
-
   return TCL_OK;
 }
 
@@ -2483,10 +2708,9 @@ void addTclCommands(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "wakeup", (Tcl_CmdProc *) wakeupCmd, 
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
 
-#ifdef EMBED_PYTHON
-  Tcl_CreateCommand(interp, "exec_python", (Tcl_CmdProc *) execPythonCmdCmd, 
-		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
-#endif
+
+  addAssetCommands(interp);
+
   
   /* Linked global variables */
   
