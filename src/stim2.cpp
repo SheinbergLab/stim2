@@ -1612,7 +1612,7 @@ public:
         NULL);
 
 
-// Setup stim2 module path and load workspace
+    // Setup stim2 module path and load workspace
     Tcl_Eval(interp, R"(
 proc setup_stim2_modules {} {
     set exe_dir [file dirname [info nameofexecutable]]
@@ -1659,6 +1659,83 @@ proc setup_stim2_modules {} {
 setup_stim2_modules
 )");
 
+
+    Tcl_Eval(interp, R"(
+proc setup_asset_paths {} {
+    set exe_dir [file dirname [info nameofexecutable]]
+    
+    # Platform-specific defaults
+    if {$::tcl_platform(os) eq "Darwin"} {
+        set bundle_resources [file normalize [file join $exe_dir .. Resources]]
+        set share_dir /usr/local/stim2
+    } elseif {$::tcl_platform(platform) eq "windows"} {
+        set bundle_resources ""
+        set share_dir c:/usr/local/stim2
+    } else {
+        set bundle_resources ""
+        set share_dir /usr/local/stim2
+    }
+    
+    # Build search path list (in priority order)
+    set search_dirs {}
+    
+    # 1. Environment variable (highest priority) - colon-separated
+    if {[info exists ::env(STIM2_ASSETS)]} {
+        foreach p [split $::env(STIM2_ASSETS) ":"] {
+            set p [string trim $p]
+            if {$p ne "" && [file isdirectory $p]} {
+                lappend search_dirs $p
+            }
+        }
+    }
+    
+    # 2. Current working directory assets/
+    set cwd_assets [file join [pwd] assets]
+    if {[file isdirectory $cwd_assets]} {
+        lappend search_dirs $cwd_assets
+    }
+    
+    # 3. Executable directory assets/
+    set exe_assets [file join $exe_dir assets]
+    if {[file isdirectory $exe_assets]} {
+        lappend search_dirs $exe_assets
+    }
+    
+    # 4. Bundle resources (macOS app bundle)
+    if {$bundle_resources ne ""} {
+        set bundle_assets [file join $bundle_resources assets]
+        if {[file isdirectory $bundle_assets]} {
+            lappend search_dirs $bundle_assets
+        }
+    }
+    
+    # 5. System share directory
+    set share_assets [file join $share_dir assets]
+    if {[file isdirectory $share_assets]} {
+        lappend search_dirs $share_assets
+    }
+    
+    # 6. Examples assets (for demos)
+    if {[info exists ::workspace::system_examples_path]} {
+        set examples_assets [file join $::workspace::system_examples_path assets]
+        if {[file isdirectory $examples_assets]} {
+            lappend search_dirs $examples_assets
+        }
+        # Also check for image-specific assets
+        set image_assets [file join $::workspace::system_examples_path image assets]
+        if {[file isdirectory $image_assets]} {
+            lappend search_dirs $image_assets
+        }
+    }
+    
+    # Register all paths
+    foreach dir $search_dirs {
+        assetPath append $dir
+    }
+}
+setup_asset_paths
+)");
+ 
     // Add objid <-> name table support
     OL_NAMEINFO(OBJList) = objNameInitCommands(interp, OBJList);
     
