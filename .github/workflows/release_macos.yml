@@ -54,13 +54,12 @@ jobs:
     
       - name: Install our dg and dlsh libs and headers into the build environment.
         run: |
-          # Get latest dlsh version from SheinbergLab
-          DLSH_VERSION=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | jq -r '.tag_name')
+          # Get latest dlsh version from SheinbergLab (using token to avoid rate limits)
+          DLSH_VERSION=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | jq -r '.tag_name')
           echo "Using dlsh version: $DLSH_VERSION"
           
           wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-arm64-signed.pkg
-          sudo installer -pkg dlsh-${DLSH_VERSION}-Darwin-arm64-signed.pkg -target /
-    
+          sudo installer -pkg dlsh-${DLSH_VERSION}-Darwin-arm64-signed.pkg -target /    
       - name: Build our stimdlls to include within the stim2 app bundle.
         run: |
           cd stimdlls
