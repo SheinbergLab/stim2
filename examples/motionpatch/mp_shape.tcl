@@ -174,6 +174,19 @@ proc mp_shape_get_pointsize {name} {
     dict create pointsize 4.0
 }
 
+# Mask rotation (requires updated motionpatch module)
+# Note: rotates both inside and outside patches together
+proc mp_shape_set_rotation {rotation} {
+    # Convert degrees to radians
+    set rad [expr {$rotation * 3.14159265 / 180.0}]
+    motionpatch_maskrotation dots_inside $rad
+    motionpatch_maskrotation dots_outside $rad
+}
+
+proc mp_shape_get_rotation {} {
+    dict create rotation 0
+}
+
 # ============================================================
 # WORKSPACE DEMO INTERFACE
 # ============================================================
@@ -182,8 +195,14 @@ workspace::reset
 workspace::setup mp_shape_setup {
     shape   {choice {circle square arrow star} circle "Shape"}
     lumdiff {float 0.0 0.5 0.05 0.0 "Luminance Difference"}
-} -adjusters {shape_motion_inside shape_motion_outside shape_pointsize_inside shape_pointsize_outside shape_transform} \
+} -adjusters {shape_mask_rotation shape_motion_inside shape_motion_outside shape_pointsize_inside shape_pointsize_outside shape_transform} \
   -label "Shape-Defined Motion"
+
+# Mask rotation (applies to both inside and outside patches)
+workspace::adjuster shape_mask_rotation {
+    rotation {float 0 360 5 0 "Mask Rotation (deg)"}
+} -target {} -proc mp_shape_set_rotation -getter mp_shape_get_rotation \
+  -label "Mask Rotation"
 
 workspace::adjuster shape_motion_inside {
     coherence {float 0.0 1.0 0.05 1.0 "Coherence"}
