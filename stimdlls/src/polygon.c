@@ -582,21 +582,35 @@ static int polytexcoordsCmd(ClientData clientData, Tcl_Interp *interp,
 static int polycolorCmd(ClientData clientData, Tcl_Interp *interp,
 		      int argc, char *argv[])
 {
-
   OBJ_LIST *olist = (OBJ_LIST *) clientData;
   POLYGON *p;
   double r, g, b, a;
   int id;
-
-  if (argc < 5) {
-    Tcl_AppendResult(interp, "usage: ", argv[0], " polygon r g b ?a?", NULL);
+  
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " polygon ?r g b ?a??", NULL);
     return TCL_ERROR;
   }
-
+  
   if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
     return TCL_ERROR;
   p = GR_CLIENTDATA(OL_OBJ(olist,id));
-
+  
+  /* Getter: return current color */
+  if (argc == 2) {
+    char result[128];
+    snprintf(result, sizeof(result), "%.6g %.6g %.6g %.6g", 
+             p->color[0], p->color[1], p->color[2], p->color[3]);
+    Tcl_SetResult(interp, result, TCL_VOLATILE);
+    return TCL_OK;
+  }
+  
+  /* Setter: need at least r g b */
+  if (argc < 5) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " polygon ?r g b ?a??", NULL);
+    return TCL_ERROR;
+  }
+  
   if (Tcl_GetDouble(interp, argv[2], &r) != TCL_OK) return TCL_ERROR;
   if (Tcl_GetDouble(interp, argv[3], &g) != TCL_OK) return TCL_ERROR;
   if (Tcl_GetDouble(interp, argv[4], &b) != TCL_OK) return TCL_ERROR;
@@ -606,16 +620,13 @@ static int polycolorCmd(ClientData clientData, Tcl_Interp *interp,
   else {
     a = 1.0;
   }
-
   if (a < 1.) {
     p->blend = 1;
   }
-
   p->color[0] = r;
   p->color[1] = g;
   p->color[2] = b;
   p->color[3] = a;
-
   return(TCL_OK);
 }
 
@@ -672,6 +683,37 @@ static int polyfillCmd(ClientData clientData, Tcl_Interp *interp,
   return(TCL_OK);
 }
 
+static int polylinewidthCmd(ClientData clientData, Tcl_Interp *interp,
+			    int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  POLYGON *p;
+  int id;
+  double width;
+  
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " polygon ?linewidth?", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
+    return TCL_ERROR;
+  p = GR_CLIENTDATA(OL_OBJ(olist,id));
+  
+  /* Getter */
+  if (argc == 2) {
+    char result[32];
+    snprintf(result, sizeof(result), "%.6g", p->linewidth);
+    Tcl_SetResult(interp, result, TCL_VOLATILE);
+    return TCL_OK;
+  }
+  
+  /* Setter */
+  if (Tcl_GetDouble(interp, argv[2], &width) != TCL_OK) return TCL_ERROR;
+  p->linewidth = width;
+  return(TCL_OK);
+}
+
 static int polytypeCmd(ClientData clientData, Tcl_Interp *interp,
 		       int argc, char *argv[])
 {
@@ -681,15 +723,33 @@ static int polytypeCmd(ClientData clientData, Tcl_Interp *interp,
   int id;
   double size;
   
-  if (argc < 3) {
+  if (argc < 2) {
     Tcl_AppendResult(interp, "usage: ", argv[0],
-		     " polygon type", NULL);
+		     " polygon ?type?", NULL);
     return TCL_ERROR;
   }
 
-  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist),
+			 argv[1], PolygonID, "polygon")) < 0)
     return TCL_ERROR;
   p = GR_CLIENTDATA(OL_OBJ(olist,id));
+  
+  /* Getter */
+  if (argc == 2) {
+    const char *type_str;
+    switch (p->type) {
+      case GL_TRIANGLES:     type_str = "triangles"; break;
+      case GL_TRIANGLE_STRIP: type_str = "triangle_strip"; break;
+      case GL_TRIANGLE_FAN:  type_str = "triangle_fan"; break;
+      case GL_LINES:         type_str = "lines"; break;
+      case GL_LINE_STRIP:    type_str = "line_strip"; break;
+      case GL_LINE_LOOP:     type_str = "line_loop"; break;
+      case GL_POINTS:        type_str = "points"; break;
+      default:               type_str = "unknown"; break;
+    }
+    Tcl_SetResult(interp, (char *)type_str, TCL_STATIC);
+    return TCL_OK;
+  }
 
   if (!strcmp(argv[2], "quads") || !strcmp(argv[2], "QUADS")) {
     Tcl_AppendResult(interp, argv[0], ": QUADS no longer supported", NULL);
@@ -765,28 +825,33 @@ static int polyangleCmd(ClientData clientData, Tcl_Interp *interp,
 static int polypointsizeCmd(ClientData clientData, Tcl_Interp *interp,
 			    int argc, char *argv[])
 {
-
   OBJ_LIST *olist = (OBJ_LIST *) clientData;
   POLYGON *p;
   int id;
   double size;
   
-  if (argc < 3) {
+  if (argc < 2) {
     Tcl_AppendResult(interp, "usage: ", argv[0],
-		     " polygon pointsize", NULL);
+		     " polygon ?pointsize?", NULL);
     return TCL_ERROR;
   }
-
   if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
     return TCL_ERROR;
   p = GR_CLIENTDATA(OL_OBJ(olist,id));
-
+  
+  /* Getter */
+  if (argc == 2) {
+    char result[32];
+    snprintf(result, sizeof(result), "%.6g", p->pointsize);
+    Tcl_SetResult(interp, result, TCL_VOLATILE);
+    return TCL_OK;
+  }
+  
+  /* Setter */
   if (Tcl_GetDouble(interp, argv[2], &size) != TCL_OK) return TCL_ERROR;
   p->pointsize = size;
-
   return(TCL_OK);
 }
-
 
 static int polyaaCmd(ClientData clientData, Tcl_Interp *interp,
 		     int argc, char *argv[])
@@ -920,6 +985,8 @@ int Polygon_Init(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "polycirc", (Tcl_CmdProc *) polycircCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "polyfill", (Tcl_CmdProc *) polyfillCmd, 
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "polylinewidth", (Tcl_CmdProc *) polylinewidthCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "polytype", (Tcl_CmdProc *) polytypeCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
