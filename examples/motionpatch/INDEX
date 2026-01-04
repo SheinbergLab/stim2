@@ -1,0 +1,4 @@
+mp_coherence   "Basic motion"
+mp_tiled       "Tiled patches"
+mp_shape       "Motion defined shapes"
+mp_noiseflow   "Random motionflow"

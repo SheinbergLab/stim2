@@ -1,0 +1,113 @@
+# examples/motionpatch/mp_tiled.tcl
+# Tiled Motion Patches Demonstration
+# Demonstrates: multiple patches, grid layouts, alternating directions
+#
+# Creates a grid of motion patches - either square checkerboard or
+# hexagonal tiling. Adjacent patches move in opposite directions,
+# creating a striking motion contrast effect.
+
+package require hex
+
+# ============================================================
+# STIM CODE
+# ============================================================
+
+# Square checkerboard grid
+proc mp_tiled_square_setup {gridSize patchScale spacing nDots} {
+    glistInit 1
+    resetObjList
+    
+    set grid [metagroup]
+    objName $grid patches
+    
+    # Create grid from -gridSize to +gridSize
+    for {set i [expr {-$gridSize}]} {$i <= $gridSize} {incr i} {
+        for {set j [expr {-$gridSize}]} {$j <= $gridSize} {incr j} {
+            set d [motionpatch $nDots 0.01 20]
+            motionpatch_pointsize $d 3.0
+            motionpatch_color $d 0.8 0.8 0.8 1.0
+            motionpatch_masktype $d 0
+            motionpatch_coherence $d 1.0
+            motionpatch_speed $d 0.005
+            # Alternate direction based on checkerboard position
+            motionpatch_direction $d [expr {(($i + $j) % 2) * 3.14159265}]
+            scaleObj $d $patchScale $patchScale
+            translateObj $d [expr {$i * $spacing}] [expr {$j * $spacing}] 0
+            metagroupAdd $grid $d
+        }
+    }
+    
+    glistAddObject $grid 0
+    glistSetDynamic 0 1
+    glistSetCurGroup 0
+    glistSetVisible 1
+    redraw
+}
+
+# Hexagonal grid
+proc mp_tiled_hex_setup {gridRadius patchScale nDots} {
+    glistInit 1
+    resetObjList
+    
+    set grid [metagroup]
+    objName $grid patches
+    
+    # Use hex package to create grid
+    dl_local cube_grid [::hex::cube_region [dl_ilist 0 0 0] $gridRadius]
+    dl_local hex_grid [::hex::cube_to_hex $cube_grid]
+    dl_local centers [::hex::flat_to_pixel $hex_grid $patchScale]
+    dl_local xs [dl_unpack [dl_choose $centers [dl_llist 0]]]
+    dl_local ys [dl_unpack [dl_choose $centers [dl_llist 1]]]
+    
+    set idx 0
+    foreach x [dl_tcllist $xs] y [dl_tcllist $ys] {
+        set d [motionpatch $nDots 0.01 20]
+        motionpatch_pointsize $d 3.0
+        motionpatch_color $d 0.8 0.8 0.8 1.0
+        motionpatch_masktype $d 2
+        motionpatch_coherence $d 1.0
+        motionpatch_speed $d 0.005
+        # Alternate direction
+        motionpatch_direction $d [expr {($idx % 2) * 3.14159265}]
+        scaleObj $d [expr {$patchScale * 2.0}]
+        translateObj $d $x $y 0
+        metagroupAdd $grid $d
+        incr idx
+    }
+    
+    glistAddObject $grid 0
+    glistSetDynamic 0 1
+    glistSetCurGroup 0
+    glistSetVisible 1
+    redraw
+}
+
+# ---- Adjuster helper procs ----
+
+# Note: adjusting individual patches in a grid is complex,
+# so we provide whole-grid controls via metagroup transform
+
+# ============================================================
+# WORKSPACE DEMO INTERFACE
+# ============================================================
+workspace::reset
+
+# Wrapper procs for variants
+proc mp_tiled_square {} { mp_tiled_square_setup 2 1.0 2.0 200 }
+proc mp_tiled_hex {} { mp_tiled_hex_setup 4 0.75 100 }
+
+# Square grid setup
+workspace::setup mp_tiled_square_setup {
+    gridSize   {int 1 4 1 2 "Grid Size (±N)"}
+    patchScale {float 0.5 2.0 0.25 1.0 "Patch Size"}
+    spacing    {float 0.5 3.0 0.25 2.0 "Spacing"}
+    nDots      {int 50 500 50 200 "Dots per Patch"}
+} -adjusters {tiled_transform} -label "Square Checkerboard"
+
+# Hex grid setup
+workspace::variant tiled_hex {} -proc mp_tiled_hex \
+  -adjusters {tiled_transform} -label "Hexagonal Grid"
+
+# Transform for whole grid
+workspace::adjuster tiled_transform -template scale -target patches \
+  -label "Grid Scale"
