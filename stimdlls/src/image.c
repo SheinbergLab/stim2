@@ -1543,9 +1543,21 @@ int Image_Init(Tcl_Interp *interp)
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
     Tcl_CreateCommand(interp, "imageMask", (Tcl_CmdProc *) imagemaskCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-    
+
+
+    /* Asset helper to help find images */
+    Tcl_Eval(interp, R"(
+	     proc imageAsset {filename} {
+	       return [image [assetFind $filename]]
+		 }
+	     proc textureAsset {filename} {
+	       return [imageTextureLoad [assetFind $filename]]
+		 }
+	     )");
+      
     return TCL_OK;
 }
+
 
 #ifdef WIN32
 BOOL APIENTRY
