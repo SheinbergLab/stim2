@@ -1,19 +1,27 @@
 # examples/image/image_multi_instance.tcl
-# Demonstrate shared texture with multiple image instances
-# One texture, many objects - efficient for repeated stimuli
+# Shared texture with multiple image instances
+# Demonstrates: texture pooling, efficient repeated stimuli
+#
+# One texture loaded once, multiple image objects created from it.
+# Each instance can have independent transforms and shader settings.
+#
+# Setup parameters (all require re-creation):
+#   - filename: source image
+#   - count: number of instances
+#   - spacing: horizontal distance between instances
+#   - scale: size of each instance
 
-workspace::reset
+# ============================================================
+# STIM CODE
+# ============================================================
 
-proc image_multi_instance { count spacing scale } {
+proc multi_setup {filename count spacing scale} {
     glistInit 1
     resetObjList
     imageTextureReset
     
-    set imgdir ./assets
-    set imgname backpack.png
-    
     # Load texture ONCE
-    set tex [imageTextureLoad [file join $imgdir $imgname]]
+    set tex [textureAsset $filename]
     
     # Create multiple image objects from same texture
     set half [expr {($count - 1) / 2.0}]
@@ -24,8 +32,10 @@ proc image_multi_instance { count spacing scale } {
         scaleObj $obj $scale $scale
         
         # Vary brightness across instances for visual distinction
-        set brightness [expr {($i / double($count - 1)) * 0.4 - 0.2}]
-        imageBrightness $obj $brightness
+        if {$count > 1} {
+            set brightness [expr {($i / double($count - 1)) * 0.4 - 0.2}]
+            imageBrightness $obj $brightness
+        }
         
         glistAddObject $obj 0
     }
@@ -35,8 +45,14 @@ proc image_multi_instance { count spacing scale } {
     redraw
 }
 
-workspace::export image_multi_instance {
-    count   {int 1 10 1 5 "Number of Instances"}
-    spacing {float 0.5 3.0 0.1 1.5 "Spacing"}
-    scale   {float 0.5 3.0 0.1 1.0 "Scale"}
-}
+# ============================================================
+# WORKSPACE DEMO INTERFACE
+# ============================================================
+workspace::reset
+
+workspace::setup multi_setup {
+    filename {choice {backpack.png movie_ticket.png} backpack.png "Image"}
+    count    {int 1 10 1 5 "Number of Instances"}
+    spacing  {float 0.5 3.0 0.1 1.5 "Spacing"}
+    scale    {float 0.5 3.0 0.1 1.0 "Scale"}
+} -label "Multi-Instance (Shared Texture)"

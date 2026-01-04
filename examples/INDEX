@@ -1,5 +1,2 @@
-basic "Getting Started"
 polygon "Polygons"
-image "Images"
-animation "Animation"
-shader "Shader Demos"
+image   "Images"
