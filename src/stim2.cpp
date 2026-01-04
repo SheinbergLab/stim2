@@ -91,7 +91,7 @@ static int ScreenWidth_2;
 static int ScreenHeight;
 static int RefreshRate;
 static float FrameDuration;
-int     winWidth = 640;
+int     winWidth = 580;
 static int      winWidth_2;
 int     winHeight = 340;
 static int      winX = 10;
@@ -2922,7 +2922,7 @@ main(int argc, char *argv[]) {
   bool fullscreen = false;
   bool help = false;
   bool borderless = false;
-  int width = 640, height = 340;
+  int width = 580, height = 340;
   int xpos = 30, ypos = 30;
   float refresh = 60;
   int interval = 2;
