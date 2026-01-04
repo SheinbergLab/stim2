@@ -1545,15 +1545,14 @@ int Image_Init(Tcl_Interp *interp)
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
 
-    /* Asset helper to help find images */
-    Tcl_Eval(interp, R"(
-	     proc imageAsset {filename} {
-	       return [image [assetFind $filename]]
-		 }
-	     proc textureAsset {filename} {
-	       return [imageTextureLoad [assetFind $filename]]
-		 }
-	     )");
+   /* Asset helper to help find images */
+    Tcl_Eval(interp, 
+     "proc imageAsset {filename} {\n"
+     "  return [image [assetFind $filename]]\n"
+     "}\n"
+     "proc textureAsset {filename} {\n"
+     "  return [imageTextureLoad [assetFind $filename]]\n"
+     "}\n");    
       
     return TCL_OK;
 }
