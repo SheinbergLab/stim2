@@ -64,6 +64,7 @@
 #include "stim2.h"
 #include "rawapi.h"
 #include "objname.h"
+#include "animate.h"
 
 static int MainWin = 0;
 
@@ -131,6 +132,7 @@ unsigned int StimTime = 0;  /* available from tcl */
 unsigned int StimTicks = 0; /* available from tcl */
 double StimStart = 0;           /* absolute time of last reset */
 unsigned int StimVRetraceCount = 0;
+unsigned int StimDeltaTime = 0;
 
 int NextFrameTime = -1;
 
@@ -396,7 +398,9 @@ void resetStimTime(void)
 void updateTimes(void)
 {
   double curtime = glfwGetTime();
+  unsigned int prevTicks = StimTicks;   
   StimTicks = (int) (1000*curtime);
+  StimDeltaTime = StimTicks - prevTicks;     
   StimTime = (int) (1000*(curtime-StimStart));
 }
 
@@ -452,6 +456,7 @@ void executeScripts(char **scripts, int *actives, int n)
 
 void drawObject(GR_OBJ *o)
 {
+  animateUpdateObj(o, StimTicks, StimDeltaTime);  
   executeScripts(GR_PRE_SCRIPTS(o),
          GR_PRE_SCRIPT_ACTIVES(o),
          GR_N_PRE_SCRIPTS(o));
@@ -641,6 +646,7 @@ static void drawGroup(OBJ_GROUP *g)
     o = OL_OBJ(OBJList, OG_OBJID(g, i));
     if (o && GR_VISIBLE(o)) drawObject(o);
     else if (o) {
+      animateUpdateObj(o, StimTicks, StimDeltaTime);      
       executeScripts(GR_PRE_SCRIPTS(o), GR_PRE_SCRIPT_ACTIVES(o),
              GR_N_PRE_SCRIPTS(o));
       executeScripts(GR_POST_SCRIPTS(o), GR_POST_SCRIPT_ACTIVES(o),
@@ -657,6 +663,7 @@ static void drawGroup(OBJ_GROUP *g)
       o = OL_OBJ(OBJList, OG_OBJID(g, i));
       if (o && GR_VISIBLE(o) && GR_LEFT_EYE(o)) drawObject(o);
       else if (o) {
+	animateUpdateObj(o, StimTicks, StimDeltaTime);      
         executeScripts(GR_PRE_SCRIPTS(o), GR_PRE_SCRIPT_ACTIVES(o),
                GR_N_PRE_SCRIPTS(o));
         executeScripts(GR_POST_SCRIPTS(o), GR_POST_SCRIPT_ACTIVES(o),
@@ -673,6 +680,7 @@ static void drawGroup(OBJ_GROUP *g)
       o = OL_OBJ(OBJList, OG_OBJID(g, i));
       if (o && GR_VISIBLE(o) && GR_RIGHT_EYE(o)) drawObject(o);
       else if (o) {
+	animateUpdateObj(o, StimTicks, StimDeltaTime);      
         executeScripts(GR_PRE_SCRIPTS(o), GR_PRE_SCRIPT_ACTIVES(o),
                GR_N_PRE_SCRIPTS(o));
         executeScripts(GR_POST_SCRIPTS(o), GR_POST_SCRIPT_ACTIVES(o),
@@ -689,6 +697,7 @@ static void drawGroup(OBJ_GROUP *g)
       o = OL_OBJ(OBJList, OG_OBJID(g, i));
       if (o && GR_VISIBLE(o) && GR_LEFT_EYE(o)) drawObject(o);
       else if (o) {
+	animateUpdateObj(o, StimTicks, StimDeltaTime);      
         executeScripts(GR_PRE_SCRIPTS(o), GR_PRE_SCRIPT_ACTIVES(o),
                GR_N_PRE_SCRIPTS(o));
         executeScripts(GR_POST_SCRIPTS(o), GR_POST_SCRIPT_ACTIVES(o),
@@ -703,6 +712,7 @@ static void drawGroup(OBJ_GROUP *g)
       o = OL_OBJ(OBJList, OG_OBJID(g, i));
       if (o && GR_VISIBLE(o) && GR_RIGHT_EYE(o)) drawObject(o);
       else if (o) {
+	animateUpdateObj(o, StimTicks, StimDeltaTime);      
         executeScripts(GR_PRE_SCRIPTS(o), GR_PRE_SCRIPT_ACTIVES(o),
                GR_N_PRE_SCRIPTS(o));
         executeScripts(GR_POST_SCRIPTS(o), GR_POST_SCRIPT_ACTIVES(o),
@@ -1747,6 +1757,9 @@ setup_asset_paths
     // Add command completion support
     TclCompletion::RegisterCompletionCommand(interp);
 
+    // Add animation support
+    Animate_Init(interp);
+    
     return TCL_OK;
   }
 
