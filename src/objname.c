@@ -145,6 +145,17 @@ int objNameSet(ObjNameInfo *info, int id, const char *name)
     /* Add reverse id -> name mapping */
     entry = Tcl_CreateHashEntry(&info->idToName, (char *)(intptr_t)id, &newentry);
     Tcl_SetHashValue(entry, strdup(name));
+
+    /* Also update GR_NAME on the object itself */
+    if (id >= 0 && id < OL_NOBJS(info->olist)) {
+        GR_OBJ *obj = OL_OBJ(info->olist, id);
+        if (name && name[0]) {
+            strncpy(GR_NAME(obj), name, 63);
+            GR_NAME(obj)[63] = '\0';
+        } else {
+            /* Clear - restore default? Or leave as-is? */
+        }
+    }
     
     return 0;
 }
