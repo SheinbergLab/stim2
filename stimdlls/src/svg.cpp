@@ -779,6 +779,13 @@ extern "C" int Svg_Init(Tcl_Interp *interp)
     Tcl_CreateCommand(interp, "svgReload", (Tcl_CmdProc *) svgreloadCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
+    const char *script = R"(
+proc svgAsset {filename} {
+    return [svg [assetFind $filename]]
+}
+)";
+    Tcl_Eval(interp, script);
+
     return TCL_OK;
 }
 
