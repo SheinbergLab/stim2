@@ -1,3 +1,5 @@
 polygon     "Polygons"
+animation   "Animation"
 image       "Images"
 motionpatch "Motion"
+svg         "SVG"
