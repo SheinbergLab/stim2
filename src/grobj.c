@@ -20,6 +20,7 @@
 
 #include "stim2.h"
 #include "objname.h"
+#include "animate.h"
 
 static char *typenames[256];	/* for holding typenames of objects  */
 static int ntypes = 0;		/* Number of currently defined types */
@@ -474,11 +475,12 @@ static void free_scripts(GR_OBJ *o, int type)
 int gobjDestroyObj(GR_OBJ *o)
 {
   if (!o) return(0);
-  gobjDelete(o);		/* in main.c */
+  animateClearObj(o);           /* in animate.c */  
+  gobjDelete(o);		/* in main.c    */
   free_scripts(o, STIM_PRE_SCRIPT);
   free_scripts(o, STIM_POST_SCRIPT);
   free_scripts(o, STIM_POSTFRAME_SCRIPT);
-  delete_property_table(o);     /* tclproc.c */
+  delete_property_table(o);     /* tclproc.c    */
   free(o);
   return(1);
 }
