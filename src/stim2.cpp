@@ -90,6 +90,8 @@ static float PIX_PER_DEG_X, PIX_PER_DEG_Y,
 static int ScreenWidth;
 static int ScreenWidth_2;
 static int ScreenHeight;
+static float ScreenWidthCm;
+static float ScreenHeightCm;
 static int RefreshRate;
 static float FrameDuration;
 int     winWidth = 580;
@@ -111,6 +113,8 @@ PARAM_ENTRY ScreenParamTable[] = {
   (char *) "HalfScreenDegreeY",   &HALF_SCREEN_DEG_Y,     &dummyInt, PU_FLOAT,
   (char *) "ScreenWidth",         &ScreenWidth,           &dummyInt, PU_INT,
   (char *) "ScreenHeight",        &ScreenHeight,          &dummyInt, PU_INT,
+  (char *) "ScreenWidthCm",       &ScreenWidthCm,         &dummyInt, PU_FLOAT,
+  (char *) "ScreenHeightCm",      &ScreenHeightCm,        &dummyInt, PU_FLOAT,
   (char *) "ScaleX",              &XScale,                &dummyInt, PU_FLOAT,
   (char *) "ScaleY",              &YScale,                &dummyInt, PU_FLOAT,
   (char *) "WinWidth",            &winWidth,              &dummyInt, PU_INT,
@@ -3057,6 +3061,11 @@ main(int argc, char *argv[]) {
     glfwShowWindow(app.window);
   }
 
+  int width_mm, height_mm;
+  glfwGetMonitorPhysicalSize(primary, &width_mm, &height_mm);
+
+  ScreenWidthCm = width_mm / 10.0f;
+  ScreenHeightCm = height_mm / 10.0f;  
 
   ScreenWidth = mode->width;
   ScreenHeight = mode->height;
