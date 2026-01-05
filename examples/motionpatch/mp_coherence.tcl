@@ -104,7 +104,7 @@ workspace::adjuster dot_color {
     g {float 0.0 1.0 0.05 0.9 "Green"}
     b {float 0.0 1.0 0.05 0.9 "Blue"}
 } -target dots -proc mp_set_color -getter mp_get_color \
-  -label "Dot Color"
+  -label "Dot Color" -colorpicker
 
 # Transform adjuster for the metagroup
 workspace::adjuster patch_transform -template scale -target patch -label "Patch Size"
