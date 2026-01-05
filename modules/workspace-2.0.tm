@@ -1,23 +1,147 @@
 # workspace-2.0.tm
 # Workspace management for stim2 development frontend
 #
+# ============================================================
+# QUICK REFERENCE FOR DEMO SCRIPTS
+# ============================================================
+#
+# BASIC STRUCTURE:
+#   1. Define your setup proc(s) that create graphics objects
+#   2. Call workspace::reset
+#   3. Register setup with workspace::setup
+#   4. Register adjusters with workspace::adjuster (or use -template)
+#
+# EXAMPLE:
+#   proc my_setup {size color_name} {
+#       glistInit 1
+#       resetObjList
+#       set p [polygon]
+#       objName $p shape
+#       scaleObj $p $size $size
+#       ...
+#       glistAddObject $p 0
+#       glistSetVisible 1
+#       redraw
+#   }
+#   
+#   workspace::reset
+#   workspace::setup my_setup {
+#       size       {float 1.0 10.0 0.5 5.0 "Size"}
+#       color_name {choice {red green blue} red "Color"}
+#   } -adjusters {shape_scale shape_color} -label "My Demo"
+#   
+#   workspace::adjuster shape_scale -template scale -target shape
+#   workspace::adjuster shape_color -template color -target shape
+#
+# ============================================================
+# SETUP PARAMETERS - Types and Format
+# ============================================================
+#   {param_name {type args... default label ?unit?}}
+#
+#   Types:
+#     float  {float min max step default label ?unit?}
+#     int    {int min max step default label}
+#     bool   {bool default label}
+#     choice {choice {opt1 opt2 ...} default label}
+#     string {string default label}
+#
+# ============================================================
+# AVAILABLE TEMPLATES (-template option)
+# ============================================================
+#   scale        - Uniform scale slider (works with scaleObj)
+#   size2d       - Width/height sliders (works with scaleObj)
+#   rotation     - Rotation angle in degrees (works with rotateObj)
+#   position     - X/Y position sliders (works with translateObj)
+#   color        - RGB color picker (works with polycolor, etc.)
+#   color_alpha  - RGBA color picker with alpha slider
+#   pointsize    - Point size slider (for point-based objects)
+#
+#   Usage: workspace::adjuster name -template TEMPLATE -target OBJ_NAME
+#   With defaults: workspace::adjuster name -template scale -target obj -defaults {scale 2.0}
+#
+# ============================================================
+# CUSTOM ADJUSTERS
+# ============================================================
+#   workspace::adjuster name {params...} -target obj -proc setter -getter getter
+#
+#   Setter proc signature: proc setter {target_name param1 param2 ...}
+#     - First arg is target (from -target), unless -target {} (empty)
+#     - Remaining args are param values IN ORDER of definition
+#     - Must call redraw at end
+#
+#   Getter proc signature: proc getter {target_name} -> dict
+#     - Returns dict with keys EXACTLY matching param names
+#     - Example: dict create r 1.0 g 0.5 b 0.0
+#
+# ============================================================
+# COLOR PICKER UI (-colorpicker flag)
+# ============================================================
+#   Add -colorpicker flag to get color picker UI for r/g/b/a params:
+#
+#   workspace::adjuster my_color {
+#       r {float 0 1 0.01 1.0 "Red"}
+#       g {float 0 1 0.01 1.0 "Green"}
+#       b {float 0 1 0.01 1.0 "Blue"}
+#   } -target obj -proc set_color -colorpicker
+#
+#   Without -colorpicker: renders as individual sliders
+#   With -colorpicker: renders as color picker widget
+#   
+#   Templates (-template color, -template color_alpha) automatically
+#   include -colorpicker behavior.
+#
+#   You can mix -colorpicker with extra params (rendered before picker):
+#   workspace::adjuster tint {
+#       mode {choice {0 1 2} 0 "Mode"}
+#       r {float 0 1 0.01 1.0 "R"}
+#       g {float 0 1 0.01 1.0 "G"}
+#       b {float 0 1 0.01 1.0 "B"}
+#   } -target obj -proc set_tint -colorpicker
+#
+# ============================================================
+# VARIANTS (multiple entry points, same proc)
+# ============================================================
+#   workspace::variant name {params...} ?-proc proc_name? ?-adjusters {...}? ?-label "..."?
+#
+#   If -proc is omitted, defaults to the proc from the most recent workspace::setup
+#   Useful for preset configurations:
+#
+#   workspace::setup my_setup {shape {choice {circle square} circle "Shape"}} ...
+#   workspace::variant circle_preset {shape circle} -label "Circle"
+#   workspace::variant square_preset {shape square} -label "Square"
+#
+# ============================================================
+# METAGROUP PATTERN (recommended)
+# ============================================================
+#   Separate shape definition from display transforms:
+#
+#   set p [polygon]
+#   objName $p my_shape        ;# shape params (color, vertices)
+#   
+#   set mg [metagroup]
+#   metagroupAdd $mg $p
+#   objName $mg my_group       ;# transform params (scale, rotation, position)
+#   
+#   Then use adjusters on each:
+#   workspace::adjuster shape_color -template color -target my_shape
+#   workspace::adjuster group_scale -template scale -target my_group
+#
+# ============================================================
+# HISTORY
+# ============================================================
 # Key changes from 1.0:
 #   - Retired workspace::export (use setup/adjuster exclusively)
 #   - Added workspace::template for reusable adjuster patterns
 #   - Added workspace::variant for multiple setups from same proc
 #   - Enhanced workspace::shader_adjusters with specs dict
 #   - Built-in helper procs for common operations
+#   - Added -colorpicker flag for explicit color picker UI
 #
 # Usage:
 #   package require workspace
 #   set ::workspace::system_examples_path /path/to/examples
 #   workspace::init
 #
-# Demo file structure:
-#   1. "Real" stim code (helper procs, setup proc)
-#   2. workspace::reset
-#   3. workspace::setup / workspace::variant definitions
-#   4. workspace::adjuster definitions (or use templates)
 
 package require yajltcl
 
@@ -36,8 +160,8 @@ namespace eval ::workspace {
     
     # Setup/Adjuster system
     variable setups {}          ;# dict: setup_name -> {proc params adjusters file label}
-    variable adjusters {}       ;# dict: adjuster_name -> {proc target params file setup uniform}
-    variable templates {}       ;# dict: template_name -> {params proc}
+    variable adjusters {}       ;# dict: adjuster_name -> {proc target params file setup uniform colorpicker}
+    variable templates {}       ;# dict: template_name -> {params proc getter ?colorpicker?}
     variable active_setup ""    ;# currently active setup name
     
     # Notification callback
@@ -208,7 +332,8 @@ proc ::workspace::register_builtin_templates {} {
             b {float 0 1 0.05 1.0 "Blue"}
         } \
         proc ::workspace::helpers::color_rgb \
-        getter ::workspace::helpers::get_color]
+        getter ::workspace::helpers::get_color \
+        colorpicker 1]
     
     dict set templates color_alpha [dict create \
         params {
@@ -218,7 +343,8 @@ proc ::workspace::register_builtin_templates {} {
             a {float 0 1 0.05 1.0 "Alpha"}
         } \
         proc ::workspace::helpers::color_rgba \
-        getter ::workspace::helpers::get_color_alpha]
+        getter ::workspace::helpers::get_color_alpha \
+        colorpicker 1]
     
     # Point/line templates
     dict set templates pointsize [dict create \
@@ -335,6 +461,11 @@ proc ::workspace::encode_adjuster_info {yh name info} {
     if {[dict exists $info label]} {
         $yh string "label"
         $yh string [dict get $info label]
+    }
+    
+    if {[dict exists $info colorpicker] && [dict get $info colorpicker]} {
+        $yh string "colorpicker"
+        $yh bool 1
     }
     
     $yh string "setup"
@@ -948,8 +1079,9 @@ proc ::workspace::setup {procname params args} {
 # ============================================================
 # VARIANT - Multiple entry points sharing implementation
 # ============================================================
-# workspace::variant name {params...} -proc impl_proc ?-adjusters {list}? ?-label "Name"?
+# workspace::variant name {params...} ?-proc impl_proc? ?-adjusters {list}? ?-label "Name"?
 # Creates a setup that calls impl_proc but with different default params
+# If -proc is omitted, defaults to the proc from the most recent workspace::setup
 
 proc ::workspace::variant {name params args} {
     variable initialized
@@ -987,8 +1119,13 @@ proc ::workspace::variant {name params args} {
         incr i
     }
     
+    # Default to the main setup's proc if not specified
     if {$impl_proc eq ""} {
-        error "workspace::variant requires -proc option"
+        if {$current_setup ne "" && [dict exists $setups $current_setup]} {
+            set impl_proc [dict get $setups $current_setup proc]
+        } else {
+            error "workspace::variant requires -proc option (no prior workspace::setup found)"
+        }
     }
     
     set parsed_params [parse_params $params]
@@ -1015,6 +1152,7 @@ proc ::workspace::variant {name params args} {
 # ============================================================
 # workspace::adjuster name {params...} -target obj -proc proc_name
 # workspace::adjuster name -template tpl_name -target obj ?-defaults {key val...}?
+# Use -colorpicker to explicitly request color picker UI for r/g/b/a params
 
 proc ::workspace::adjuster {name args} {
     variable initialized
@@ -1033,6 +1171,7 @@ proc ::workspace::adjuster {name args} {
     set getter ""
     set label ""
     set defaults {}
+    set colorpicker 0
     
     # First arg might be params dict or -template
     set i 0
@@ -1069,6 +1208,9 @@ proc ::workspace::adjuster {name args} {
                 incr i
                 set defaults [lindex $args $i]
             }
+            -colorpicker {
+                set colorpicker 1
+            }
             default {
                 error "Unknown option to workspace::adjuster: $opt"
             }
@@ -1088,6 +1230,11 @@ proc ::workspace::adjuster {name args} {
         # Get getter from template if not explicitly provided
         if {$getter eq "" && [dict exists $tpl getter]} {
             set getter [dict get $tpl getter]
+        }
+        
+        # Get colorpicker from template if not explicitly set
+        if {!$colorpicker && [dict exists $tpl colorpicker]} {
+            set colorpicker [dict get $tpl colorpicker]
         }
         
         # Apply defaults overrides
@@ -1120,7 +1267,8 @@ proc ::workspace::adjuster {name args} {
         target $target \
         params $parsed_params \
         file $current_file \
-        setup $setup_name]
+        setup $setup_name \
+        colorpicker $colorpicker]
     
     if {$getter ne ""} {
         dict set info getter $getter
