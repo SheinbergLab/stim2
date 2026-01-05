@@ -125,6 +125,7 @@ extern unsigned int StimVersion;/* Stim version                 */
 extern unsigned int StimTime;	/* Stim time counter            */
 extern unsigned int StimTicks;	/* Free running counter         */
 extern unsigned int StimVRetraceCount;   /* Counts vretraces    */
+extern unsigned int StimDeltaTime;  /* ms since last frame      */
 extern int NextFrameTime;       /* When does next frame start   */
 extern int SwapCount;	        /* Do a swap pulse every swap?  */
 extern int SwapPulse;	        /* Do a swap pulse every swap?  */
@@ -302,6 +303,7 @@ typedef struct _grobj {
   int   use_matrix;		/* use tmatrix instead of r/s/t?    */
   float matrix[16];		/* transformation matrix            */
   int drawcount;		/* number of draws since reset      */
+  void *anim_state;             /* animation state pointer          */
 } GR_OBJ;
 
 #define GR_NAME(o)         ((o)->name)
