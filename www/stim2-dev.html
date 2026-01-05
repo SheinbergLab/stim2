@@ -1,1945 +1,1952 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>stim2 Development</title>
-    <link rel="stylesheet" href="css/TclTerminal.css">
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        :root {
-            --bg-app: #1a1a1a;
-            --bg-panel: #252525;
-            --bg-header: #2a2a2a;
-            --bg-button: #333;
-            --bg-button-hover: #444;
-            --bg-primary: #1890ff;
-            --bg-primary-hover: #40a9ff;
-            --bg-selected: #37373d;
-            --bg-hover: #2a2d2e;
-            --border: #333;
-            --border-light: #444;
-            --text: #d4d4d4;
-            --text-muted: #999;
-            --text-header: #aaa;
-            --text-dim: #666;
-            --status-connected: #52c41a;
-            --status-error: #ff4d4f;
-            --nav-width: 260px;
-            --info-width: 280px;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            font-size: 12px;
-            background: var(--bg-app);
-            color: var(--text);
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        /* Status Bar */
-        .status-bar {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            height: 36px;
-            padding: 0 12px;
-            background: var(--bg-panel);
-            border-bottom: 1px solid var(--border);
-            flex-shrink: 0;
-        }
-
-        .status-bar h1 {
-            font-size: 14px;
-            font-weight: 600;
-            color: #fff;
-            margin-right: 8px;
-        }
-
-        .status-indicator {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #666;
-            transition: background 0.3s;
-        }
-
-        .status-indicator.connected {
-            background: var(--status-connected);
-            box-shadow: 0 0 6px rgba(82, 196, 26, 0.5);
-        }
-
-        .status-text {
-            color: var(--text-muted);
-            font-size: 11px;
-        }
-
-        .status-spacer { flex: 1; }
-
-        .status-info {
-            display: flex;
-            gap: 12px;
-            color: var(--text-muted);
-            font-size: 11px;
-        }
-
-        .status-info span {
-            display: flex;
-            gap: 4px;
-        }
-
-        .status-info .value {
-            color: var(--text);
-            min-width: 32px;
-        }
-
-        .status-bar button {
-            padding: 4px 10px;
-            background: var(--bg-button);
-            color: #ccc;
-            border: 1px solid var(--border-light);
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 11px;
-        }
-
-        .status-bar button:hover {
-            background: var(--bg-button-hover);
-            color: #fff;
-        }
-
-        /* Main 3-Column Layout */
-        .main-container {
-            display: flex;
-            flex: 1;
-            min-height: 0;
-        }
-
-        /* Left Column - Navigator */
-        .nav-column {
-            width: var(--nav-width);
-            min-width: 180px;
-            max-width: 400px;
-            display: flex;
-            flex-direction: column;
-            background: var(--bg-panel);
-            border-right: 1px solid var(--border);
-        }
-
-        /* Middle Column - Editor/Terminal */
-        .main-column {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            min-width: 300px;
-        }
-
-        /* Right Column - Info/Log */
-        .info-column {
-            width: var(--info-width);
-            min-width: 200px;
-            max-width: 400px;
-            display: flex;
-            flex-direction: column;
-            background: var(--bg-panel);
-            border-left: 1px solid var(--border);
-        }
-
-        /* Vertical Resize Handles */
-        .v-resize-handle {
-            width: 4px;
-            background: var(--border);
-            cursor: col-resize;
-            flex-shrink: 0;
-        }
-
-        .v-resize-handle:hover {
-            background: var(--bg-primary);
-        }
-
-        /* Panel shared styles */
-        .panel {
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        .panel-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            height: 28px;
-            padding: 0 10px;
-            background: var(--bg-header);
-            border-bottom: 1px solid var(--border);
-            flex-shrink: 0;
-        }
-
-        .panel-title {
-            font-size: 11px;
-            font-weight: 600;
-            color: var(--text-header);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .panel-actions {
-            display: flex;
-            gap: 4px;
-        }
-
-        .panel-actions button {
-            padding: 2px 6px;
-            background: transparent;
-            color: var(--text-muted);
-            border: 1px solid transparent;
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 10px;
-        }
-
-        .panel-actions button:hover {
-            background: var(--bg-button-hover);
-            color: #fff;
-            border-color: var(--border-light);
-        }
-
-        .panel-actions button.primary {
-            background: var(--bg-primary);
-            border-color: var(--bg-primary);
-            color: #fff;
-        }
-
-        .panel-actions button.primary:hover {
-            background: var(--bg-primary-hover);
-        }
-
-        .panel-body {
-            flex: 1;
-            overflow: hidden;
-            position: relative;
-        }
-
-        /* Left Navigator Column */
-        .nav-column {
-            display: flex;
-            flex-direction: column;
-        }
-
-        .nav-search {
-            padding: 8px;
-            border-bottom: 1px solid var(--border);
-            flex-shrink: 0;
-        }
-
-        .nav-search input {
-            width: 100%;
-            padding: 6px 10px;
-            background: var(--bg-app);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            color: var(--text);
-            font-size: 11px;
-        }
-
-        .nav-search input:focus {
-            outline: none;
-            border-color: var(--bg-primary);
-        }
-
-        .nav-search input::placeholder {
-            color: var(--text-dim);
-        }
-
-        .nav-tree-container {
-            flex: 1;
-            overflow-y: auto;
-            min-height: 100px;
-        }
-
-        .nav-h-resize-handle {
-            height: 4px;
-            background: var(--border);
-            cursor: row-resize;
-            flex-shrink: 0;
-        }
-
-        .nav-h-resize-handle:hover {
-            background: var(--bg-primary);
-        }
-
-        .nav-controls-container {
-            flex: 1;
-            min-height: 150px;
-            display: flex;
-            flex-direction: column;
-            border-top: 1px solid var(--border);
-        }
-
-        .nav-controls-container .panel-header {
-            flex-shrink: 0;
-        }
-
-        .controls-content {
-            flex: 1;
-            overflow-y: auto;
-            padding: 8px;
-        }
-
-        .controls-placeholder {
-            color: var(--text-dim);
-            font-size: 11px;
-            font-style: italic;
-            padding: 8px;
-        }
-
-        /* Navigator / Examples Tree */
-        .examples-tree {
-            padding: 8px 0;
-        }
-
-        .tree-category {
-            margin-bottom: 4px;
-        }
-
-        .tree-category-header {
-            display: flex;
-            align-items: center;
-            padding: 4px 10px;
-            cursor: pointer;
-            user-select: none;
-            color: var(--text-header);
-            font-size: 11px;
-            font-weight: 600;
-        }
-
-        .tree-category-header:hover {
-            background: var(--bg-hover);
-        }
-
-        .tree-category-icon {
-            margin-right: 6px;
-            font-size: 10px;
-            width: 12px;
-            text-align: center;
-            transition: transform 0.15s;
-        }
-
-        .tree-category.collapsed .tree-category-icon {
-            transform: rotate(-90deg);
-        }
-
-        .tree-category.collapsed .tree-items {
-            display: none;
-        }
-
-        .tree-items {
-            margin-left: 8px;
-        }
-
-        .tree-item {
-            display: flex;
-            align-items: center;
-            padding: 4px 10px 4px 20px;
-            cursor: pointer;
-            color: var(--text);
-            font-size: 12px;
-        }
-
-        .tree-item:hover {
-            background: var(--bg-hover);
-        }
-
-        .tree-item.selected {
-            background: var(--bg-selected);
-        }
-
-        .tree-item.hidden {
-            display: none;
-        }
-
-        .tree-item-icon {
-            margin-right: 8px;
-            color: var(--text-muted);
-            font-size: 11px;
-        }
-
-        .tree-loading, .tree-error, .tree-empty {
-            padding: 16px;
-            color: var(--text-dim);
-            font-size: 11px;
-            text-align: center;
-        }
-
-        .tree-error {
-            color: var(--status-error);
-        }
-
-        /* ============================================================
-           CONTROLS PANEL STYLES 
-           ============================================================ */
-        
-        /* Setup selector - dropdown style */
-        .setup-selector {
-            margin-bottom: 10px;
-            padding-bottom: 8px;
-            border-bottom: 1px solid var(--border);
-        }
-        
-        .setup-selector label {
-            display: block;
-            font-size: 10px;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            margin-bottom: 4px;
-        }
-        
-        .setup-selector select {
-            width: 100%;
-            padding: 6px 8px;
-            background: var(--bg-app);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            color: var(--text);
-            font-size: 11px;
-            cursor: pointer;
-        }
-        
-        .setup-selector select:focus {
-            outline: none;
-            border-color: var(--bg-primary);
-        }
-        
-        /* Setup parameters section */
-        .setup-section {
-            margin-bottom: 12px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid var(--border);
-        }
-        
-        .setup-section-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 8px;
-        }
-        
-        .setup-section-title {
-            font-size: 11px;
-            font-weight: 600;
-            color: var(--text-header);
-            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
-        }
-        
-        .setup-run-btn {
-            padding: 4px 10px;
-            background: var(--bg-primary);
-            color: #fff;
-            border: none;
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 10px;
-        }
-        
-        .setup-run-btn:hover {
-            background: var(--bg-primary-hover);
-        }
-        
-        /* Adjuster groups */
-        .adjuster-group {
-            margin-bottom: 12px;
-        }
-        
-        .adjuster-group-header {
-            font-size: 10px;
-            font-weight: 600;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            margin-bottom: 6px;
-            padding-bottom: 4px;
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .adjuster-group-header .target-badge {
-            font-size: 9px;
-            background: var(--bg-button);
-            padding: 1px 5px;
-            border-radius: 3px;
-            font-weight: normal;
-            text-transform: none;
-        }
-
-        /* Control parameters */
-        .control-group {
-            margin-bottom: 12px;
-            padding-bottom: 12px;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .control-group:last-child {
-            border-bottom: none;
-            margin-bottom: 0;
-            padding-bottom: 0;
-        }
-
-        .control-proc-name {
-            font-size: 11px;
-            font-weight: 600;
-            color: var(--text-header);
-            margin-bottom: 8px;
-            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
-        }
-
-        .control-param {
-            margin-bottom: 8px;
-        }
-
-        .control-param:last-child {
-            margin-bottom: 0;
-        }
-
-        .control-param label {
-            display: block;
-            font-size: 10px;
-            color: var(--text-muted);
-            margin-bottom: 3px;
-        }
-
-        .control-param-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .control-param input[type="range"] {
-            flex: 1;
-            height: 4px;
-            -webkit-appearance: none;
-            appearance: none;
-            background: var(--border);
-            border-radius: 2px;
-            outline: none;
-        }
-
-        .control-param input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            appearance: none;
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            background: var(--bg-primary);
-            cursor: pointer;
-        }
-
-        .control-param input[type="text"],
-        .control-param input[type="number"] {
-            flex: 1;
-            background: var(--bg-app);
-            border: 1px solid var(--border);
-            border-radius: 3px;
-            color: var(--text);
-            padding: 4px 6px;
-            font-size: 11px;
-        }
-
-        .control-param select {
-            flex: 1;
-            background: var(--bg-app);
-            border: 1px solid var(--border);
-            border-radius: 3px;
-            color: var(--text);
-            padding: 4px 6px;
-            font-size: 11px;
-        }
-
-        .control-param-value {
-            min-width: 45px;
-            text-align: right;
-            font-size: 10px;
-            color: var(--text);
-            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
-        }
-
-        .control-param-unit {
-            font-size: 9px;
-            color: var(--text-muted);
-            min-width: 20px;
-        }
-
-        /* Color picker styles */
-        .color-picker-control {
-            margin-bottom: 8px;
-        }
-        
-        .color-picker-control label {
-            display: block;
-            font-size: 10px;
-            color: var(--text-muted);
-            margin-bottom: 4px;
-        }
-        
-        .color-picker-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .color-picker-input {
-            width: 40px;
-            height: 28px;
-            padding: 0;
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            cursor: pointer;
-            background: none;
-        }
-        
-        .color-picker-input::-webkit-color-swatch-wrapper {
-            padding: 2px;
-        }
-        
-        .color-picker-input::-webkit-color-swatch {
-            border: none;
-            border-radius: 2px;
-        }
-        
-        .color-picker-values {
-            display: flex;
-            gap: 4px;
-            font-size: 10px;
-            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
-            color: var(--text-muted);
-        }
-        
-        .color-picker-hex {
-            background: var(--bg-app);
-            border: 1px solid var(--border);
-            border-radius: 3px;
-            padding: 2px 6px;
-            color: var(--text);
-            font-size: 10px;
-            width: 70px;
-        }
-
-        /* Boolean toggle switch */
-        .toggle-switch {
-            position: relative;
-            width: 36px;
-            height: 18px;
-            background: var(--border);
-            border-radius: 9px;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-        
-        .toggle-switch.active {
-            background: var(--bg-primary);
-        }
-        
-        .toggle-switch::after {
-            content: '';
-            position: absolute;
-            top: 2px;
-            left: 2px;
-            width: 14px;
-            height: 14px;
-            background: #fff;
-            border-radius: 50%;
-            transition: transform 0.2s;
-        }
-        
-        .toggle-switch.active::after {
-            transform: translateX(18px);
-        }
-        
-        .toggle-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-        
-        .toggle-label {
-            font-size: 11px;
-            color: var(--text);
-        }
-
-        .control-actions {
-            display: flex;
-            gap: 6px;
-            margin-top: 8px;
-        }
-
-        .control-actions button {
-            flex: 1;
-            padding: 4px 8px;
-            background: var(--bg-button);
-            color: var(--text);
-            border: 1px solid var(--border-light);
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 10px;
-        }
-
-        .control-actions button:hover {
-            background: var(--bg-button-hover);
-        }
-
-        .control-actions button.primary {
-            background: var(--bg-primary);
-            border-color: var(--bg-primary);
-            color: #fff;
-        }
-
-        .control-actions button.primary:hover {
-            background: var(--bg-primary-hover);
-        }
-
-        /* Live update toggle */
-        .live-update-toggle {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            font-size: 10px;
-            color: var(--text-muted);
-            cursor: pointer;
-        }
-
-        .live-update-toggle input {
-            margin: 0;
-        }
-
-        /* Editor Panel */
-        .editor-panel {
-            flex: 1;
-            min-height: 150px;
-        }
-
-        #editor-container {
-            height: 100%;
-            width: 100%;
-        }
-
-        /* Horizontal Resize Handle */
-        .h-resize-handle {
-            height: 4px;
-            background: var(--border);
-            cursor: row-resize;
-            flex-shrink: 0;
-        }
-
-        .h-resize-handle:hover {
-            background: var(--bg-primary);
-        }
-
-        /* Terminal Panel */
-        .terminal-panel {
-            height: 200px;
-            min-height: 80px;
-        }
-
-        #terminal-container {
-            height: 100%;
-            overflow-y: auto;
-            background: #1e1e1e;
-        }
-
-        /* Status Panel (top right) */
-        .status-panel {
-            flex-shrink: 0;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .status-content {
-            padding: 8px 10px;
-        }
-
-        .status-row {
-            display: flex;
-            align-items: center;
-            padding: 2px 0;
-            font-size: 11px;
-        }
-
-        .status-label {
-            color: var(--text-muted);
-            width: 70px;
-        }
-
-        .status-value {
-            flex: 1;
-            color: var(--text);
-        }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #666;
-        }
-
-        .status-dot.connected {
-            background: var(--status-connected);
-            box-shadow: 0 0 6px rgba(82, 196, 26, 0.5);
-        }
-
-        /* Info Panel (middle right) */
-        .info-panel {
-            height: 120px;
-            min-height: 60px;
-            border-bottom: 1px solid var(--border);
-            flex-shrink: 0;
-        }
-
-        .info-content {
-            padding: 10px;
-            font-size: 11px;
-            overflow-y: auto;
-            height: 100%;
-        }
-
-        .info-placeholder {
-            color: var(--text-dim);
-            font-style: italic;
-        }
-
-        .info-filename {
-            font-weight: 600;
-            color: var(--text);
-            margin-bottom: 6px;
-            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
-        }
-
-        .info-description {
-            color: var(--text-muted);
-            line-height: 1.4;
-        }
-
-        .info-tags {
-            margin-top: 8px;
-        }
-
-        .info-tag {
-            display: inline-block;
-            padding: 2px 6px;
-            background: var(--bg-button);
-            border-radius: 3px;
-            font-size: 10px;
-            color: var(--text-muted);
-            margin-right: 4px;
-            margin-bottom: 4px;
-        }
-
-        /* Log Panel (bottom right) */
-        .log-panel {
-            flex: 1;
-            min-height: 100px;
-        }
-
-        .log-output {
-            flex: 1;
-            overflow-y: auto;
-            padding: 8px 10px;
-            font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
-            font-size: 11px;
-            line-height: 1.5;
-            background: #1e1e1e;
-            height: 100%;
-        }
-
-        .log-entry {
-            margin-bottom: 1px;
-            white-space: pre-wrap;
-            word-break: break-word;
-        }
-
-        .log-entry.error {
-            color: #f85149;
-        }
-
-        .log-entry.info {
-            color: #58a6ff;
-        }
-
-        .log-entry.warn {
-            color: #d29922;
-        }
-
-        /* Editor status bar */
-        .editor-status-bar {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 4px 10px;
-            background: var(--bg-header);
-            border-top: 1px solid var(--border);
-            font-size: 10px;
-            color: var(--text-dim);
-        }
-
-        .editor-shortcuts kbd {
-            background: #333;
-            padding: 1px 4px;
-            border-radius: 2px;
-            margin-right: 2px;
-        }
-
-        .editor-info {
-            color: var(--text-muted);
-        }
-
-        .editor-info.has-errors {
-            color: var(--status-error);
-        }
-
-        .editor-info.has-warnings {
-            color: #d29922;
-        }
-
-        /* Lint results */
-        .lint-results {
-            display: none;
-            position: absolute;
-            bottom: 28px;
-            left: 0;
-            right: 0;
-            max-height: 150px;
-            background: var(--bg-panel);
-            border-top: 1px solid var(--border);
-            overflow-y: auto;
-        }
-
-        .lint-results.visible {
-            display: block;
-        }
-
-        .lint-results-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 6px 10px;
-            background: var(--bg-header);
-            border-bottom: 1px solid var(--border);
-        }
-
-        .lint-results-title {
-            font-size: 11px;
-            font-weight: 600;
-            color: var(--text-header);
-        }
-
-        .lint-results-close {
-            background: none;
-            border: none;
-            color: var(--text-muted);
-            cursor: pointer;
-            font-size: 14px;
-        }
-
-        .lint-results-body {
-            padding: 4px 0;
-        }
-
-        .lint-results-empty {
-            padding: 10px;
-            color: var(--status-connected);
-            text-align: center;
-        }
-
-        .lint-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 4px 10px;
-            cursor: pointer;
-            font-size: 11px;
-        }
-
-        .lint-item:hover {
-            background: var(--bg-hover);
-        }
-
-        .lint-item-icon {
-            font-size: 10px;
-        }
-
-        .lint-item-icon.error {
-            color: var(--status-error);
-        }
-
-        .lint-item-icon.warning {
-            color: #d29922;
-        }
-
-        .lint-item-location {
-            color: var(--text-muted);
-            min-width: 50px;
-        }
-
-        .lint-item-message {
-            color: var(--text);
-        }
-
-        /* Scrollbars */
-        .examples-tree::-webkit-scrollbar,
-        .log-output::-webkit-scrollbar,
-        .info-content::-webkit-scrollbar,
-        .controls-content::-webkit-scrollbar,
-        #terminal-container::-webkit-scrollbar {
-            width: 8px;
-        }
-
-        .examples-tree::-webkit-scrollbar-track,
-        .log-output::-webkit-scrollbar-track,
-        .info-content::-webkit-scrollbar-track,
-        .controls-content::-webkit-scrollbar-track,
-        #terminal-container::-webkit-scrollbar-track {
-            background: #1e1e1e;
-        }
-
-        .examples-tree::-webkit-scrollbar-thumb,
-        .log-output::-webkit-scrollbar-thumb,
-        .info-content::-webkit-scrollbar-thumb,
-        .controls-content::-webkit-scrollbar-thumb,
-        #terminal-container::-webkit-scrollbar-thumb {
-            background: #3e3e42;
-            border-radius: 4px;
-        }
-
-        .examples-tree::-webkit-scrollbar-thumb:hover,
-        .log-output::-webkit-scrollbar-thumb:hover,
-        .info-content::-webkit-scrollbar-thumb:hover,
-        .controls-content::-webkit-scrollbar-thumb:hover,
-        #terminal-container::-webkit-scrollbar-thumb:hover {
-            background: #4e4e52;
-        }
-    </style>
-</head>
-<body>
-    <!-- Top Status Bar -->
-    <div class="status-bar">
-        <h1>stim2</h1>
-        <div class="status-indicator" id="statusIndicator"></div>
-        <span class="status-text" id="connectionStatus">Connecting...</span>
-        <span class="status-spacer"></span>
-        <div class="status-info">
-            <span>State: <span class="value" id="stateValue">-</span></span>
-            <span>FPS: <span class="value" id="fpsValue">-</span></span>
-        </div>
-        <button onclick="reconnect()">Reconnect</button>
-        <button onclick="refreshWorkspaces()">Refresh</button>
-    </div>
-
-    <!-- Main 3-Column Layout -->
-    <div class="main-container">
-        <!-- Left: Navigator + Controls -->
-        <div class="nav-column" id="navColumn">
-            <!-- Search -->
-            <div class="nav-search">
-                <input type="text" id="searchInput" placeholder="Search files..." oninput="onSearchInput(this.value)">
+    <head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>stim2 Development</title>
+	<link rel="stylesheet" href="css/TclTerminal.css">
+	<style>
+         * {
+             box-sizing: border-box;
+             margin: 0;
+             padding: 0;
+         }
+
+         :root {
+             --bg-app: #1a1a1a;
+             --bg-panel: #252525;
+             --bg-header: #2a2a2a;
+             --bg-button: #333;
+             --bg-button-hover: #444;
+             --bg-primary: #1890ff;
+             --bg-primary-hover: #40a9ff;
+             --bg-selected: #37373d;
+             --bg-hover: #2a2d2e;
+             --border: #333;
+             --border-light: #444;
+             --text: #d4d4d4;
+             --text-muted: #999;
+             --text-header: #aaa;
+             --text-dim: #666;
+             --status-connected: #52c41a;
+             --status-error: #ff4d4f;
+             --nav-width: 260px;
+             --info-width: 280px;
+         }
+
+         body {
+             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+             font-size: 12px;
+             background: var(--bg-app);
+             color: var(--text);
+             height: 100vh;
+             display: flex;
+             flex-direction: column;
+             overflow: hidden;
+         }
+
+         /* Status Bar */
+         .status-bar {
+             display: flex;
+             align-items: center;
+             gap: 12px;
+             height: 36px;
+             padding: 0 12px;
+             background: var(--bg-panel);
+             border-bottom: 1px solid var(--border);
+             flex-shrink: 0;
+         }
+
+         .status-bar h1 {
+             font-size: 14px;
+             font-weight: 600;
+             color: #fff;
+             margin-right: 8px;
+         }
+
+         .status-indicator {
+             width: 8px;
+             height: 8px;
+             border-radius: 50%;
+             background: #666;
+             transition: background 0.3s;
+         }
+
+         .status-indicator.connected {
+             background: var(--status-connected);
+             box-shadow: 0 0 6px rgba(82, 196, 26, 0.5);
+         }
+
+         .status-text {
+             color: var(--text-muted);
+             font-size: 11px;
+         }
+
+         .status-spacer { flex: 1; }
+
+         .status-info {
+             display: flex;
+             gap: 12px;
+             color: var(--text-muted);
+             font-size: 11px;
+         }
+
+         .status-info span {
+             display: flex;
+             gap: 4px;
+         }
+
+         .status-info .value {
+             color: var(--text);
+             min-width: 32px;
+         }
+
+         .status-bar button {
+             padding: 4px 10px;
+             background: var(--bg-button);
+             color: #ccc;
+             border: 1px solid var(--border-light);
+             border-radius: 3px;
+             cursor: pointer;
+             font-size: 11px;
+         }
+
+         .status-bar button:hover {
+             background: var(--bg-button-hover);
+             color: #fff;
+         }
+
+         /* Main 3-Column Layout */
+         .main-container {
+             display: flex;
+             flex: 1;
+             min-height: 0;
+         }
+
+         /* Left Column - Navigator */
+         .nav-column {
+             width: var(--nav-width);
+             min-width: 180px;
+             max-width: 400px;
+             display: flex;
+             flex-direction: column;
+             background: var(--bg-panel);
+             border-right: 1px solid var(--border);
+         }
+
+         /* Middle Column - Editor/Terminal */
+         .main-column {
+             flex: 1;
+             display: flex;
+             flex-direction: column;
+             min-width: 300px;
+         }
+
+         /* Right Column - Info/Log */
+         .info-column {
+             width: var(--info-width);
+             min-width: 200px;
+             max-width: 400px;
+             display: flex;
+             flex-direction: column;
+             background: var(--bg-panel);
+             border-left: 1px solid var(--border);
+         }
+
+         /* Vertical Resize Handles */
+         .v-resize-handle {
+             width: 4px;
+             background: var(--border);
+             cursor: col-resize;
+             flex-shrink: 0;
+         }
+
+         .v-resize-handle:hover {
+             background: var(--bg-primary);
+         }
+
+         /* Panel shared styles */
+         .panel {
+             display: flex;
+             flex-direction: column;
+             overflow: hidden;
+         }
+
+         .panel-header {
+             display: flex;
+             align-items: center;
+             justify-content: space-between;
+             height: 28px;
+             padding: 0 10px;
+             background: var(--bg-header);
+             border-bottom: 1px solid var(--border);
+             flex-shrink: 0;
+         }
+
+         .panel-title {
+             font-size: 11px;
+             font-weight: 600;
+             color: var(--text-header);
+             text-transform: uppercase;
+             letter-spacing: 0.5px;
+         }
+
+         .panel-actions {
+             display: flex;
+             gap: 4px;
+         }
+
+         .panel-actions button {
+             padding: 2px 6px;
+             background: transparent;
+             color: var(--text-muted);
+             border: 1px solid transparent;
+             border-radius: 3px;
+             cursor: pointer;
+             font-size: 10px;
+         }
+
+         .panel-actions button:hover {
+             background: var(--bg-button-hover);
+             color: #fff;
+             border-color: var(--border-light);
+         }
+
+         .panel-actions button.primary {
+             background: var(--bg-primary);
+             border-color: var(--bg-primary);
+             color: #fff;
+         }
+
+         .panel-actions button.primary:hover {
+             background: var(--bg-primary-hover);
+         }
+
+         .panel-body {
+             flex: 1;
+             overflow: hidden;
+             position: relative;
+         }
+
+         /* Left Navigator Column */
+         .nav-column {
+             display: flex;
+             flex-direction: column;
+         }
+
+         .nav-search {
+             padding: 8px;
+             border-bottom: 1px solid var(--border);
+             flex-shrink: 0;
+         }
+
+         .nav-search input {
+             width: 100%;
+             padding: 6px 10px;
+             background: var(--bg-app);
+             border: 1px solid var(--border);
+             border-radius: 4px;
+             color: var(--text);
+             font-size: 11px;
+         }
+
+         .nav-search input:focus {
+             outline: none;
+             border-color: var(--bg-primary);
+         }
+
+         .nav-search input::placeholder {
+             color: var(--text-dim);
+         }
+
+         .nav-tree-container {
+             flex: 1;
+             overflow-y: auto;
+             min-height: 100px;
+         }
+
+         .nav-h-resize-handle {
+             height: 4px;
+             background: var(--border);
+             cursor: row-resize;
+             flex-shrink: 0;
+         }
+
+         .nav-h-resize-handle:hover {
+             background: var(--bg-primary);
+         }
+
+         .nav-controls-container {
+             flex: 1;
+             min-height: 150px;
+             display: flex;
+             flex-direction: column;
+             border-top: 1px solid var(--border);
+         }
+
+         .nav-controls-container .panel-header {
+             flex-shrink: 0;
+         }
+
+         .controls-content {
+             flex: 1;
+             overflow-y: auto;
+             padding: 8px;
+         }
+
+         .controls-placeholder {
+             color: var(--text-dim);
+             font-size: 11px;
+             font-style: italic;
+             padding: 8px;
+         }
+
+         /* Navigator / Examples Tree */
+         .examples-tree {
+             padding: 8px 0;
+         }
+
+         .tree-category {
+             margin-bottom: 4px;
+         }
+
+         .tree-category-header {
+             display: flex;
+             align-items: center;
+             padding: 4px 10px;
+             cursor: pointer;
+             user-select: none;
+             color: var(--text-header);
+             font-size: 11px;
+             font-weight: 600;
+         }
+
+         .tree-category-header:hover {
+             background: var(--bg-hover);
+         }
+
+         .tree-category-icon {
+             margin-right: 6px;
+             font-size: 10px;
+             width: 12px;
+             text-align: center;
+             transition: transform 0.15s;
+         }
+
+         .tree-category.collapsed .tree-category-icon {
+             transform: rotate(-90deg);
+         }
+
+         .tree-category.collapsed .tree-items {
+             display: none;
+         }
+
+         .tree-items {
+             margin-left: 8px;
+         }
+
+         .tree-item {
+             display: flex;
+             align-items: center;
+             padding: 4px 10px 4px 20px;
+             cursor: pointer;
+             color: var(--text);
+             font-size: 12px;
+         }
+
+         .tree-item:hover {
+             background: var(--bg-hover);
+         }
+
+         .tree-item.selected {
+             background: var(--bg-selected);
+         }
+
+         .tree-item.hidden {
+             display: none;
+         }
+
+         .tree-item-icon {
+             margin-right: 8px;
+             color: var(--text-muted);
+             font-size: 11px;
+         }
+
+         .tree-loading, .tree-error, .tree-empty {
+             padding: 16px;
+             color: var(--text-dim);
+             font-size: 11px;
+             text-align: center;
+         }
+
+         .tree-error {
+             color: var(--status-error);
+         }
+
+         /* ============================================================
+            CONTROLS PANEL STYLES
+            ============================================================ */
+
+         /* Setup selector - dropdown style */
+         .setup-selector {
+             margin-bottom: 10px;
+             padding-bottom: 8px;
+             border-bottom: 1px solid var(--border);
+         }
+
+         .setup-selector label {
+             display: block;
+             font-size: 10px;
+             color: var(--text-muted);
+             text-transform: uppercase;
+             margin-bottom: 4px;
+         }
+
+         .setup-selector select {
+             width: 100%;
+             padding: 6px 8px;
+             background: var(--bg-app);
+             border: 1px solid var(--border);
+             border-radius: 4px;
+             color: var(--text);
+             font-size: 11px;
+             cursor: pointer;
+         }
+
+         .setup-selector select:focus {
+             outline: none;
+             border-color: var(--bg-primary);
+         }
+
+         /* Setup parameters section */
+         .setup-section {
+             margin-bottom: 12px;
+             padding-bottom: 10px;
+             border-bottom: 1px solid var(--border);
+         }
+
+         .setup-section-header {
+             display: flex;
+             align-items: center;
+             justify-content: space-between;
+             margin-bottom: 8px;
+         }
+
+         .setup-section-title {
+             font-size: 11px;
+             font-weight: 600;
+             color: var(--text-header);
+             font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
+         }
+
+         .setup-run-btn {
+             padding: 4px 10px;
+             background: var(--bg-primary);
+             color: #fff;
+             border: none;
+             border-radius: 3px;
+             cursor: pointer;
+             font-size: 10px;
+         }
+
+         .setup-run-btn:hover {
+             background: var(--bg-primary-hover);
+         }
+
+         /* Adjuster groups */
+         .adjuster-group {
+             margin-bottom: 12px;
+         }
+
+         .adjuster-group-header {
+             font-size: 10px;
+             font-weight: 600;
+             color: var(--text-muted);
+             text-transform: uppercase;
+             margin-bottom: 6px;
+             padding-bottom: 4px;
+             border-bottom: 1px solid var(--border);
+             display: flex;
+             align-items: center;
+             gap: 6px;
+         }
+
+         .adjuster-group-header .target-badge {
+             font-size: 9px;
+             background: var(--bg-button);
+             padding: 1px 5px;
+             border-radius: 3px;
+             font-weight: normal;
+             text-transform: none;
+         }
+
+         /* Control parameters */
+         .control-group {
+             margin-bottom: 12px;
+             padding-bottom: 12px;
+             border-bottom: 1px solid var(--border);
+         }
+
+         .control-group:last-child {
+             border-bottom: none;
+             margin-bottom: 0;
+             padding-bottom: 0;
+         }
+
+         .control-proc-name {
+             font-size: 11px;
+             font-weight: 600;
+             color: var(--text-header);
+             margin-bottom: 8px;
+             font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
+         }
+
+         .control-param {
+             margin-bottom: 8px;
+         }
+
+         .control-param:last-child {
+             margin-bottom: 0;
+         }
+
+         .control-param label {
+             display: block;
+             font-size: 10px;
+             color: var(--text-muted);
+             margin-bottom: 3px;
+         }
+
+         .control-param-row {
+             display: flex;
+             align-items: center;
+             gap: 8px;
+         }
+
+         .control-param input[type="range"] {
+             flex: 1;
+             height: 4px;
+             -webkit-appearance: none;
+             appearance: none;
+             background: var(--border);
+             border-radius: 2px;
+             outline: none;
+         }
+
+         .control-param input[type="range"]::-webkit-slider-thumb {
+             -webkit-appearance: none;
+             appearance: none;
+             width: 12px;
+             height: 12px;
+             border-radius: 50%;
+             background: var(--bg-primary);
+             cursor: pointer;
+         }
+
+         .control-param input[type="text"],
+         .control-param input[type="number"] {
+             flex: 1;
+             background: var(--bg-app);
+             border: 1px solid var(--border);
+             border-radius: 3px;
+             color: var(--text);
+             padding: 4px 6px;
+             font-size: 11px;
+         }
+
+         .control-param select {
+             flex: 1;
+             background: var(--bg-app);
+             border: 1px solid var(--border);
+             border-radius: 3px;
+             color: var(--text);
+             padding: 4px 6px;
+             font-size: 11px;
+         }
+
+         .control-param-value {
+             min-width: 45px;
+             text-align: right;
+             font-size: 10px;
+             color: var(--text);
+             font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
+         }
+
+         .control-param-unit {
+             font-size: 9px;
+             color: var(--text-muted);
+             min-width: 20px;
+         }
+
+         /* Color picker styles */
+         .color-picker-control {
+             margin-bottom: 8px;
+         }
+
+         .color-picker-control label {
+             display: block;
+             font-size: 10px;
+             color: var(--text-muted);
+             margin-bottom: 4px;
+         }
+
+         .color-picker-row {
+             display: flex;
+             align-items: center;
+             gap: 8px;
+         }
+
+         .color-picker-input {
+             width: 40px;
+             height: 28px;
+             padding: 0;
+             border: 1px solid var(--border);
+             border-radius: 4px;
+             cursor: pointer;
+             background: none;
+         }
+
+         .color-picker-input::-webkit-color-swatch-wrapper {
+             padding: 2px;
+         }
+
+         .color-picker-input::-webkit-color-swatch {
+             border: none;
+             border-radius: 2px;
+         }
+
+         .color-picker-values {
+             display: flex;
+             gap: 4px;
+             font-size: 10px;
+             font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
+             color: var(--text-muted);
+         }
+
+         .color-picker-hex {
+             background: var(--bg-app);
+             border: 1px solid var(--border);
+             border-radius: 3px;
+             padding: 2px 6px;
+             color: var(--text);
+             font-size: 10px;
+             width: 70px;
+         }
+
+         /* Boolean toggle switch */
+         .toggle-switch {
+             position: relative;
+             width: 36px;
+             height: 18px;
+             background: var(--border);
+             border-radius: 9px;
+             cursor: pointer;
+             transition: background 0.2s;
+         }
+
+         .toggle-switch.active {
+             background: var(--bg-primary);
+         }
+
+         .toggle-switch::after {
+             content: '';
+             position: absolute;
+             top: 2px;
+             left: 2px;
+             width: 14px;
+             height: 14px;
+             background: #fff;
+             border-radius: 50%;
+             transition: transform 0.2s;
+         }
+
+         .toggle-switch.active::after {
+             transform: translateX(18px);
+         }
+
+         .toggle-row {
+             display: flex;
+             align-items: center;
+             justify-content: space-between;
+         }
+
+         .toggle-label {
+             font-size: 11px;
+             color: var(--text);
+         }
+
+         .control-actions {
+             display: flex;
+             gap: 6px;
+             margin-top: 8px;
+         }
+
+         .control-actions button {
+             flex: 1;
+             padding: 4px 8px;
+             background: var(--bg-button);
+             color: var(--text);
+             border: 1px solid var(--border-light);
+             border-radius: 3px;
+             cursor: pointer;
+             font-size: 10px;
+         }
+
+         .control-actions button:hover {
+             background: var(--bg-button-hover);
+         }
+
+         .control-actions button.primary {
+             background: var(--bg-primary);
+             border-color: var(--bg-primary);
+             color: #fff;
+         }
+
+         .control-actions button.primary:hover {
+             background: var(--bg-primary-hover);
+         }
+
+         /* Live update toggle */
+         .live-update-toggle {
+             display: flex;
+             align-items: center;
+             gap: 4px;
+             font-size: 10px;
+             color: var(--text-muted);
+             cursor: pointer;
+         }
+
+         .live-update-toggle input {
+             margin: 0;
+         }
+
+         /* Editor Panel */
+         .editor-panel {
+             flex: 1;
+             min-height: 150px;
+         }
+
+         #editor-container {
+             height: 100%;
+             width: 100%;
+         }
+
+         /* Horizontal Resize Handle */
+         .h-resize-handle {
+             height: 4px;
+             background: var(--border);
+             cursor: row-resize;
+             flex-shrink: 0;
+         }
+
+         .h-resize-handle:hover {
+             background: var(--bg-primary);
+         }
+
+         /* Terminal Panel */
+         .terminal-panel {
+             height: 200px;
+             min-height: 80px;
+         }
+
+         #terminal-container {
+             height: 100%;
+             overflow-y: auto;
+             background: #1e1e1e;
+         }
+
+         /* Status Panel (top right) */
+         .status-panel {
+             flex-shrink: 0;
+             border-bottom: 1px solid var(--border);
+         }
+
+         .status-content {
+             padding: 8px 10px;
+         }
+
+         .status-row {
+             display: flex;
+             align-items: center;
+             padding: 2px 0;
+             font-size: 11px;
+         }
+
+         .status-label {
+             color: var(--text-muted);
+             width: 70px;
+         }
+
+         .status-value {
+             flex: 1;
+             color: var(--text);
+         }
+
+         .status-dot {
+             width: 8px;
+             height: 8px;
+             border-radius: 50%;
+             background: #666;
+         }
+
+         .status-dot.connected {
+             background: var(--status-connected);
+             box-shadow: 0 0 6px rgba(82, 196, 26, 0.5);
+         }
+
+         /* Info Panel (middle right) */
+         .info-panel {
+             height: 120px;
+             min-height: 60px;
+             border-bottom: 1px solid var(--border);
+             flex-shrink: 0;
+         }
+
+         .info-content {
+             padding: 10px;
+             font-size: 11px;
+             overflow-y: auto;
+             height: 100%;
+         }
+
+         .info-placeholder {
+             color: var(--text-dim);
+             font-style: italic;
+         }
+
+         .info-filename {
+             font-weight: 600;
+             color: var(--text);
+             margin-bottom: 6px;
+             font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
+         }
+
+         .info-description {
+             color: var(--text-muted);
+             line-height: 1.4;
+         }
+
+         .info-tags {
+             margin-top: 8px;
+         }
+
+         .info-tag {
+             display: inline-block;
+             padding: 2px 6px;
+             background: var(--bg-button);
+             border-radius: 3px;
+             font-size: 10px;
+             color: var(--text-muted);
+             margin-right: 4px;
+             margin-bottom: 4px;
+         }
+
+         /* Log Panel (bottom right) */
+         .log-panel {
+             flex: 1;
+             min-height: 100px;
+         }
+
+         .log-output {
+             flex: 1;
+             overflow-y: auto;
+             padding: 8px 10px;
+             font-family: 'Monaco', 'Consolas', 'SF Mono', monospace;
+             font-size: 11px;
+             line-height: 1.5;
+             background: #1e1e1e;
+             height: 100%;
+         }
+
+         .log-entry {
+             margin-bottom: 1px;
+             white-space: pre-wrap;
+             word-break: break-word;
+         }
+
+         .log-entry.error {
+             color: #f85149;
+         }
+
+         .log-entry.info {
+             color: #58a6ff;
+         }
+
+         .log-entry.warn {
+             color: #d29922;
+         }
+
+         /* Editor status bar */
+         .editor-status-bar {
+             display: flex;
+             justify-content: space-between;
+             align-items: center;
+             padding: 4px 10px;
+             background: var(--bg-header);
+             border-top: 1px solid var(--border);
+             font-size: 10px;
+             color: var(--text-dim);
+         }
+
+         .editor-shortcuts kbd {
+             background: #333;
+             padding: 1px 4px;
+             border-radius: 2px;
+             margin-right: 2px;
+         }
+
+         .editor-info {
+             color: var(--text-muted);
+         }
+
+         .editor-info.has-errors {
+             color: var(--status-error);
+         }
+
+         .editor-info.has-warnings {
+             color: #d29922;
+         }
+
+         /* Lint results */
+         .lint-results {
+             display: none;
+             position: absolute;
+             bottom: 28px;
+             left: 0;
+             right: 0;
+             max-height: 150px;
+             background: var(--bg-panel);
+             border-top: 1px solid var(--border);
+             overflow-y: auto;
+         }
+
+         .lint-results.visible {
+             display: block;
+         }
+
+         .lint-results-header {
+             display: flex;
+             justify-content: space-between;
+             align-items: center;
+             padding: 6px 10px;
+             background: var(--bg-header);
+             border-bottom: 1px solid var(--border);
+         }
+
+         .lint-results-title {
+             font-size: 11px;
+             font-weight: 600;
+             color: var(--text-header);
+         }
+
+         .lint-results-close {
+             background: none;
+             border: none;
+             color: var(--text-muted);
+             cursor: pointer;
+             font-size: 14px;
+         }
+
+         .lint-results-body {
+             padding: 4px 0;
+         }
+
+         .lint-results-empty {
+             padding: 10px;
+             color: var(--status-connected);
+             text-align: center;
+         }
+
+         .lint-item {
+             display: flex;
+             align-items: center;
+             gap: 8px;
+             padding: 4px 10px;
+             cursor: pointer;
+             font-size: 11px;
+         }
+
+         .lint-item:hover {
+             background: var(--bg-hover);
+         }
+
+         .lint-item-icon {
+             font-size: 10px;
+         }
+
+         .lint-item-icon.error {
+             color: var(--status-error);
+         }
+
+         .lint-item-icon.warning {
+             color: #d29922;
+         }
+
+         .lint-item-location {
+             color: var(--text-muted);
+             min-width: 50px;
+         }
+
+         .lint-item-message {
+             color: var(--text);
+         }
+
+         /* Scrollbars */
+         .examples-tree::-webkit-scrollbar,
+         .log-output::-webkit-scrollbar,
+         .info-content::-webkit-scrollbar,
+         .controls-content::-webkit-scrollbar,
+         #terminal-container::-webkit-scrollbar {
+             width: 8px;
+         }
+
+         .examples-tree::-webkit-scrollbar-track,
+         .log-output::-webkit-scrollbar-track,
+         .info-content::-webkit-scrollbar-track,
+         .controls-content::-webkit-scrollbar-track,
+         #terminal-container::-webkit-scrollbar-track {
+             background: #1e1e1e;
+         }
+
+         .examples-tree::-webkit-scrollbar-thumb,
+         .log-output::-webkit-scrollbar-thumb,
+         .info-content::-webkit-scrollbar-thumb,
+         .controls-content::-webkit-scrollbar-thumb,
+         #terminal-container::-webkit-scrollbar-thumb {
+             background: #3e3e42;
+             border-radius: 4px;
+         }
+
+         .examples-tree::-webkit-scrollbar-thumb:hover,
+         .log-output::-webkit-scrollbar-thumb:hover,
+         .info-content::-webkit-scrollbar-thumb:hover,
+         .controls-content::-webkit-scrollbar-thumb:hover,
+         #terminal-container::-webkit-scrollbar-thumb:hover {
+             background: #4e4e52;
+         }
+	</style>
+    </head>
+    <body>
+	<!-- Top Status Bar -->
+	<div class="status-bar">
+            <h1>stim2</h1>
+            <div class="status-indicator" id="statusIndicator"></div>
+            <span class="status-text" id="connectionStatus">Connecting...</span>
+            <span class="status-spacer"></span>
+            <div class="status-info">
+		<span>State: <span class="value" id="stateValue">-</span></span>
+		<span>FPS: <span class="value" id="fpsValue">-</span></span>
             </div>
-            
-            <!-- Workspaces Tree -->
-            <div class="nav-tree-container" id="navTreeContainer">
-                <div class="examples-tree" id="workspacesTree">
-                    <div class="tree-loading">Loading workspaces...</div>
-                </div>
-            </div>
-            
-            <!-- Resize handle between tree and controls -->
-            <div class="nav-h-resize-handle" id="navHResizeHandle"></div>
-            
-            <!-- Controls -->
-            <div class="nav-controls-container" id="navControlsContainer">
-                <div class="panel-header">
-                    <span class="panel-title">Controls</span>
-                    <div class="panel-actions">
-                        <label class="live-update-toggle" title="Auto-run on parameter change">
-                            <input type="checkbox" id="liveUpdate" checked>
-                            Live
-                        </label>
+            <button onclick="reconnect()">Reconnect</button>
+            <button onclick="refreshWorkspaces()">Refresh</button>
+	</div>
+
+	<!-- Main 3-Column Layout -->
+	<div class="main-container">
+            <!-- Left: Navigator + Controls -->
+            <div class="nav-column" id="navColumn">
+		<!-- Search -->
+		<div class="nav-search">
+                    <input type="text" id="searchInput" placeholder="Search files..." oninput="onSearchInput(this.value)">
+		</div>
+
+		<!-- Workspaces Tree -->
+		<div class="nav-tree-container" id="navTreeContainer">
+                    <div class="examples-tree" id="workspacesTree">
+			<div class="tree-loading">Loading workspaces...</div>
                     </div>
-                </div>
-                <div class="controls-content" id="controlsContent">
-                    <div class="controls-placeholder">Select a file to see controls</div>
-                </div>
-            </div>
-        </div>
+		</div>
 
-        <div class="v-resize-handle" id="leftResizeHandle"></div>
+		<!-- Resize handle between tree and controls -->
+		<div class="nav-h-resize-handle" id="navHResizeHandle"></div>
 
-        <!-- Middle: Editor + Terminal -->
-        <div class="main-column">
-            <!-- Editor -->
-            <div class="panel editor-panel" id="editorPanel">
-                <div class="panel-header">
-                    <span class="panel-title">Editor</span>
-                    <div class="panel-actions">
-                        <button onclick="clearEditor()">Clear</button>
-                        <button onclick="formatCode()">Format</button>
-                        <button onclick="lintCode()">Lint</button>
-                        <button class="primary" onclick="runCode()">▶ Run</button>
+		<!-- Controls -->
+		<div class="nav-controls-container" id="navControlsContainer">
+                    <div class="panel-header">
+			<span class="panel-title">Controls</span>
+			<div class="panel-actions">
+                            <label class="live-update-toggle" title="Auto-run on parameter change">
+				<input type="checkbox" id="liveUpdate" checked>
+				Live
+                            </label>
+			</div>
                     </div>
-                </div>
-                <div class="panel-body">
-                    <div id="editor-container"></div>
-                </div>
-                <!-- Editor status bar -->
-                <div class="editor-status-bar">
-                    <span class="editor-shortcuts">
-                        <kbd>Shift+Enter</kbd> run line
-                        <kbd>Ctrl+/</kbd> comment
-                        <kbd>Mod+Shift+F</kbd> format
-                        <kbd>Tab</kbd> complete
-                    </span>
-                    <span class="editor-info" id="editorInfo">Ready</span>
-                </div>
-                <!-- Lint results (hidden by default) -->
-                <div class="lint-results" id="lintResults"></div>
-            </div>
-
-            <!-- Horizontal Resize -->
-            <div class="h-resize-handle" id="hResizeHandle"></div>
-
-            <!-- Terminal -->
-            <div class="panel terminal-panel" id="terminalPanel">
-                <div class="panel-header">
-                    <span class="panel-title">Terminal</span>
-                    <div class="panel-actions">
-                        <button onclick="clearTerminal()">Clear</button>
+                    <div class="controls-content" id="controlsContent">
+			<div class="controls-placeholder">Select a file to see controls</div>
                     </div>
-                </div>
-                <div class="panel-body">
-                    <div id="terminal-container"></div>
-                </div>
+		</div>
             </div>
-        </div>
 
-        <div class="v-resize-handle" id="rightResizeHandle"></div>
+            <div class="v-resize-handle" id="leftResizeHandle"></div>
 
-        <!-- Right: Status + Info + Log -->
-        <div class="info-column" id="infoColumn">
-            <!-- Status Panel -->
-            <div class="panel status-panel">
-                <div class="panel-header">
-                    <span class="panel-title">Status</span>
-                </div>
-                <div class="panel-body">
-                    <div class="status-content">
-                        <div class="status-row">
-                            <span class="status-label">Connection</span>
-                            <span class="status-value" id="connectionStatusText">Connecting...</span>
-                            <span class="status-dot" id="statusDot"></span>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-label">State</span>
-                            <span class="status-value" id="stateValue2">-</span>
-                        </div>
-                        <div class="status-row">
-                            <span class="status-label">FPS</span>
-                            <span class="status-value" id="fpsValue2">-</span>
-                        </div>
+            <!-- Middle: Editor + Terminal -->
+            <div class="main-column">
+		<!-- Editor -->
+		<div class="panel editor-panel" id="editorPanel">
+                    <div class="panel-header">
+			<span class="panel-title">Editor</span>
+			<div class="panel-actions">
+                            <button onclick="clearEditor()">Clear</button>
+                            <button onclick="formatCode()">Format</button>
+                            <button onclick="lintCode()">Lint</button>
+                            <button class="primary" onclick="runCode()">▶ Run</button>
+			</div>
                     </div>
-                </div>
-            </div>
-
-            <!-- Info Panel -->
-            <div class="panel info-panel" id="infoPanel">
-                <div class="panel-header">
-                    <span class="panel-title">Info</span>
-                </div>
-                <div class="panel-body">
-                    <div class="info-content" id="infoContent">
-                        <div class="info-placeholder">Select a file to see info</div>
+                    <div class="panel-body">
+			<div id="editor-container"></div>
                     </div>
-                </div>
-            </div>
-
-            <!-- Log Panel -->
-            <div class="panel log-panel">
-                <div class="panel-header">
-                    <span class="panel-title">Log</span>
-                    <div class="panel-actions">
-                        <button onclick="clearLog()">Clear</button>
+                    <!-- Editor status bar -->
+                    <div class="editor-status-bar">
+			<span class="editor-shortcuts">
+                            <kbd>Shift+Enter</kbd> run line
+                            <kbd>Ctrl+/</kbd> comment
+                            <kbd>Mod+Shift+F</kbd> format
+                            <kbd>Tab</kbd> complete
+			</span>
+			<span class="editor-info" id="editorInfo">Ready</span>
                     </div>
-                </div>
-                <div class="panel-body">
-                    <div class="log-output" id="logOutput"></div>
-                </div>
+                    <!-- Lint results (hidden by default) -->
+                    <div class="lint-results" id="lintResults"></div>
+		</div>
+
+		<!-- Horizontal Resize -->
+		<div class="h-resize-handle" id="hResizeHandle"></div>
+
+		<!-- Terminal -->
+		<div class="panel terminal-panel" id="terminalPanel">
+                    <div class="panel-header">
+			<span class="panel-title">Terminal</span>
+			<div class="panel-actions">
+                            <button onclick="clearTerminal()">Clear</button>
+			</div>
+                    </div>
+                    <div class="panel-body">
+			<div id="terminal-container"></div>
+                    </div>
+		</div>
             </div>
-        </div>
-    </div>
 
-    <!-- Scripts -->
-    <script src="js/TclFormatter.js"></script>
-    <script src="js/TclLinter.js"></script>
-    <script src="js/TclEditor.js"></script>
-    <script src="js/TclTerminal.js"></script>
+            <div class="v-resize-handle" id="rightResizeHandle"></div>
 
-    <script>
-        // ============================================================
-        // WebSocket Connection
-        // ============================================================
-        class Stim2Connection {
-            constructor() {
-                this.ws = null;
-                this.requestId = 0;
-                this.pending = new Map();
-                this.onStatusUpdate = null;
-            }
+            <!-- Right: Status + Info + Log -->
+            <div class="info-column" id="infoColumn">
+		<!-- Status Panel -->
+		<div class="panel status-panel">
+                    <div class="panel-header">
+			<span class="panel-title">Status</span>
+                    </div>
+                    <div class="panel-body">
+			<div class="status-content">
+                            <div class="status-row">
+				<span class="status-label">Connection</span>
+				<span class="status-value" id="connectionStatusText">Connecting...</span>
+				<span class="status-dot" id="statusDot"></span>
+                            </div>
+                            <div class="status-row">
+				<span class="status-label">State</span>
+				<span class="status-value" id="stateValue2">-</span>
+                            </div>
+                            <div class="status-row">
+				<span class="status-label">FPS</span>
+				<span class="status-value" id="fpsValue2">-</span>
+                            </div>
+			</div>
+                    </div>
+		</div>
 
-            connect() {
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = `${protocol}//${window.location.host}/ws`;
-                
-                this.ws = new WebSocket(wsUrl);
-                
-                this.ws.onopen = () => {
-                    console.log('WebSocket connected');
-                    updateConnectionStatus(true);
-                    loadWorkspaces();
-                };
-                
-                this.ws.onclose = () => {
-                    console.log('WebSocket disconnected');
-                    updateConnectionStatus(false);
-                };
-                
-                this.ws.onerror = (error) => {
-                    console.error('WebSocket error:', error);
-                    updateConnectionStatus(false);
-                };
-                
-                this.ws.onmessage = (event) => {
-                    try {
-                        const msg = JSON.parse(event.data);
-                        
-                        if (msg.type === 'status' && this.onStatusUpdate) {
-                            this.onStatusUpdate(msg);
-                            if (stateValue) stateValue.textContent = msg.state || '-';
-                            if (fpsValue) fpsValue.textContent = msg.fps ? msg.fps.toFixed(1) : '-';
-                            const sv2 = document.getElementById('stateValue2');
-                            const fv2 = document.getElementById('fpsValue2');
-                            if (sv2) sv2.textContent = msg.state || '-';
-                            if (fv2) fv2.textContent = msg.fps ? msg.fps.toFixed(1) : '-';
-                        }
-                        
-                        if (msg.type === 'response' && msg.requestId && this.pending.has(msg.requestId)) {
-                            const { resolve, reject } = this.pending.get(msg.requestId);
-                            this.pending.delete(msg.requestId);
-                            
-                            if (msg.status === 'ok') {
-                                resolve(msg.result || '');
-                            } else {
-                                reject(new Error(msg.error || 'Unknown error'));
-                            }
-                        }
-                        
-                        if (msg.type === 'log') {
-                            addLogEntry(msg.level, msg.message);
-                        }
-                    } catch (e) {
-                        console.error('Failed to parse message:', e);
-                    }
-                };
-            }
+		<!-- Info Panel -->
+		<div class="panel info-panel" id="infoPanel">
+                    <div class="panel-header">
+			<span class="panel-title">Info</span>
+                    </div>
+                    <div class="panel-body">
+			<div class="info-content" id="infoContent">
+                            <div class="info-placeholder">Select a file to see info</div>
+			</div>
+                    </div>
+		</div>
 
-            eval(code) {
-                return new Promise((resolve, reject) => {
-                    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-                        reject(new Error('Not connected'));
-                        return;
-                    }
-                    
-                    const reqId = `req_${++this.requestId}`;
-                    this.pending.set(reqId, { resolve, reject });
-                    
-                    this.ws.send(JSON.stringify({ 
-                        cmd: 'eval', 
-                        script: code,
-                        requestId: reqId 
-                    }));
-                    
-                    // Timeout after 30 seconds
-                    setTimeout(() => {
-                        if (this.pending.has(reqId)) {
-                            this.pending.delete(reqId);
-                            reject(new Error('Request timeout'));
-                        }
-                    }, 30000);
-                });
-            }
-            
-            send(command, interpreter) {
-                return this.eval(command);
-            }
-        }
+		<!-- Log Panel -->
+		<div class="panel log-panel">
+                    <div class="panel-header">
+			<span class="panel-title">Log</span>
+			<div class="panel-actions">
+                            <button onclick="clearLog()">Clear</button>
+			</div>
+                    </div>
+                    <div class="panel-body">
+			<div class="log-output" id="logOutput"></div>
+                    </div>
+		</div>
+            </div>
+	</div>
 
-        // ============================================================
-        // Global State
-        // ============================================================
-        let connection = null;
-        let editor = null;
-        let terminal = null;
-        
-        // File browser state
-        let currentWorkspace = null;
-        let currentFile = null;
-        let currentFileInfo = null;
-        
-        // Controls state
-        let currentSetups = {};      // setup_name -> {proc, params, adjusters, label}
-        let currentAdjusters = {};   // adjuster_name -> {proc, target, params, setup, uniform, label}
-        let currentExports = {};     // Legacy: proc_name -> {proc, params}
-        let activeSetup = null;
+	<!-- Scripts -->
+	<script src="js/TclFormatter.js"></script>
+	<script src="js/TclLinter.js"></script>
+	<script src="js/TclEditor.js"></script>
+	<script src="js/TclTerminal.js"></script>
 
-        // DOM references
-        let workspacesTree, navTreeContainer, navControlsContainer, controlsContent;
-        let searchInput, infoContent, logOutput;
-        let statusIndicator, statusDot, connectionStatus;
-        let stateValue, fpsValue;
+	<script>
+         // ============================================================
+         // WebSocket Connection
+         // ============================================================
+         class Stim2Connection {
+             constructor() {
+                 this.ws = null;
+                 this.requestId = 0;
+                 this.pending = new Map();
+                 this.onStatusUpdate = null;
+             }
 
-        // ============================================================
-        // Initialization
-        // ============================================================
-        function init() {
-            // Get DOM references
-            workspacesTree = document.getElementById('workspacesTree');
-            navTreeContainer = document.getElementById('navTreeContainer');
-            navControlsContainer = document.getElementById('navControlsContainer');
-            controlsContent = document.getElementById('controlsContent');
-            searchInput = document.getElementById('searchInput');
-            infoContent = document.getElementById('infoContent');
-            logOutput = document.getElementById('logOutput');
-            statusIndicator = document.getElementById('statusIndicator');
-            statusDot = document.getElementById('statusDot');
-            connectionStatus = document.getElementById('connectionStatus');
-            stateValue = document.getElementById('stateValue');
-            fpsValue = document.getElementById('fpsValue');
+             connect() {
+                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                 const wsUrl = `${protocol}//${window.location.host}/ws`;
 
-            // Initialize connection
-            connection = new Stim2Connection();
-            connection.onStatusUpdate = (msg) => {
-                // Status updates handled in connection class
-            };
-            connection.connect();
+                 this.ws = new WebSocket(wsUrl);
 
-            // Initialize editor
-            initEditor();
-            
-            // Initialize terminal
-            initTerminal();
-            
-            // Setup resize handlers
-            setupResizeHandlers();
-        }
+                 this.ws.onopen = () => {
+                     console.log('WebSocket connected');
+                     updateConnectionStatus(true);
+                     loadWorkspaces();
+                 };
 
-        function initEditor() {
-            const container = document.getElementById('editor-container');
-            
-            if (typeof TclEditor !== 'undefined') {
-                editor = new TclEditor(container, {
-                    onRun: async (code) => {
-                        await executeSnippet(code);
-                    }
-                });
-                editor.setWebSocket(connection);
-            } else {
-                container.innerHTML = '<div style="padding:20px;color:#999;">Editor not loaded</div>';
-            }
-        }
+                 this.ws.onclose = () => {
+                     console.log('WebSocket disconnected');
+                     updateConnectionStatus(false);
+                 };
 
-        function initTerminal() {
-            if (typeof TclTerminal !== 'undefined') {
-                terminal = new TclTerminal('terminal-container', connection, {
-                    interpreter: 'stim2',
-                    welcomeMessage: 'stim2 Tcl Terminal',
-                    showWelcome: true,
-                    useLinkedSubprocess: false
-                });
-            }
-        }
+                 this.ws.onerror = (error) => {
+                     console.error('WebSocket error:', error);
+                     updateConnectionStatus(false);
+                 };
 
-        // ============================================================
-        // Resize Handlers
-        // ============================================================
-        function setupResizeHandlers() {
-            // Editor/Terminal resize
-            const editorPanel = document.getElementById('editorPanel');
-            const terminalPanel = document.getElementById('terminalPanel');
-            setupVerticalResize('hResizeHandle', editorPanel, terminalPanel, 'height', 150, 80);
-            
-            // Left column resize
-            setupHorizontalResize('leftResizeHandle', 'navColumn', 180, 400, 'left');
-            
-            // Right column resize
-            setupHorizontalResize('rightResizeHandle', 'infoColumn', 200, 400, 'right');
-            
-            // Nav panel internal resize (tree/controls split)
-            setupNavInternalResize();
-        }
+                 this.ws.onmessage = (event) => {
+                     try {
+                         const msg = JSON.parse(event.data);
 
-        function setupNavInternalResize() {
-            const handle = document.getElementById('navHResizeHandle');
-            const treeContainer = navTreeContainer;
-            const controlsContainer = navControlsContainer;
-            let isResizing = false;
-            let startY = 0;
-            let startTreeHeight = 0;
+                         if (msg.type === 'status' && this.onStatusUpdate) {
+                             this.onStatusUpdate(msg);
+                             if (stateValue) stateValue.textContent = msg.state || '-';
+                             if (fpsValue) fpsValue.textContent = msg.fps ? msg.fps.toFixed(1) : '-';
+                             const sv2 = document.getElementById('stateValue2');
+                             const fv2 = document.getElementById('fpsValue2');
+                             if (sv2) sv2.textContent = msg.state || '-';
+                             if (fv2) fv2.textContent = msg.fps ? msg.fps.toFixed(1) : '-';
+                         }
 
-            handle.addEventListener('mousedown', (e) => {
-                isResizing = true;
-                startY = e.clientY;
-                startTreeHeight = treeContainer.offsetHeight;
-                document.body.style.cursor = 'row-resize';
-                e.preventDefault();
-            });
+                         if (msg.type === 'response' && msg.requestId && this.pending.has(msg.requestId)) {
+                             const { resolve, reject } = this.pending.get(msg.requestId);
+                             this.pending.delete(msg.requestId);
 
-            document.addEventListener('mousemove', (e) => {
-                if (!isResizing) return;
-                const delta = e.clientY - startY;
-                const navColumn = document.getElementById('navColumn');
-                const availableHeight = navColumn.offsetHeight - 44 - 4 - 32;
-                const newTreeHeight = Math.max(80, Math.min(availableHeight - 150, startTreeHeight + delta));
-                treeContainer.style.flex = 'none';
-                treeContainer.style.height = newTreeHeight + 'px';
-            });
+                             if (msg.status === 'ok') {
+                                 resolve(msg.result || '');
+                             } else {
+                                 reject(new Error(msg.error || 'Unknown error'));
+                             }
+                         }
 
-            document.addEventListener('mouseup', () => {
-                if (isResizing) {
-                    isResizing = false;
-                    document.body.style.cursor = '';
-                }
-            });
-        }
+                         if (msg.type === 'log') {
+                             addLogEntry(msg.level, msg.message);
+                         }
+                     } catch (e) {
+                         console.error('Failed to parse message:', e);
+                     }
+                 };
+             }
 
-        function setupVerticalResize(handleId, topPanel, bottomPanel, prop, topMin, bottomMin) {
-            const handle = document.getElementById(handleId);
-            let isResizing = false;
-            let startY = 0;
-            let startHeight = 0;
+             eval(code) {
+                 return new Promise((resolve, reject) => {
+                     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                         reject(new Error('Not connected'));
+                         return;
+                     }
 
-            handle.addEventListener('mousedown', (e) => {
-                isResizing = true;
-                startY = e.clientY;
-                startHeight = topPanel.offsetHeight;
-                document.body.style.cursor = 'row-resize';
-                e.preventDefault();
-            });
+                     const reqId = `req_${++this.requestId}`;
+                     this.pending.set(reqId, { resolve, reject });
 
-            document.addEventListener('mousemove', (e) => {
-                if (!isResizing) return;
-                const delta = e.clientY - startY;
-                const container = topPanel.parentElement;
-                const maxHeight = container.offsetHeight - bottomMin - 50;
-                const newHeight = Math.max(topMin, Math.min(maxHeight, startHeight + delta));
-                topPanel.style.flex = 'none';
-                topPanel.style.height = newHeight + 'px';
-            });
+                     this.ws.send(JSON.stringify({
+                         cmd: 'eval',
+                         script: code,
+                         requestId: reqId
+                     }));
 
-            document.addEventListener('mouseup', () => {
-                if (isResizing) {
-                    isResizing = false;
-                    document.body.style.cursor = '';
-                }
-            });
-        }
+                     // Timeout after 30 seconds
+                     setTimeout(() => {
+                         if (this.pending.has(reqId)) {
+                             this.pending.delete(reqId);
+                             reject(new Error('Request timeout'));
+                         }
+                     }, 30000);
+                 });
+             }
 
-        function setupHorizontalResize(handleId, columnId, minWidth, maxWidth, side) {
-            const handle = document.getElementById(handleId);
-            const column = document.getElementById(columnId);
-            let isResizing = false;
-            let startX = 0;
-            let startWidth = 0;
+             send(command, interpreter) {
+                 return this.eval(command);
+             }
+         }
 
-            handle.addEventListener('mousedown', (e) => {
-                isResizing = true;
-                startX = e.clientX;
-                startWidth = column.offsetWidth;
-                document.body.style.cursor = 'col-resize';
-                e.preventDefault();
-            });
+         // ============================================================
+         // Global State
+         // ============================================================
+         let connection = null;
+         let editor = null;
+         let terminal = null;
 
-            document.addEventListener('mousemove', (e) => {
-                if (!isResizing) return;
-                const delta = side === 'left' ? e.clientX - startX : startX - e.clientX;
-                const newWidth = Math.max(minWidth, Math.min(maxWidth, startWidth + delta));
-                column.style.width = newWidth + 'px';
-            });
+         // File browser state
+         let currentWorkspace = null;
+         let currentFile = null;
+         let currentFileInfo = null;
 
-            document.addEventListener('mouseup', () => {
-                if (isResizing) {
-                    isResizing = false;
-                    document.body.style.cursor = '';
-                }
-            });
-        }
+         // Controls state
+         let currentSetups = {};      // setup_name -> {proc, params, adjusters, label}
+         let currentAdjusters = {};   // adjuster_name -> {proc, target, params, setup, uniform, label}
+         let currentExports = {};     // Legacy: proc_name -> {proc, params}
+         let activeSetup = null;
 
-        // ============================================================
-        // Workspaces Browser
-        // ============================================================
-        async function loadWorkspaces() {
-            workspacesTree.innerHTML = '<div class="tree-loading">Loading workspaces...</div>';
-            
-            try {
-                await connection.eval('workspace::init');
-                const result = await connection.eval('workspace::list_workspaces');
-                const data = JSON.parse(result);
-                
-                if (!data.workspaces || data.workspaces.length === 0) {
-                    workspacesTree.innerHTML = '<div class="tree-empty">No workspaces available</div>';
-                    return;
-                }
-                
-                workspacesTree.innerHTML = '';
-                
-                for (const ws of data.workspaces) {
-                    if (!ws.exists) continue;
-                    
-                    const scanResult = await connection.eval(`workspace::scan "${ws.id}"`);
-                    const scanData = JSON.parse(scanResult);
-                    
-                    renderWorkspace(ws, scanData.items || []);
-                }
-            } catch (e) {
-                console.error('Failed to load workspaces:', e);
-                workspacesTree.innerHTML = `<div class="tree-error">Error: ${e.message}</div>`;
-            }
-        }
+         // DOM references
+         let workspacesTree, navTreeContainer, navControlsContainer, controlsContent;
+         let searchInput, infoContent, logOutput;
+         let statusIndicator, statusDot, connectionStatus;
+         let stateValue, fpsValue;
 
-        function renderWorkspace(workspace, items) {
-            const wsEl = document.createElement('div');
-            wsEl.className = 'tree-category';
-            
-            const header = document.createElement('div');
-            header.className = 'tree-category-header';
-            const icon = workspace.icon === 'package' ? '📦' : '📁';
-            header.innerHTML = `<span class="tree-category-icon">▼</span>${icon} ${workspace.name}`;
-            header.onclick = (e) => {
-                if (e.target === header || e.target.classList.contains('tree-category-icon')) {
-                    wsEl.classList.toggle('collapsed');
-                }
-            };
-            
-            const itemsContainer = document.createElement('div');
-            itemsContainer.className = 'tree-items';
-            
-            renderItems(itemsContainer, workspace.id, items);
-            
-            wsEl.appendChild(header);
-            wsEl.appendChild(itemsContainer);
-            workspacesTree.appendChild(wsEl);
-        }
+         // ============================================================
+         // Initialization
+         // ============================================================
+         function init() {
+             // Get DOM references
+             workspacesTree = document.getElementById('workspacesTree');
+             navTreeContainer = document.getElementById('navTreeContainer');
+             navControlsContainer = document.getElementById('navControlsContainer');
+             controlsContent = document.getElementById('controlsContent');
+             searchInput = document.getElementById('searchInput');
+             infoContent = document.getElementById('infoContent');
+             logOutput = document.getElementById('logOutput');
+             statusIndicator = document.getElementById('statusIndicator');
+             statusDot = document.getElementById('statusDot');
+             connectionStatus = document.getElementById('connectionStatus');
+             stateValue = document.getElementById('stateValue');
+             fpsValue = document.getElementById('fpsValue');
 
-        function renderItems(container, workspaceId, items) {
-            items.forEach(item => {
-                if (item.type === 'directory') {
-                    const dirEl = document.createElement('div');
-                    dirEl.className = 'tree-category';
-                    
-                    const displayName = item.title || item.name;
-                    
-                    const header = document.createElement('div');
-                    header.className = 'tree-category-header';
-                    header.innerHTML = `<span class="tree-category-icon">▼</span>📁 ${displayName}`;
-                    header.title = item.name;
-                    header.onclick = (e) => {
-                        if (e.target === header || e.target.classList.contains('tree-category-icon')) {
-                            dirEl.classList.toggle('collapsed');
-                        }
-                    };
-                    
-                    const childContainer = document.createElement('div');
-                    childContainer.className = 'tree-items';
-                    
-                    if (item.children && item.children.length > 0) {
-                        renderItems(childContainer, workspaceId, item.children);
-                    }
-                    
-                    dirEl.appendChild(header);
-                    dirEl.appendChild(childContainer);
-                    container.appendChild(dirEl);
-                } else {
-                    const fileEl = document.createElement('div');
-                    fileEl.className = 'tree-item';
-                    const displayName = item.title || item.name;
-                    fileEl.innerHTML = `<span class="tree-item-icon">📄</span>${displayName}`;
-                    fileEl.title = item.name;
-                    fileEl.onclick = () => selectFile(workspaceId, item.path, fileEl);
-                    container.appendChild(fileEl);
-                }
-            });
-        }
+             // Initialize connection
+             connection = new Stim2Connection();
+             connection.onStatusUpdate = (msg) => {
+                 // Status updates handled in connection class
+             };
+             connection.connect();
 
-        async function selectFile(workspaceId, filepath, element) {
-            document.querySelectorAll('.tree-item.selected').forEach(el => el.classList.remove('selected'));
-            element.classList.add('selected');
-            
-            currentWorkspace = workspaceId;
-            currentFile = filepath;
-            
-            try {
-                const content = await connection.eval(`workspace::load "${workspaceId}" "${filepath}"`);
-                editor.setValue(content);
-                
-                updateInfoPanel(filepath, content);
-                
-                const fileInfoJson = await connection.eval(`workspace::activate "${workspaceId}" "${filepath}"`);
-                const fileInfo = JSON.parse(fileInfoJson);
-                
-                currentSetups = fileInfo.setups || {};
-                currentAdjusters = fileInfo.adjusters || {};
-                currentExports = fileInfo.exports || {};
-                activeSetup = fileInfo.active_setup || null;
-                
-                renderControls();
-                
-                // Auto-run first setup
-                requestAnimationFrame(() => {
-                    const setupNames = Object.keys(currentSetups);
-                    const exportNames = Object.keys(currentExports);
-                    
-                    if (setupNames.length > 0) {
-                        runSetup(setupNames[0]);
-                    } else if (exportNames.length > 0) {
-                        runLegacyProc(exportNames[0]);
-                    }
-                });
-            } catch (e) {
-                console.error('Failed to load file:', e);
-                addLogEntry('error', `Failed to load ${filepath}: ${e.message}`);
-            }
-        }
+             // Initialize editor
+             initEditor();
 
-        // ============================================================
-        // Controls Rendering - NEW VERSION
-        // ============================================================
-        function renderControls() {
-            const setupNames = Object.keys(currentSetups);
-            const exportNames = Object.keys(currentExports);
-            
-            if (setupNames.length === 0 && exportNames.length === 0) {
-                controlsContent.innerHTML = '<div class="controls-placeholder">No exported controls</div>';
-                return;
-            }
-            
-            let html = '';
-            
-            // New setup/adjuster system
-            if (setupNames.length > 0) {
-                // Setup selector dropdown (if multiple setups)
-                if (setupNames.length > 1) {
-                    html += '<div class="setup-selector">';
-                    html += '<label>Configuration</label>';
-                    html += '<select id="setupSelector" onchange="switchSetup(this.value)">';
-                    for (const name of setupNames) {
-                        const setup = currentSetups[name];
-                        const label = setup.label || name;
-                        const selected = name === activeSetup ? 'selected' : '';
-                        html += `<option value="${name}" ${selected}>${label}</option>`;
-                    }
-                    html += '</select>';
-                    html += '</div>';
-                }
-                
-                // Render active setup controls
-                const setupName = (activeSetup && currentSetups[activeSetup]) ? activeSetup : setupNames[0];
-                html += renderSetupControls(setupName);
-            }
-            
-            // Legacy exports (if any and no setups)
-            if (setupNames.length === 0 && exportNames.length > 0) {
-                for (const procName of exportNames) {
-                    html += renderLegacyProcControls(procName);
-                }
-            }
-            
-            controlsContent.innerHTML = html;
-            
-            // Initialize any color pickers
-            initColorPickers();
-        }
+             // Initialize terminal
+             initTerminal();
 
-        function renderSetupControls(setupName) {
-            const setup = currentSetups[setupName];
-            if (!setup) return '';
-            
-            let html = '';
-            
-            // Setup section with parameters
-            html += '<div class="setup-section">';
-            html += '<div class="setup-section-header">';
-            html += `<span class="setup-section-title">${setup.label || setup.proc}</span>`;
-            html += `<button class="setup-run-btn" onclick="runSetup('${setupName}')">▶ Run</button>`;
-            html += '</div>';
-            
-            // Setup parameters
-            if (setup.params && setup.params.length > 0) {
-                for (const param of setup.params) {
-                    html += renderParamControl('setup', setupName, param);
-                }
-            }
-            html += '</div>';
-            
-            // Adjusters section - group by adjuster name/label
-            const setupAdjusters = setup.adjusters || [];
-            if (setupAdjusters.length > 0) {
-                // Group adjusters by a logical category (for now, one group per adjuster)
-                const adjGroups = groupAdjusters(setupAdjusters);
-                
-                for (const group of adjGroups) {
-                    html += renderAdjusterGroup(group);
-                }
-            }
-            
-            return html;
-        }
-        
-        // Group adjusters logically - could be extended to group by target, etc.
-        function groupAdjusters(adjusterNames) {
-            const groups = [];
-            
-            for (const adjName of adjusterNames) {
-                const adj = currentAdjusters[adjName];
-                if (!adj) continue;
-                
-                // Check if this is a color adjuster (has r, g, b params)
-                const isColor = isColorAdjuster(adj);
-                
-                groups.push({
-                    name: adjName,
-                    label: adj.label || adjName,
-                    target: adj.target,
-                    adjuster: adj,
-                    isColor: isColor
-                });
-            }
-            
-            return groups;
-        }
-        
-        function isColorAdjuster(adj) {
-            if (!adj.params || adj.params.length < 3) return false;
-            const names = adj.params.map(p => p.name.toLowerCase());
-            return names.includes('r') && names.includes('g') && names.includes('b');
-        }
-        
-        function renderAdjusterGroup(group) {
-            const adj = group.adjuster;
-            let html = '<div class="adjuster-group">';
-            
-            // Header with label and target badge
-            html += '<div class="adjuster-group-header">';
-            html += `<span>${group.label}</span>`;
-            if (group.target) {
-                html += `<span class="target-badge">${group.target}</span>`;
-            }
-            html += '</div>';
-            
-            // Render as color picker or individual params
-            if (group.isColor) {
-                html += renderColorPicker(group.name, adj);
-            } else {
-                // Regular params
-                for (const param of (adj.params || [])) {
-                    html += renderParamControl('adjuster', group.name, param);
-                }
-            }
-            
-            html += '</div>';
-            return html;
-        }
-        
-        function renderColorPicker(adjusterName, adj) {
-            // Extract RGB values from params
-            const rParam = adj.params.find(p => p.name.toLowerCase() === 'r');
-            const gParam = adj.params.find(p => p.name.toLowerCase() === 'g');
-            const bParam = adj.params.find(p => p.name.toLowerCase() === 'b');
-            const aParam = adj.params.find(p => p.name.toLowerCase() === 'a');
-            
-            const r = rParam ? (rParam.default || 1) : 1;
-            const g = gParam ? (gParam.default || 1) : 1;
-            const b = bParam ? (bParam.default || 1) : 1;
-            
-            // Convert 0-1 to hex
-            const hexColor = rgbToHex(r, g, b);
-            
-            const inputId = `colorpicker_${adjusterName}`.replace(/[^a-zA-Z0-9_]/g, '_');
-            
-            let html = '<div class="color-picker-control">';
-            html += '<div class="color-picker-row">';
-            html += `<input type="color" class="color-picker-input" id="${inputId}" 
-                            value="${hexColor}" 
+             // Setup resize handlers
+             setupResizeHandlers();
+         }
+
+         function initEditor() {
+             const container = document.getElementById('editor-container');
+
+             if (typeof TclEditor !== 'undefined') {
+		 editor = new TclEditor(container, {
+		     fontSize: '11px',
+                     onRun: async (code) => {
+                         await executeSnippet(code);
+                     }
+                 });
+                 editor.setWebSocket(connection);
+             } else {
+                 container.innerHTML = '<div style="padding:20px;color:#999;">Editor not loaded</div>';
+             }
+         }
+
+         function initTerminal() {
+             if (typeof TclTerminal !== 'undefined') {
+                 terminal = new TclTerminal('terminal-container', connection, {
+                     interpreter: 'stim2',
+                     welcomeMessage: 'stim2 Tcl Terminal',
+                     showWelcome: true,
+                     useLinkedSubprocess: false
+                 });
+             }
+         }
+
+         // ============================================================
+         // Resize Handlers
+         // ============================================================
+         function setupResizeHandlers() {
+             // Editor/Terminal resize
+             const editorPanel = document.getElementById('editorPanel');
+             const terminalPanel = document.getElementById('terminalPanel');
+             setupVerticalResize('hResizeHandle', editorPanel, terminalPanel, 'height', 150, 80);
+
+             // Left column resize
+             setupHorizontalResize('leftResizeHandle', 'navColumn', 180, 400, 'left');
+
+             // Right column resize
+             setupHorizontalResize('rightResizeHandle', 'infoColumn', 200, 400, 'right');
+
+             // Nav panel internal resize (tree/controls split)
+             setupNavInternalResize();
+         }
+
+         function setupNavInternalResize() {
+             const handle = document.getElementById('navHResizeHandle');
+             const treeContainer = navTreeContainer;
+             const controlsContainer = navControlsContainer;
+             let isResizing = false;
+             let startY = 0;
+             let startTreeHeight = 0;
+
+             handle.addEventListener('mousedown', (e) => {
+                 isResizing = true;
+                 startY = e.clientY;
+                 startTreeHeight = treeContainer.offsetHeight;
+                 document.body.style.cursor = 'row-resize';
+                 e.preventDefault();
+             });
+
+             document.addEventListener('mousemove', (e) => {
+                 if (!isResizing) return;
+                 const delta = e.clientY - startY;
+                 const navColumn = document.getElementById('navColumn');
+                 const availableHeight = navColumn.offsetHeight - 44 - 4 - 32;
+                 const newTreeHeight = Math.max(80, Math.min(availableHeight - 150, startTreeHeight + delta));
+                 treeContainer.style.flex = 'none';
+                 treeContainer.style.height = newTreeHeight + 'px';
+             });
+
+             document.addEventListener('mouseup', () => {
+                 if (isResizing) {
+                     isResizing = false;
+                     document.body.style.cursor = '';
+                 }
+             });
+         }
+
+         function setupVerticalResize(handleId, topPanel, bottomPanel, prop, topMin, bottomMin) {
+             const handle = document.getElementById(handleId);
+             let isResizing = false;
+             let startY = 0;
+             let startHeight = 0;
+
+             handle.addEventListener('mousedown', (e) => {
+                 isResizing = true;
+                 startY = e.clientY;
+                 startHeight = topPanel.offsetHeight;
+                 document.body.style.cursor = 'row-resize';
+                 e.preventDefault();
+             });
+
+             document.addEventListener('mousemove', (e) => {
+                 if (!isResizing) return;
+                 const delta = e.clientY - startY;
+                 const container = topPanel.parentElement;
+                 const maxHeight = container.offsetHeight - bottomMin - 50;
+                 const newHeight = Math.max(topMin, Math.min(maxHeight, startHeight + delta));
+                 topPanel.style.flex = 'none';
+                 topPanel.style.height = newHeight + 'px';
+             });
+
+             document.addEventListener('mouseup', () => {
+                 if (isResizing) {
+                     isResizing = false;
+                     document.body.style.cursor = '';
+                 }
+             });
+         }
+
+         function setupHorizontalResize(handleId, columnId, minWidth, maxWidth, side) {
+             const handle = document.getElementById(handleId);
+             const column = document.getElementById(columnId);
+             let isResizing = false;
+             let startX = 0;
+             let startWidth = 0;
+
+             handle.addEventListener('mousedown', (e) => {
+                 isResizing = true;
+                 startX = e.clientX;
+                 startWidth = column.offsetWidth;
+                 document.body.style.cursor = 'col-resize';
+                 e.preventDefault();
+             });
+
+             document.addEventListener('mousemove', (e) => {
+                 if (!isResizing) return;
+                 const delta = side === 'left' ? e.clientX - startX : startX - e.clientX;
+                 const newWidth = Math.max(minWidth, Math.min(maxWidth, startWidth + delta));
+                 column.style.width = newWidth + 'px';
+             });
+
+             document.addEventListener('mouseup', () => {
+                 if (isResizing) {
+                     isResizing = false;
+                     document.body.style.cursor = '';
+                 }
+             });
+         }
+
+         // ============================================================
+         // Workspaces Browser
+         // ============================================================
+         async function loadWorkspaces() {
+             workspacesTree.innerHTML = '<div class="tree-loading">Loading workspaces...</div>';
+
+             try {
+                 await connection.eval('workspace::init');
+                 const result = await connection.eval('workspace::list_workspaces');
+                 const data = JSON.parse(result);
+
+                 if (!data.workspaces || data.workspaces.length === 0) {
+                     workspacesTree.innerHTML = '<div class="tree-empty">No workspaces available</div>';
+                     return;
+                 }
+
+                 workspacesTree.innerHTML = '';
+
+                 for (const ws of data.workspaces) {
+                     if (!ws.exists) continue;
+
+                     const scanResult = await connection.eval(`workspace::scan "${ws.id}"`);
+                     const scanData = JSON.parse(scanResult);
+
+                     renderWorkspace(ws, scanData.items || []);
+                 }
+             } catch (e) {
+                 console.error('Failed to load workspaces:', e);
+                 workspacesTree.innerHTML = `<div class="tree-error">Error: ${e.message}</div>`;
+             }
+         }
+
+         function renderWorkspace(workspace, items) {
+             const wsEl = document.createElement('div');
+             wsEl.className = 'tree-category';
+
+             const header = document.createElement('div');
+             header.className = 'tree-category-header';
+             const icon = workspace.icon === 'package' ? '📦' : '📁';
+             header.innerHTML = `<span class="tree-category-icon">▼</span>${icon} ${workspace.name}`;
+             header.onclick = (e) => {
+                 if (e.target === header || e.target.classList.contains('tree-category-icon')) {
+                     wsEl.classList.toggle('collapsed');
+                 }
+             };
+
+             const itemsContainer = document.createElement('div');
+             itemsContainer.className = 'tree-items';
+
+             renderItems(itemsContainer, workspace.id, items);
+
+             wsEl.appendChild(header);
+             wsEl.appendChild(itemsContainer);
+             workspacesTree.appendChild(wsEl);
+         }
+
+         function renderItems(container, workspaceId, items) {
+             items.forEach(item => {
+                 if (item.type === 'directory') {
+                     const dirEl = document.createElement('div');
+                     dirEl.className = 'tree-category';
+
+                     const displayName = item.title || item.name;
+
+                     const header = document.createElement('div');
+                     header.className = 'tree-category-header';
+                     header.innerHTML = `<span class="tree-category-icon">▼</span>📁 ${displayName}`;
+                     header.title = item.name;
+                     header.onclick = (e) => {
+                         if (e.target === header || e.target.classList.contains('tree-category-icon')) {
+                             dirEl.classList.toggle('collapsed');
+                         }
+                     };
+
+                     const childContainer = document.createElement('div');
+                     childContainer.className = 'tree-items';
+
+                     if (item.children && item.children.length > 0) {
+                         renderItems(childContainer, workspaceId, item.children);
+                     }
+
+                     dirEl.appendChild(header);
+                     dirEl.appendChild(childContainer);
+                     container.appendChild(dirEl);
+                 } else {
+                     const fileEl = document.createElement('div');
+                     fileEl.className = 'tree-item';
+                     const displayName = item.title || item.name;
+                     fileEl.innerHTML = `<span class="tree-item-icon">📄</span>${displayName}`;
+                     fileEl.title = item.name;
+                     fileEl.onclick = () => selectFile(workspaceId, item.path, fileEl);
+                     container.appendChild(fileEl);
+                 }
+             });
+         }
+
+         async function selectFile(workspaceId, filepath, element) {
+             document.querySelectorAll('.tree-item.selected').forEach(el => el.classList.remove('selected'));
+             element.classList.add('selected');
+
+             currentWorkspace = workspaceId;
+             currentFile = filepath;
+
+             try {
+                 const content = await connection.eval(`workspace::load "${workspaceId}" "${filepath}"`);
+                 editor.setValue(content);
+
+                 updateInfoPanel(filepath, content);
+
+                 const fileInfoJson = await connection.eval(`workspace::activate "${workspaceId}" "${filepath}"`);
+                 const fileInfo = JSON.parse(fileInfoJson);
+
+                 currentSetups = fileInfo.setups || {};
+                 currentAdjusters = fileInfo.adjusters || {};
+                 currentExports = fileInfo.exports || {};
+                 activeSetup = fileInfo.active_setup || null;
+
+                 renderControls();
+
+                 // Auto-run first setup
+                 requestAnimationFrame(() => {
+                     const setupNames = Object.keys(currentSetups);
+                     const exportNames = Object.keys(currentExports);
+
+                     if (setupNames.length > 0) {
+                         runSetup(setupNames[0]);
+                     } else if (exportNames.length > 0) {
+                         runLegacyProc(exportNames[0]);
+                     }
+                 });
+             } catch (e) {
+                 console.error('Failed to load file:', e);
+                 addLogEntry('error', `Failed to load ${filepath}: ${e.message}`);
+             }
+         }
+
+         // ============================================================
+         // Controls Rendering - NEW VERSION
+         // ============================================================
+         function renderControls() {
+             const setupNames = Object.keys(currentSetups);
+             const exportNames = Object.keys(currentExports);
+
+             if (setupNames.length === 0 && exportNames.length === 0) {
+                 controlsContent.innerHTML = '<div class="controls-placeholder">No exported controls</div>';
+                 return;
+             }
+
+             let html = '';
+
+             // New setup/adjuster system
+             if (setupNames.length > 0) {
+                 // Setup selector dropdown (if multiple setups)
+                 if (setupNames.length > 1) {
+                     html += '<div class="setup-selector">';
+                     html += '<label>Configuration</label>';
+                     html += '<select id="setupSelector" onchange="switchSetup(this.value)">';
+                     for (const name of setupNames) {
+                         const setup = currentSetups[name];
+                         const label = setup.label || name;
+                         const selected = name === activeSetup ? 'selected' : '';
+                         html += `<option value="${name}" ${selected}>${label}</option>`;
+                     }
+                     html += '</select>';
+                     html += '</div>';
+                 }
+
+                 // Render active setup controls
+                 const setupName = (activeSetup && currentSetups[activeSetup]) ? activeSetup : setupNames[0];
+                 html += renderSetupControls(setupName);
+             }
+
+             // Legacy exports (if any and no setups)
+             if (setupNames.length === 0 && exportNames.length > 0) {
+                 for (const procName of exportNames) {
+                     html += renderLegacyProcControls(procName);
+                 }
+             }
+
+             controlsContent.innerHTML = html;
+
+             // Initialize any color pickers
+             initColorPickers();
+         }
+
+         function renderSetupControls(setupName) {
+             const setup = currentSetups[setupName];
+             if (!setup) return '';
+
+             let html = '';
+
+             // Setup section with parameters
+             html += '<div class="setup-section">';
+             html += '<div class="setup-section-header">';
+             html += `<span class="setup-section-title">${setup.label || setup.proc}</span>`;
+             html += `<button class="setup-run-btn" onclick="runSetup('${setupName}')">▶ Run</button>`;
+             html += '</div>';
+
+             // Setup parameters
+             if (setup.params && setup.params.length > 0) {
+                 for (const param of setup.params) {
+                     html += renderParamControl('setup', setupName, param);
+                 }
+             }
+             html += '</div>';
+
+             // Adjusters section - group by adjuster name/label
+             const setupAdjusters = setup.adjusters || [];
+             if (setupAdjusters.length > 0) {
+                 // Group adjusters by a logical category (for now, one group per adjuster)
+                 const adjGroups = groupAdjusters(setupAdjusters);
+
+                 for (const group of adjGroups) {
+                     html += renderAdjusterGroup(group);
+                 }
+             }
+
+             return html;
+         }
+
+         // Group adjusters logically - could be extended to group by target, etc.
+         function groupAdjusters(adjusterNames) {
+             const groups = [];
+
+             for (const adjName of adjusterNames) {
+                 const adj = currentAdjusters[adjName];
+                 if (!adj) continue;
+
+                 // Check if this is a color adjuster (has r, g, b params)
+                 const isColor = isColorAdjuster(adj);
+
+                 groups.push({
+                     name: adjName,
+                     label: adj.label || adjName,
+                     target: adj.target,
+                     adjuster: adj,
+                     isColor: isColor
+                 });
+             }
+
+             return groups;
+         }
+
+         function isColorAdjuster(adj) {
+             // Only use color picker if explicitly requested via -colorpicker flag
+             return adj.colorpicker === true || adj.colorpicker === 1;
+         }
+
+         function renderAdjusterGroup(group) {
+             const adj = group.adjuster;
+             let html = '<div class="adjuster-group">';
+
+             // Header with label and target badge
+             html += '<div class="adjuster-group-header">';
+             html += `<span>${group.label}</span>`;
+             if (group.target) {
+                 html += `<span class="target-badge">${group.target}</span>`;
+             }
+             html += '</div>';
+
+             // Render as color picker or individual params
+             if (group.isColor) {
+                 // For color adjusters, render non-color params first, then color picker
+                 const colorParamNames = ['r', 'g', 'b', 'a'];
+                 for (const param of (adj.params || [])) {
+                     if (!colorParamNames.includes(param.name.toLowerCase())) {
+                         html += renderParamControl('adjuster', group.name, param);
+                     }
+                 }
+                 html += renderColorPicker(group.name, adj);
+             } else {
+                 // Regular params
+                 for (const param of (adj.params || [])) {
+                     html += renderParamControl('adjuster', group.name, param);
+                 }
+             }
+
+             html += '</div>';
+             return html;
+         }
+
+         function renderColorPicker(adjusterName, adj) {
+             // Extract RGB values from params
+             const rParam = adj.params.find(p => p.name.toLowerCase() === 'r');
+             const gParam = adj.params.find(p => p.name.toLowerCase() === 'g');
+             const bParam = adj.params.find(p => p.name.toLowerCase() === 'b');
+             const aParam = adj.params.find(p => p.name.toLowerCase() === 'a');
+
+             const r = rParam ? (rParam.default || 1) : 1;
+             const g = gParam ? (gParam.default || 1) : 1;
+             const b = bParam ? (bParam.default || 1) : 1;
+
+             // Convert 0-1 to hex
+             const hexColor = rgbToHex(r, g, b);
+
+             const inputId = `colorpicker_${adjusterName}`.replace(/[^a-zA-Z0-9_]/g, '_');
+
+             let html = '<div class="color-picker-control">';
+             html += '<div class="color-picker-row">';
+             html += `<input type="color" class="color-picker-input" id="${inputId}"
+                            value="${hexColor}"
                             data-adjuster="${adjusterName}"
                             data-has-alpha="${aParam ? 'true' : 'false'}"
                             onchange="onColorPickerChange(this)">`;
-            html += `<input type="text" class="color-picker-hex" id="${inputId}_hex" value="${hexColor}" 
+             html += `<input type="text" class="color-picker-hex" id="${inputId}_hex" value="${hexColor}"
                             onchange="onColorHexChange(this, '${inputId}')">`;
-            html += `<span class="color-picker-values" id="${inputId}_rgb">${r.toFixed(2)}, ${g.toFixed(2)}, ${b.toFixed(2)}</span>`;
-            html += '</div>';
-            
-            // Alpha slider if present
-            if (aParam) {
-                const a = aParam.default !== undefined ? aParam.default : 1;
-                html += `<div class="control-param" style="margin-top:6px;">`;
-                html += `<label>Alpha</label>`;
-                html += `<div class="control-param-row">`;
-                html += `<input type="range" id="${inputId}_alpha" 
+             html += `<span class="color-picker-values" id="${inputId}_rgb">${r.toFixed(2)}, ${g.toFixed(2)}, ${b.toFixed(2)}</span>`;
+             html += '</div>';
+
+             // Alpha slider if present
+             if (aParam) {
+                 const a = aParam.default !== undefined ? aParam.default : 1;
+                 html += `<div class="control-param" style="margin-top:6px;">`;
+                 html += `<label>Alpha</label>`;
+                 html += `<div class="control-param-row">`;
+                 html += `<input type="range" id="${inputId}_alpha"
                                 min="0" max="1" step="0.01" value="${a}"
                                 data-adjuster="${adjusterName}"
                                 oninput="onColorAlphaChange(this, '${inputId}')">`;
-                html += `<span class="control-param-value" id="${inputId}_alpha_val">${a.toFixed(2)}</span>`;
-                html += `</div></div>`;
-            }
-            
-            html += '</div>';
-            
-            // Store hidden inputs for the actual values
-            html += `<input type="hidden" id="${inputId}_r" value="${r}" data-control-type="adjuster" data-parent="${adjusterName}" data-param="r">`;
-            html += `<input type="hidden" id="${inputId}_g" value="${g}" data-control-type="adjuster" data-parent="${adjusterName}" data-param="g">`;
-            html += `<input type="hidden" id="${inputId}_b" value="${b}" data-control-type="adjuster" data-parent="${adjusterName}" data-param="b">`;
-            if (aParam) {
-                html += `<input type="hidden" id="${inputId}_a" value="${aParam.default || 1}" data-control-type="adjuster" data-parent="${adjusterName}" data-param="a">`;
-            }
-            
-            return html;
-        }
-        
-        function rgbToHex(r, g, b) {
-            const toHex = (v) => {
-                const h = Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16);
-                return h.length === 1 ? '0' + h : h;
-            };
-            return '#' + toHex(r) + toHex(g) + toHex(b);
-        }
-        
-        function hexToRgb(hex) {
-            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-            if (!result) return { r: 1, g: 1, b: 1 };
-            return {
-                r: parseInt(result[1], 16) / 255,
-                g: parseInt(result[2], 16) / 255,
-                b: parseInt(result[3], 16) / 255
-            };
-        }
-        
-        function onColorPickerChange(el) {
-            const inputId = el.id;
-            const hex = el.value;
-            const rgb = hexToRgb(hex);
-            
-            // Update displays
-            document.getElementById(inputId + '_hex').value = hex;
-            document.getElementById(inputId + '_rgb').textContent = 
-                `${rgb.r.toFixed(2)}, ${rgb.g.toFixed(2)}, ${rgb.b.toFixed(2)}`;
-            
-            // Update hidden inputs
-            document.getElementById(inputId + '_r').value = rgb.r;
-            document.getElementById(inputId + '_g').value = rgb.g;
-            document.getElementById(inputId + '_b').value = rgb.b;
-            
-            // Trigger adjuster if live update
-            if (document.getElementById('liveUpdate').checked) {
-                runAdjuster(el.dataset.adjuster);
-            }
-        }
-        
-        function onColorHexChange(hexInput, pickerId) {
-            let hex = hexInput.value;
-            if (!hex.startsWith('#')) hex = '#' + hex;
-            
-            // Validate hex
-            if (/^#[0-9A-Fa-f]{6}$/.test(hex)) {
-                document.getElementById(pickerId).value = hex;
-                onColorPickerChange(document.getElementById(pickerId));
-            }
-        }
-        
-        function onColorAlphaChange(el, pickerId) {
-            const val = parseFloat(el.value);
-            document.getElementById(pickerId + '_alpha_val').textContent = val.toFixed(2);
-            document.getElementById(pickerId + '_a').value = val;
-            
-            if (document.getElementById('liveUpdate').checked) {
-                runAdjuster(el.dataset.adjuster);
-            }
-        }
-        
-        function initColorPickers() {
-            // Any post-render initialization for color pickers
-        }
+                 html += `<span class="control-param-value" id="${inputId}_alpha_val">${a.toFixed(2)}</span>`;
+                 html += `</div></div>`;
+             }
 
-        function renderLegacyProcControls(procName) {
-            const info = currentExports[procName];
-            if (!info) return '';
-            
-            let html = `<div class="control-group" data-proc="${procName}">`;
-            html += `<div class="control-proc-name">${procName}</div>`;
-            
-            if (info.params && info.params.length > 0) {
-                for (const param of info.params) {
-                    html += renderParamControl('legacy', procName, param);
-                }
-            }
-            
-            html += `
+             html += '</div>';
+
+             // Store hidden inputs for the actual values
+             html += `<input type="hidden" id="${inputId}_r" value="${r}" data-control-type="adjuster" data-parent="${adjusterName}" data-param="r">`;
+             html += `<input type="hidden" id="${inputId}_g" value="${g}" data-control-type="adjuster" data-parent="${adjusterName}" data-param="g">`;
+             html += `<input type="hidden" id="${inputId}_b" value="${b}" data-control-type="adjuster" data-parent="${adjusterName}" data-param="b">`;
+             if (aParam) {
+                 html += `<input type="hidden" id="${inputId}_a" value="${aParam.default || 1}" data-control-type="adjuster" data-parent="${adjusterName}" data-param="a">`;
+             }
+
+             return html;
+         }
+
+         function rgbToHex(r, g, b) {
+             const toHex = (v) => {
+                 const h = Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16);
+                 return h.length === 1 ? '0' + h : h;
+             };
+             return '#' + toHex(r) + toHex(g) + toHex(b);
+         }
+
+         function hexToRgb(hex) {
+             const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+             if (!result) return { r: 1, g: 1, b: 1 };
+             return {
+                 r: parseInt(result[1], 16) / 255,
+                 g: parseInt(result[2], 16) / 255,
+                 b: parseInt(result[3], 16) / 255
+             };
+         }
+
+         function onColorPickerChange(el) {
+             const inputId = el.id;
+             const hex = el.value;
+             const rgb = hexToRgb(hex);
+
+             // Update displays
+             document.getElementById(inputId + '_hex').value = hex;
+             document.getElementById(inputId + '_rgb').textContent =
+                 `${rgb.r.toFixed(2)}, ${rgb.g.toFixed(2)}, ${rgb.b.toFixed(2)}`;
+
+             // Update hidden inputs
+             document.getElementById(inputId + '_r').value = rgb.r;
+             document.getElementById(inputId + '_g').value = rgb.g;
+             document.getElementById(inputId + '_b').value = rgb.b;
+
+             // Trigger adjuster if live update
+             if (document.getElementById('liveUpdate').checked) {
+                 runAdjuster(el.dataset.adjuster);
+             }
+         }
+
+         function onColorHexChange(hexInput, pickerId) {
+             let hex = hexInput.value;
+             if (!hex.startsWith('#')) hex = '#' + hex;
+
+             // Validate hex
+             if (/^#[0-9A-Fa-f]{6}$/.test(hex)) {
+                 document.getElementById(pickerId).value = hex;
+                 onColorPickerChange(document.getElementById(pickerId));
+             }
+         }
+
+         function onColorAlphaChange(el, pickerId) {
+             const val = parseFloat(el.value);
+             document.getElementById(pickerId + '_alpha_val').textContent = val.toFixed(2);
+             document.getElementById(pickerId + '_a').value = val;
+
+             if (document.getElementById('liveUpdate').checked) {
+                 runAdjuster(el.dataset.adjuster);
+             }
+         }
+
+         function initColorPickers() {
+             // Any post-render initialization for color pickers
+         }
+
+         function renderLegacyProcControls(procName) {
+             const info = currentExports[procName];
+             if (!info) return '';
+
+             let html = `<div class="control-group" data-proc="${procName}">`;
+             html += `<div class="control-proc-name">${procName}</div>`;
+
+             if (info.params && info.params.length > 0) {
+                 for (const param of info.params) {
+                     html += renderParamControl('legacy', procName, param);
+                 }
+             }
+
+             html += `
                 <div class="control-actions">
                     <button class="primary" onclick="runLegacyProc('${procName}')">▶ Run</button>
                 </div>
-            `;
-            html += '</div>';
-            
-            return html;
-        }
+             `;
+             html += '</div>';
 
-        function renderParamControl(type, parentName, param) {
-            const inputId = `param_${type}_${parentName}_${param.name}`.replace(/[^a-zA-Z0-9_]/g, '_');
-            const defaultVal = param.default !== undefined ? param.default : (param.min !== undefined ? param.min : '');
-            const label = param.label || param.name;
-            const unit = param.unit || '';
-            
-            let html = `<div class="control-param" data-param="${param.name}">`;
-            html += `<label>${label}</label>`;
-            html += '<div class="control-param-row">';
-            
-            switch (param.type) {
-                case 'int':
-                case 'float':
-                    const step = param.step || (param.type === 'int' ? 1 : 0.1);
-                    const min = param.min !== undefined ? param.min : 0;
-                    const max = param.max !== undefined ? param.max : 100;
-                    html += `
-                        <input type="range" 
-                               id="${inputId}" 
+             return html;
+         }
+
+         function renderParamControl(type, parentName, param) {
+             const inputId = `param_${type}_${parentName}_${param.name}`.replace(/[^a-zA-Z0-9_]/g, '_');
+             const defaultVal = param.default !== undefined ? param.default : (param.min !== undefined ? param.min : '');
+             const label = param.label || param.name;
+             const unit = param.unit || '';
+
+             let html = `<div class="control-param" data-param="${param.name}">`;
+             html += `<label>${label}</label>`;
+             html += '<div class="control-param-row">';
+
+             switch (param.type) {
+                 case 'int':
+                 case 'float':
+                     const step = param.step || (param.type === 'int' ? 1 : 0.1);
+                     const min = param.min !== undefined ? param.min : 0;
+                     const max = param.max !== undefined ? param.max : 100;
+                     html += `
+                        <input type="range"
+                               id="${inputId}"
                                data-control-type="${type}"
                                data-parent="${parentName}"
                                data-param="${param.name}"
                                data-paramtype="${param.type}"
-                               min="${min}" 
-                               max="${max}" 
-                               step="${step}" 
+                               min="${min}"
+                               max="${max}"
+                               step="${step}"
                                value="${defaultVal}"
                                oninput="onParamChange(this)">
                         <span class="control-param-value" id="${inputId}_val">${formatValue(defaultVal, param.type)}</span>
                         ${unit ? `<span class="control-param-unit">${unit}</span>` : ''}
-                    `;
-                    break;
-                    
-                case 'bool':
-                    html += `
+			`;
+                     break;
+
+                 case 'bool':
+                     html += `
                         <div class="toggle-row" style="width:100%">
                             <span class="toggle-label">${defaultVal ? 'On' : 'Off'}</span>
-                            <div class="toggle-switch ${defaultVal ? 'active' : ''}" 
+                            <div class="toggle-switch ${defaultVal ? 'active' : ''}"
                                  id="${inputId}"
                                  data-control-type="${type}"
                                  data-parent="${parentName}"
@@ -1948,12 +1955,12 @@
                                  data-value="${defaultVal ? '1' : '0'}"
                                  onclick="onToggleChange(this)"></div>
                         </div>
-                    `;
-                    break;
-                    
-                case 'string':
-                    html += `
-                        <input type="text" 
+                     `;
+                     break;
+
+                 case 'string':
+                     html += `
+                        <input type="text"
                                id="${inputId}"
                                data-control-type="${type}"
                                data-parent="${parentName}"
@@ -1961,26 +1968,26 @@
                                data-paramtype="string"
                                value="${defaultVal}"
                                onkeydown="if(event.key==='Enter'){onParamChange(this);event.preventDefault();}">
-                    `;
-                    break;
-                    
-                case 'choice':
-                    const choices = param.choices || [];
-                    html += `<select id="${inputId}" 
+                     `;
+                     break;
+
+                 case 'choice':
+                     const choices = param.choices || [];
+                     html += `<select id="${inputId}"
                                      data-control-type="${type}"
                                      data-parent="${parentName}"
                                      data-param="${param.name}"
                                      data-paramtype="choice"
                                      onchange="onParamChange(this)">`;
-                    for (const choice of choices) {
-                        const selected = choice === defaultVal ? 'selected' : '';
-                        html += `<option value="${choice}" ${selected}>${choice}</option>`;
-                    }
-                    html += '</select>';
-                    break;
-                    
-                default:
-                    html += `<input type="text" 
+                     for (const choice of choices) {
+                         const selected = choice === defaultVal ? 'selected' : '';
+                         html += `<option value="${choice}" ${selected}>${choice}</option>`;
+                     }
+                     html += '</select>';
+                     break;
+
+                 default:
+                     html += `<input type="text"
                                     id="${inputId}"
                                     data-control-type="${type}"
                                     data-parent="${parentName}"
@@ -1988,634 +1995,634 @@
                                     data-paramtype="${param.type}"
                                     value="${defaultVal}"
                                     onchange="onParamChange(this)">`;
-            }
-            
-            html += '</div></div>';
-            return html;
-        }
-        
-        function formatValue(val, type) {
-            if (type === 'float') {
-                const num = parseFloat(val);
-                if (Math.abs(num) >= 100) return num.toFixed(1);
-                if (Math.abs(num) >= 10) return num.toFixed(2);
-                return num.toFixed(3);
-            }
-            return val;
-        }
+             }
 
-        // ============================================================
-        // Parameter Change Handling
-        // ============================================================
-        function onParamChange(el) {
-            // Update displayed value for sliders
-            const valSpan = document.getElementById(el.id + '_val');
-            if (valSpan) {
-                valSpan.textContent = formatValue(el.value, el.dataset.paramtype);
-            }
-            
-            // Live update if enabled
-            if (document.getElementById('liveUpdate').checked) {
-                const type = el.dataset.controlType;
-                const parentName = el.dataset.parent;
-                
-                if (type === 'setup') {
-                    runSetup(parentName);
-                } else if (type === 'adjuster') {
-                    runAdjuster(parentName);
-                } else if (type === 'legacy') {
-                    runLegacyProc(parentName);
-                }
-            }
-        }
-        
-        function onToggleChange(el) {
-            const isActive = el.classList.toggle('active');
-            el.dataset.value = isActive ? '1' : '0';
-            
-            // Update label
-            const label = el.parentElement.querySelector('.toggle-label');
-            if (label) label.textContent = isActive ? 'On' : 'Off';
-            
-            // Live update if enabled
-            if (document.getElementById('liveUpdate').checked) {
-                const type = el.dataset.controlType;
-                const parentName = el.dataset.parent;
-                
-                if (type === 'setup') {
-                    runSetup(parentName);
-                } else if (type === 'adjuster') {
-                    runAdjuster(parentName);
-                } else if (type === 'legacy') {
-                    runLegacyProc(parentName);
-                }
-            }
-        }
+             html += '</div></div>';
+             return html;
+         }
 
-        // ============================================================
-        // Setup/Adjuster/Legacy Execution
-        // ============================================================
-        function switchSetup(setupName) {
-            activeSetup = setupName;
-            renderControls();
-            runSetup(setupName);
-        }
+         function formatValue(val, type) {
+             if (type === 'float') {
+                 const num = parseFloat(val);
+                 if (Math.abs(num) >= 100) return num.toFixed(1);
+                 if (Math.abs(num) >= 10) return num.toFixed(2);
+                 return num.toFixed(3);
+             }
+             return val;
+         }
 
-        function runSetup(setupName) {
-            const setup = currentSetups[setupName];
-            if (!setup) return;
-            
-            const args = collectParamValues('setup', setupName, setup.params);
-            const cmd = `workspace::invoke_setup ${setupName} ${args.join(' ')}`;
-            
-            connection.eval(cmd).then(async result => {
-                activeSetup = setupName;
-                if (result) {
-                    addLogEntry('', result);
-                }
-                
-                // Re-fetch file info to get any auto-generated adjusters
-                try {
-                    const fileInfoJson = await connection.eval(`workspace::get_file_info "${currentFile}"`);
-                    const fileInfo = JSON.parse(fileInfoJson);
-                    
-                    const newAdjusters = fileInfo.adjusters || {};
-                    const oldKeys = Object.keys(currentAdjusters).sort().join(',');
-                    const newKeys = Object.keys(newAdjusters).sort().join(',');
-                    
-                    if (oldKeys !== newKeys) {
-                        currentAdjusters = newAdjusters;
-                        renderControls();
-                        addLogEntry('info', 'Controls updated with auto-generated adjusters');
-                    }
-                } catch (e) {
-                    console.log('Could not refresh adjusters:', e);
-                }
-                
-                // Fetch current adjuster values and sync UI
-                try {
-                    const valuesJson = await connection.eval('workspace::get_active_adjuster_values');
-                    const values = JSON.parse(valuesJson);
-                    syncAdjusterUI(values);
-                } catch (e) {
-                    console.log('Could not sync adjuster values:', e);
-                }
-            }).catch(e => {
-                addLogEntry('error', e.message);
-            });
-        }
-        
-        // Sync UI controls with actual object values
-        function syncAdjusterUI(values) {
-            for (const [adjName, paramValues] of Object.entries(values)) {
-                const adj = currentAdjusters[adjName];
-                if (!adj) continue;
-                
-                // Check if this is a color adjuster
-                if (isColorAdjuster(adj)) {
-                    const colorPickerId = `colorpicker_${adjName}`.replace(/[^a-zA-Z0-9_]/g, '_');
-                    const colorPicker = document.getElementById(colorPickerId);
-                    
-                    if (colorPicker && paramValues.r !== undefined) {
-                        const r = paramValues.r;
-                        const g = paramValues.g;
-                        const b = paramValues.b;
-                        
-                        // Update color picker
-                        const hex = rgbToHex(r, g, b);
-                        colorPicker.value = hex;
-                        
-                        // Update displays
-                        const hexInput = document.getElementById(colorPickerId + '_hex');
-                        const rgbDisplay = document.getElementById(colorPickerId + '_rgb');
-                        if (hexInput) hexInput.value = hex;
-                        if (rgbDisplay) rgbDisplay.textContent = `${r.toFixed(2)}, ${g.toFixed(2)}, ${b.toFixed(2)}`;
-                        
-                        // Update hidden inputs
-                        const rInput = document.getElementById(colorPickerId + '_r');
-                        const gInput = document.getElementById(colorPickerId + '_g');
-                        const bInput = document.getElementById(colorPickerId + '_b');
-                        if (rInput) rInput.value = r;
-                        if (gInput) gInput.value = g;
-                        if (bInput) bInput.value = b;
-                        
-                        // Alpha if present
-                        if (paramValues.a !== undefined) {
-                            const aInput = document.getElementById(colorPickerId + '_a');
-                            const aSlider = document.getElementById(colorPickerId + '_alpha');
-                            const aVal = document.getElementById(colorPickerId + '_alpha_val');
-                            if (aInput) aInput.value = paramValues.a;
-                            if (aSlider) aSlider.value = paramValues.a;
-                            if (aVal) aVal.textContent = paramValues.a.toFixed(2);
-                        }
-                    }
-                } else {
-                    // Regular params - update sliders/inputs
-                    for (const [paramName, paramVal] of Object.entries(paramValues)) {
-                        const inputId = `param_adjuster_${adjName}_${paramName}`.replace(/[^a-zA-Z0-9_]/g, '_');
-                        const el = document.getElementById(inputId);
-                        if (el) {
-                            if (el.type === 'range' || el.type === 'number' || el.type === 'text') {
-                                el.value = paramVal;
-                                // Update value display
-                                const valSpan = document.getElementById(inputId + '_val');
-                                if (valSpan) {
-                                    valSpan.textContent = formatValue(paramVal, el.dataset.paramtype);
-                                }
-                            } else if (el.classList.contains('toggle-switch')) {
-                                const isOn = paramVal ? true : false;
-                                el.classList.toggle('active', isOn);
-                                el.dataset.value = isOn ? '1' : '0';
-                                const label = el.parentElement.querySelector('.toggle-label');
-                                if (label) label.textContent = isOn ? 'On' : 'Off';
-                            }
-                        }
-                    }
-                }
-            }
-        }
+         // ============================================================
+         // Parameter Change Handling
+         // ============================================================
+         function onParamChange(el) {
+             // Update displayed value for sliders
+             const valSpan = document.getElementById(el.id + '_val');
+             if (valSpan) {
+                 valSpan.textContent = formatValue(el.value, el.dataset.paramtype);
+             }
 
-        function runAdjuster(adjusterName) {
-            const adj = currentAdjusters[adjusterName];
-            if (!adj) return;
-            
-            const args = collectAdjusterValues(adjusterName, adj);
-            const cmd = `workspace::invoke_adjuster ${adjusterName} ${args.join(' ')}`;
-            
-            connection.eval(cmd).then(result => {
-                if (result) {
-                    addLogEntry('', result);
-                }
-            }).catch(e => {
-                addLogEntry('error', e.message);
-            });
-        }
-        
-        function collectAdjusterValues(adjusterName, adj) {
-            const args = [];
-            
-            // Check if this is a color adjuster with a color picker
-            const colorPickerId = `colorpicker_${adjusterName}`.replace(/[^a-zA-Z0-9_]/g, '_');
-            const colorPicker = document.getElementById(colorPickerId);
-            
-            if (colorPicker && isColorAdjuster(adj)) {
-                // Get values from hidden inputs
-                const r = document.getElementById(colorPickerId + '_r');
-                const g = document.getElementById(colorPickerId + '_g');
-                const b = document.getElementById(colorPickerId + '_b');
-                const a = document.getElementById(colorPickerId + '_a');
-                
-                if (r) args.push(r.value);
-                if (g) args.push(g.value);
-                if (b) args.push(b.value);
-                if (a) args.push(a.value);
-            } else {
-                // Standard param collection
-                for (const param of (adj.params || [])) {
-                    const inputId = `param_adjuster_${adjusterName}_${param.name}`.replace(/[^a-zA-Z0-9_]/g, '_');
-                    const el = document.getElementById(inputId);
-                    if (!el) continue;
-                    
-                    let value;
-                    switch (param.type) {
-                        case 'bool':
-                            // Handle toggle switches
-                            value = el.dataset.value || (el.checked ? '1' : '0');
-                            break;
-                        case 'string':
-                            value = `"${el.value.replace(/"/g, '\\"')}"`;
-                            break;
-                        case 'choice':
-                            value = `"${el.value}"`;
-                            break;
-                        default:
-                            value = el.value;
-                    }
-                    args.push(value);
-                }
-            }
-            
-            return args;
-        }
+             // Live update if enabled
+             if (document.getElementById('liveUpdate').checked) {
+                 const type = el.dataset.controlType;
+                 const parentName = el.dataset.parent;
 
-        function runLegacyProc(procName) {
-            const info = currentExports[procName];
-            if (!info) return;
-            
-            const args = collectParamValues('legacy', procName, info.params);
-            const cmd = `${procName} ${args.join(' ')}`;
-            
-            connection.eval(cmd).then(result => {
-                if (result) {
-                    addLogEntry('', result);
-                }
-            }).catch(e => {
-                addLogEntry('error', e.message);
-            });
-        }
+                 if (type === 'setup') {
+                     runSetup(parentName);
+                 } else if (type === 'adjuster') {
+                     runAdjuster(parentName);
+                 } else if (type === 'legacy') {
+                     runLegacyProc(parentName);
+                 }
+             }
+         }
 
-        function collectParamValues(type, parentName, params) {
-            const args = [];
-            
-            for (const param of (params || [])) {
-                const inputId = `param_${type}_${parentName}_${param.name}`.replace(/[^a-zA-Z0-9_]/g, '_');
-                const el = document.getElementById(inputId);
-                if (!el) continue;
-                
-                let value;
-                switch (param.type) {
-                    case 'bool':
-                        // Handle toggle switches
-                        value = el.dataset.value || (el.checked ? '1' : '0');
-                        break;
-                    case 'string':
-                        value = `"${el.value.replace(/"/g, '\\"')}"`;
-                        break;
-                    case 'choice':
-                        value = `"${el.value}"`;
-                        break;
-                    default:
-                        value = el.value;
-                }
-                args.push(value);
-            }
-            
-            return args;
-        }
+         function onToggleChange(el) {
+             const isActive = el.classList.toggle('active');
+             el.dataset.value = isActive ? '1' : '0';
 
-        function refreshWorkspaces() {
-            searchInput.value = '';
-            currentWorkspace = null;
-            currentFile = null;
-            currentSetups = {};
-            currentAdjusters = {};
-            currentExports = {};
-            activeSetup = null;
-            
-            controlsContent.innerHTML = '<div class="controls-placeholder">Select a file to see controls</div>';
-            loadWorkspaces();
-        }
+             // Update label
+             const label = el.parentElement.querySelector('.toggle-label');
+             if (label) label.textContent = isActive ? 'On' : 'Off';
 
-        // ============================================================
-        // Search
-        // ============================================================
-        function onSearchInput(query) {
-            const q = query.toLowerCase().trim();
-            const items = workspacesTree.querySelectorAll('.tree-item');
-            const categories = workspacesTree.querySelectorAll('.tree-category');
-            
-            if (q === '') {
-                items.forEach(el => el.classList.remove('hidden'));
-                categories.forEach(el => el.classList.remove('collapsed'));
-                return;
-            }
-            
-            items.forEach(el => {
-                const name = el.textContent.toLowerCase();
-                if (name.includes(q)) {
-                    el.classList.remove('hidden');
-                } else {
-                    el.classList.add('hidden');
-                }
-            });
-            
-            categories.forEach(cat => {
-                cat.classList.remove('collapsed');
-            });
-        }
+             // Live update if enabled
+             if (document.getElementById('liveUpdate').checked) {
+                 const type = el.dataset.controlType;
+                 const parentName = el.dataset.parent;
 
-        // ============================================================
-        // File Info
-        // ============================================================
-        function parseFileInfo(content) {
-            const lines = content.split('\n');
-            let description = '';
-            let tags = [];
-            let seeAlso = [];
-            
-            for (const line of lines) {
-                if (line.startsWith('#')) {
-                    const text = line.replace(/^#\s*/, '');
-                    if (text.toLowerCase().startsWith('demonstrates:')) {
-                        tags = text.substring(13).split(',').map(s => s.trim());
-                    } else if (text.toLowerCase().startsWith('see also:')) {
-                        seeAlso = text.substring(9).split(',').map(s => s.trim());
-                    } else if (!text.startsWith('examples/') && text.length > 0) {
-                        if (description) description += ' ';
-                        description += text;
-                    }
-                } else if (line.trim() && !line.startsWith('#')) {
-                    break;
-                }
-            }
-            
-            return { description, tags, seeAlso };
-        }
+                 if (type === 'setup') {
+                     runSetup(parentName);
+                 } else if (type === 'adjuster') {
+                     runAdjuster(parentName);
+                 } else if (type === 'legacy') {
+                     runLegacyProc(parentName);
+                 }
+             }
+         }
 
-        function updateInfoPanel(filepath, content) {
-            const filename = filepath.split('/').pop();
-            const info = parseFileInfo(content);
-            currentFileInfo = info;
-            
-            let html = `<div class="info-filename">${filename}</div>`;
-            
-            if (info.description) {
-                html += `<div class="info-description">${info.description}</div>`;
-            }
-            
-            if (info.tags && info.tags.length > 0) {
-                html += '<div class="info-tags">';
-                for (const tag of info.tags) {
-                    html += `<span class="info-tag">${tag}</span>`;
-                }
-                html += '</div>';
-            }
-            
-            infoContent.innerHTML = html;
-        }
+         // ============================================================
+         // Setup/Adjuster/Legacy Execution
+         // ============================================================
+         function switchSetup(setupName) {
+             activeSetup = setupName;
+             renderControls();
+             runSetup(setupName);
+         }
 
-        // ============================================================
-        // Connection Status
-        // ============================================================
-        function updateConnectionStatus(connected) {
-            if (connected) {
-                statusIndicator.classList.add('connected');
-                statusDot.classList.add('connected');
-                connectionStatus.textContent = 'Connected';
-                const cst = document.getElementById('connectionStatusText');
-                if (cst) cst.textContent = 'Connected';
-            } else {
-                statusIndicator.classList.remove('connected');
-                statusDot.classList.remove('connected');
-                connectionStatus.textContent = 'Disconnected';
-                const cst = document.getElementById('connectionStatusText');
-                if (cst) cst.textContent = 'Disconnected';
-            }
-        }
+         function runSetup(setupName) {
+             const setup = currentSetups[setupName];
+             if (!setup) return;
 
-        // ============================================================
-        // Log Output
-        // ============================================================
-        function addLogEntry(level, message) {
-            const entry = document.createElement('div');
-            entry.className = `log-entry ${level || ''}`;
-            entry.textContent = message;
-            logOutput.appendChild(entry);
-            logOutput.scrollTop = logOutput.scrollHeight;
-        }
+             const args = collectParamValues('setup', setupName, setup.params);
+             const cmd = `workspace::invoke_setup ${setupName} ${args.join(' ')}`;
 
-        function clearLog() {
-            logOutput.innerHTML = '';
-        }
+             connection.eval(cmd).then(async result => {
+                 activeSetup = setupName;
+                 if (result) {
+                     addLogEntry('', result);
+                 }
 
-        // ============================================================
-        // Editor Actions
-        // ============================================================
-        async function runCode() {
-            if (!editor || !connection) return;
-            
-            const code = editor.getValue().trim();
-            if (!code) return;
+                 // Re-fetch file info to get any auto-generated adjusters
+                 try {
+                     const fileInfoJson = await connection.eval(`workspace::get_file_info "${currentFile}"`);
+                     const fileInfo = JSON.parse(fileInfoJson);
 
-            try {
-                addLogEntry('info', '>>> Running code...');
-                const result = await connection.eval(code);
-                if (result) {
-                    addLogEntry('', result);
-                }
-            } catch (e) {
-                addLogEntry('error', `Error: ${e.message}`);
-            }
-        }
+                     const newAdjusters = fileInfo.adjusters || {};
+                     const oldKeys = Object.keys(currentAdjusters).sort().join(',');
+                     const newKeys = Object.keys(newAdjusters).sort().join(',');
 
-        async function executeSnippet(code) {
-            if (!code.trim() || !connection) return;
+                     if (oldKeys !== newKeys) {
+                         currentAdjusters = newAdjusters;
+                         renderControls();
+                         addLogEntry('info', 'Controls updated with auto-generated adjusters');
+                     }
+                 } catch (e) {
+                     console.log('Could not refresh adjusters:', e);
+                 }
 
-            const shortCode = code.split('\n')[0] + (code.includes('\n') ? ' ...' : '');
+                 // Fetch current adjuster values and sync UI
+                 try {
+                     const valuesJson = await connection.eval('workspace::get_active_adjuster_values');
+                     const values = JSON.parse(valuesJson);
+                     syncAdjusterUI(values);
+                 } catch (e) {
+                     console.log('Could not sync adjuster values:', e);
+                 }
+             }).catch(e => {
+                 addLogEntry('error', e.message);
+             });
+         }
 
-            try {
-                if (terminal && typeof terminal.showCommand === 'function') {
-                    terminal.showCommand(shortCode);
-                } else {
-                    addLogEntry('info', `>>> ${shortCode}`);
-                }
-                
-                const result = await connection.eval(code);
-                
-                if (result) {
-                    if (terminal && typeof terminal.showResult === 'function') {
-                        terminal.showResult(result);
-                    } else {
-                        addLogEntry('', result);
-                    }
-                }
-            } catch (e) {
-                if (terminal && typeof terminal.showError === 'function') {
-                    terminal.showError(e.message);
-                } else {
-                    addLogEntry('error', `Error: ${e.message}`);
-                }
-            }
-        }
+         // Sync UI controls with actual object values
+         function syncAdjusterUI(values) {
+             for (const [adjName, paramValues] of Object.entries(values)) {
+                 const adj = currentAdjusters[adjName];
+                 if (!adj) continue;
 
-        function clearEditor() {
-            if (editor) editor.setValue('');
-        }
+                 // Check if this is a color adjuster
+                 if (isColorAdjuster(adj)) {
+                     const colorPickerId = `colorpicker_${adjName}`.replace(/[^a-zA-Z0-9_]/g, '_');
+                     const colorPicker = document.getElementById(colorPickerId);
 
-        function formatCode() {
-            if (editor) editor.format();
-        }
+                     if (colorPicker && paramValues.r !== undefined) {
+                         const r = paramValues.r;
+                         const g = paramValues.g;
+                         const b = paramValues.b;
 
-        // ============================================================
-        // Linting
-        // ============================================================
-        function lintCode() {
-            if (!editor) return;
-            
-            try {
-                const results = editor.lint();
-                showLintResults(results);
-            } catch (e) {
-                console.error('Lint error:', e);
-                addLogEntry('error', `Lint error: ${e.message}`);
-            }
-        }
+                         // Update color picker
+                         const hex = rgbToHex(r, g, b);
+                         colorPicker.value = hex;
 
-        function showLintResults(results) {
-            const lintResults = document.getElementById('lintResults');
-            const editorInfo = document.getElementById('editorInfo');
-            
-            let errors = [];
-            let warnings = [];
-            
-            if (results) {
-                if (Array.isArray(results.errors)) errors = results.errors;
-                if (Array.isArray(results.warnings)) warnings = results.warnings;
-            }
-            
-            const allIssues = [...errors, ...warnings];
-            
-            if (allIssues.length === 0) {
-                lintResults.innerHTML = `
-                    <div class="lint-results-header">
-                        <span class="lint-results-title">Lint Results</span>
-                        <button class="lint-results-close" onclick="hideLintResults()">×</button>
-                    </div>
-                    <div class="lint-results-empty">✓ No issues found</div>
-                `;
-                lintResults.classList.add('visible');
-                editorInfo.textContent = 'No issues';
-                editorInfo.className = 'editor-info';
-                
-                setTimeout(() => {
-                    if (lintResults.querySelector('.lint-results-empty')) {
-                        hideLintResults();
-                    }
-                }, 2000);
-                return;
-            }
-            
-            allIssues.sort((a, b) => (a.line || 0) - (b.line || 0));
-            
-            let html = `
-                <div class="lint-results-header">
-                    <span class="lint-results-title">Lint Results (${allIssues.length} issue${allIssues.length > 1 ? 's' : ''})</span>
-                    <button class="lint-results-close" onclick="hideLintResults()">×</button>
-                </div>
-                <div class="lint-results-body">
-            `;
-            
-            allIssues.forEach(issue => {
-                const isError = issue.severity === 'error';
-                const icon = isError ? '✖' : '⚠';
-                const iconClass = isError ? 'error' : 'warning';
-                const line = issue.line || 1;
-                const message = issue.message || 'Unknown issue';
-                html += `
+                         // Update displays
+                         const hexInput = document.getElementById(colorPickerId + '_hex');
+                         const rgbDisplay = document.getElementById(colorPickerId + '_rgb');
+                         if (hexInput) hexInput.value = hex;
+                         if (rgbDisplay) rgbDisplay.textContent = `${r.toFixed(2)}, ${g.toFixed(2)}, ${b.toFixed(2)}`;
+
+                         // Update hidden inputs
+                         const rInput = document.getElementById(colorPickerId + '_r');
+                         const gInput = document.getElementById(colorPickerId + '_g');
+                         const bInput = document.getElementById(colorPickerId + '_b');
+                         if (rInput) rInput.value = r;
+                         if (gInput) gInput.value = g;
+                         if (bInput) bInput.value = b;
+
+                         // Alpha if present
+                         if (paramValues.a !== undefined) {
+                             const aInput = document.getElementById(colorPickerId + '_a');
+                             const aSlider = document.getElementById(colorPickerId + '_alpha');
+                             const aVal = document.getElementById(colorPickerId + '_alpha_val');
+                             if (aInput) aInput.value = paramValues.a;
+                             if (aSlider) aSlider.value = paramValues.a;
+                             if (aVal) aVal.textContent = paramValues.a.toFixed(2);
+                         }
+                     }
+                 } else {
+                     // Regular params - update sliders/inputs
+                     for (const [paramName, paramVal] of Object.entries(paramValues)) {
+                         const inputId = `param_adjuster_${adjName}_${paramName}`.replace(/[^a-zA-Z0-9_]/g, '_');
+                         const el = document.getElementById(inputId);
+                         if (el) {
+                             if (el.type === 'range' || el.type === 'number' || el.type === 'text') {
+                                 el.value = paramVal;
+                                 // Update value display
+                                 const valSpan = document.getElementById(inputId + '_val');
+                                 if (valSpan) {
+                                     valSpan.textContent = formatValue(paramVal, el.dataset.paramtype);
+                                 }
+                             } else if (el.classList.contains('toggle-switch')) {
+                                 const isOn = paramVal ? true : false;
+                                 el.classList.toggle('active', isOn);
+                                 el.dataset.value = isOn ? '1' : '0';
+                                 const label = el.parentElement.querySelector('.toggle-label');
+                                 if (label) label.textContent = isOn ? 'On' : 'Off';
+                             }
+                         }
+                     }
+                 }
+             }
+         }
+
+         function runAdjuster(adjusterName) {
+             const adj = currentAdjusters[adjusterName];
+             if (!adj) return;
+
+             const args = collectAdjusterValues(adjusterName, adj);
+             const cmd = `workspace::invoke_adjuster ${adjusterName} ${args.join(' ')}`;
+
+             connection.eval(cmd).then(result => {
+                 if (result) {
+                     addLogEntry('', result);
+                 }
+             }).catch(e => {
+                 addLogEntry('error', e.message);
+             });
+         }
+
+         function collectAdjusterValues(adjusterName, adj) {
+             const args = [];
+
+             // Check if this is a color adjuster with a color picker
+             const colorPickerId = `colorpicker_${adjusterName}`.replace(/[^a-zA-Z0-9_]/g, '_');
+             const colorPicker = document.getElementById(colorPickerId);
+             const isColor = colorPicker && isColorAdjuster(adj);
+             const colorParamNames = ['r', 'g', 'b', 'a'];
+
+             // Always iterate through all params in order
+             for (const param of (adj.params || [])) {
+                 const paramNameLower = param.name.toLowerCase();
+                 
+                 // For color adjusters, get r/g/b/a from hidden inputs
+                 if (isColor && colorParamNames.includes(paramNameLower)) {
+                     const hiddenInput = document.getElementById(colorPickerId + '_' + paramNameLower);
+                     if (hiddenInput) {
+                         args.push(hiddenInput.value);
+                     }
+                 } else {
+                     // Standard param collection
+                     const inputId = `param_adjuster_${adjusterName}_${param.name}`.replace(/[^a-zA-Z0-9_]/g, '_');
+                     const el = document.getElementById(inputId);
+                     if (!el) continue;
+
+                     let value;
+                     switch (param.type) {
+                         case 'bool':
+                             // Handle toggle switches
+                             value = el.dataset.value || (el.checked ? '1' : '0');
+                             break;
+                         case 'string':
+                             value = `"${el.value.replace(/"/g, '\\"')}"`;
+                             break;
+                         case 'choice':
+                             value = `"${el.value}"`;
+                             break;
+                         default:
+                             value = el.value;
+                     }
+                     args.push(value);
+                 }
+             }
+
+             return args;
+         }
+
+         function runLegacyProc(procName) {
+             const info = currentExports[procName];
+             if (!info) return;
+
+             const args = collectParamValues('legacy', procName, info.params);
+             const cmd = `${procName} ${args.join(' ')}`;
+
+             connection.eval(cmd).then(result => {
+                 if (result) {
+                     addLogEntry('', result);
+                 }
+             }).catch(e => {
+                 addLogEntry('error', e.message);
+             });
+         }
+
+         function collectParamValues(type, parentName, params) {
+             const args = [];
+
+             for (const param of (params || [])) {
+                 const inputId = `param_${type}_${parentName}_${param.name}`.replace(/[^a-zA-Z0-9_]/g, '_');
+                 const el = document.getElementById(inputId);
+                 if (!el) continue;
+
+                 let value;
+                 switch (param.type) {
+                     case 'bool':
+                         // Handle toggle switches
+                         value = el.dataset.value || (el.checked ? '1' : '0');
+                         break;
+                     case 'string':
+                         value = `"${el.value.replace(/"/g, '\\"')}"`;
+                         break;
+                     case 'choice':
+                         value = `"${el.value}"`;
+                         break;
+                     default:
+                         value = el.value;
+                 }
+                 args.push(value);
+             }
+
+             return args;
+         }
+
+         function refreshWorkspaces() {
+             searchInput.value = '';
+             currentWorkspace = null;
+             currentFile = null;
+             currentSetups = {};
+             currentAdjusters = {};
+             currentExports = {};
+             activeSetup = null;
+
+             controlsContent.innerHTML = '<div class="controls-placeholder">Select a file to see controls</div>';
+             loadWorkspaces();
+         }
+
+         // ============================================================
+         // Search
+         // ============================================================
+         function onSearchInput(query) {
+             const q = query.toLowerCase().trim();
+             const items = workspacesTree.querySelectorAll('.tree-item');
+             const categories = workspacesTree.querySelectorAll('.tree-category');
+
+             if (q === '') {
+                 items.forEach(el => el.classList.remove('hidden'));
+                 categories.forEach(el => el.classList.remove('collapsed'));
+                 return;
+             }
+
+             items.forEach(el => {
+                 const name = el.textContent.toLowerCase();
+                 if (name.includes(q)) {
+                     el.classList.remove('hidden');
+                 } else {
+                     el.classList.add('hidden');
+                 }
+             });
+
+             categories.forEach(cat => {
+                 cat.classList.remove('collapsed');
+             });
+         }
+
+         // ============================================================
+         // File Info
+         // ============================================================
+         function parseFileInfo(content) {
+             const lines = content.split('\n');
+             let description = '';
+             let tags = [];
+             let seeAlso = [];
+
+             for (const line of lines) {
+                 if (line.startsWith('#')) {
+                     const text = line.replace(/^#\s*/, '');
+                     if (text.toLowerCase().startsWith('demonstrates:')) {
+                         tags = text.substring(13).split(',').map(s => s.trim());
+                     } else if (text.toLowerCase().startsWith('see also:')) {
+                         seeAlso = text.substring(9).split(',').map(s => s.trim());
+                     } else if (!text.startsWith('examples/') && text.length > 0) {
+                         if (description) description += ' ';
+                         description += text;
+                     }
+                 } else if (line.trim() && !line.startsWith('#')) {
+                     break;
+                 }
+             }
+
+             return { description, tags, seeAlso };
+         }
+
+         function updateInfoPanel(filepath, content) {
+             const filename = filepath.split('/').pop();
+             const info = parseFileInfo(content);
+             currentFileInfo = info;
+
+             let html = `<div class="info-filename">${filename}</div>`;
+
+             if (info.description) {
+                 html += `<div class="info-description">${info.description}</div>`;
+             }
+
+             if (info.tags && info.tags.length > 0) {
+                 html += '<div class="info-tags">';
+                 for (const tag of info.tags) {
+                     html += `<span class="info-tag">${tag}</span>`;
+                 }
+                 html += '</div>';
+             }
+
+             infoContent.innerHTML = html;
+         }
+
+         // ============================================================
+         // Connection Status
+         // ============================================================
+         function updateConnectionStatus(connected) {
+             if (connected) {
+                 statusIndicator.classList.add('connected');
+                 statusDot.classList.add('connected');
+                 connectionStatus.textContent = 'Connected';
+                 const cst = document.getElementById('connectionStatusText');
+                 if (cst) cst.textContent = 'Connected';
+             } else {
+                 statusIndicator.classList.remove('connected');
+                 statusDot.classList.remove('connected');
+                 connectionStatus.textContent = 'Disconnected';
+                 const cst = document.getElementById('connectionStatusText');
+                 if (cst) cst.textContent = 'Disconnected';
+             }
+         }
+
+         // ============================================================
+         // Log Output
+         // ============================================================
+         function addLogEntry(level, message) {
+             const entry = document.createElement('div');
+             entry.className = `log-entry ${level || ''}`;
+             entry.textContent = message;
+             logOutput.appendChild(entry);
+             logOutput.scrollTop = logOutput.scrollHeight;
+         }
+
+         function clearLog() {
+             logOutput.innerHTML = '';
+         }
+
+         // ============================================================
+         // Editor Actions
+         // ============================================================
+         async function runCode() {
+             if (!editor || !connection) return;
+
+             const code = editor.getValue().trim();
+             if (!code) return;
+
+             try {
+                 addLogEntry('info', '>>> Running code...');
+                 const result = await connection.eval(code);
+                 if (result) {
+                     addLogEntry('', result);
+                 }
+             } catch (e) {
+                 addLogEntry('error', `Error: ${e.message}`);
+             }
+         }
+
+         async function executeSnippet(code) {
+             if (!code.trim() || !connection) return;
+
+             const shortCode = code.split('\n')[0] + (code.includes('\n') ? ' ...' : '');
+
+             try {
+                 if (terminal && typeof terminal.showCommand === 'function') {
+                     terminal.showCommand(shortCode);
+                 } else {
+                     addLogEntry('info', `>>> ${shortCode}`);
+                 }
+
+                 const result = await connection.eval(code);
+
+                 if (result) {
+                     if (terminal && typeof terminal.showResult === 'function') {
+                         terminal.showResult(result);
+                     } else {
+                         addLogEntry('', result);
+                     }
+                 }
+             } catch (e) {
+                 if (terminal && typeof terminal.showError === 'function') {
+                     terminal.showError(e.message);
+                 } else {
+                     addLogEntry('error', `Error: ${e.message}`);
+                 }
+             }
+         }
+
+         function clearEditor() {
+             if (editor) editor.setValue('');
+         }
+
+         function formatCode() {
+             if (editor) editor.format();
+         }
+
+         // ============================================================
+         // Linting
+         // ============================================================
+         function lintCode() {
+             if (!editor) return;
+
+             try {
+                 const results = editor.lint();
+                 showLintResults(results);
+             } catch (e) {
+                 console.error('Lint error:', e);
+                 addLogEntry('error', `Lint error: ${e.message}`);
+             }
+         }
+
+         function showLintResults(results) {
+             const lintResults = document.getElementById('lintResults');
+             const editorInfo = document.getElementById('editorInfo');
+
+             let errors = [];
+             let warnings = [];
+
+             if (results) {
+                 if (Array.isArray(results.errors)) errors = results.errors;
+                 if (Array.isArray(results.warnings)) warnings = results.warnings;
+             }
+
+             const allIssues = [...errors, ...warnings];
+
+             if (allIssues.length === 0) {
+                 lintResults.innerHTML = `
+                     <div class="lint-results-header">
+                         <span class="lint-results-title">Lint Results</span>
+                         <button class="lint-results-close" onclick="hideLintResults()">×</button>
+                     </div>
+                     <div class="lint-results-empty">✓ No issues found</div>
+                 `;
+                 lintResults.classList.add('visible');
+                 editorInfo.textContent = 'No issues';
+                 editorInfo.className = 'editor-info';
+
+                 setTimeout(() => {
+                     if (lintResults.querySelector('.lint-results-empty')) {
+                         hideLintResults();
+                     }
+                 }, 2000);
+                 return;
+             }
+
+             allIssues.sort((a, b) => (a.line || 0) - (b.line || 0));
+
+             let html = `
+                 <div class="lint-results-header">
+                     <span class="lint-results-title">Lint Results (${allIssues.length} issue${allIssues.length > 1 ? 's' : ''})</span>
+                     <button class="lint-results-close" onclick="hideLintResults()">×</button>
+                 </div>
+                 <div class="lint-results-body">
+             `;
+
+             allIssues.forEach(issue => {
+                 const isError = issue.severity === 'error';
+                 const icon = isError ? '✖' : '⚠';
+                 const iconClass = isError ? 'error' : 'warning';
+                 const line = issue.line || 1;
+                 const message = issue.message || 'Unknown issue';
+                 html += `
                     <div class="lint-item" onclick="goToLine(${line})">
                         <span class="lint-item-icon ${iconClass}">${icon}</span>
                         <span class="lint-item-location">Line ${line}</span>
                         <span class="lint-item-message">${escapeHtml(message)}</span>
                     </div>
-                `;
-            });
-            
-            html += '</div>';
-            lintResults.innerHTML = html;
-            lintResults.classList.add('visible');
-            
-            if (errors.length > 0) {
-                editorInfo.textContent = `${errors.length} error${errors.length > 1 ? 's' : ''}, ${warnings.length} warning${warnings.length !== 1 ? 's' : ''}`;
-                editorInfo.className = 'editor-info has-errors';
-            } else if (warnings.length > 0) {
-                editorInfo.textContent = `${warnings.length} warning${warnings.length > 1 ? 's' : ''}`;
-                editorInfo.className = 'editor-info has-warnings';
-            }
-        }
+                 `;
+             });
 
-        function hideLintResults() {
-            const lintResults = document.getElementById('lintResults');
-            lintResults.classList.remove('visible');
-            document.getElementById('editorInfo').textContent = 'Ready';
-            document.getElementById('editorInfo').className = 'editor-info';
-        }
+             html += '</div>';
+             lintResults.innerHTML = html;
+             lintResults.classList.add('visible');
 
-        function goToLine(lineNumber) {
-            if (editor && editor.view) {
-                const line = editor.view.state.doc.line(lineNumber);
-                editor.view.dispatch({
-                    selection: { anchor: line.from },
-                    scrollIntoView: true
-                });
-                editor.focus();
-            }
-        }
+             if (errors.length > 0) {
+                 editorInfo.textContent = `${errors.length} error${errors.length > 1 ? 's' : ''}, ${warnings.length} warning${warnings.length !== 1 ? 's' : ''}`;
+                 editorInfo.className = 'editor-info has-errors';
+             } else if (warnings.length > 0) {
+                 editorInfo.textContent = `${warnings.length} warning${warnings.length > 1 ? 's' : ''}`;
+                 editorInfo.className = 'editor-info has-warnings';
+             }
+         }
 
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
+         function hideLintResults() {
+             const lintResults = document.getElementById('lintResults');
+             lintResults.classList.remove('visible');
+             document.getElementById('editorInfo').textContent = 'Ready';
+             document.getElementById('editorInfo').className = 'editor-info';
+         }
 
-        // ============================================================
-        // Terminal Actions
-        // ============================================================
-        function clearTerminal() {
-            if (terminal) {
-                if (typeof terminal.clear === 'function') {
-                    terminal.clear();
-                } else {
-                    const container = document.getElementById('terminal-container');
-                    const terminalEl = container.querySelector('.tcl-terminal');
-                    if (terminalEl) {
-                        const inputContainer = terminalEl.querySelector('.tcl-terminal-input-container');
-                        terminalEl.innerHTML = '';
-                        if (inputContainer) terminalEl.appendChild(inputContainer);
-                    }
-                }
-            }
-        }
+         function goToLine(lineNumber) {
+             if (editor && editor.view) {
+                 const line = editor.view.state.doc.line(lineNumber);
+                 editor.view.dispatch({
+                     selection: { anchor: line.from },
+                     scrollIntoView: true
+                 });
+                 editor.focus();
+             }
+         }
 
-        // ============================================================
-        // Reconnect
-        // ============================================================
-        function reconnect() {
-            if (connection && connection.ws) {
-                connection.ws.close();
-            }
-            connection = new Stim2Connection();
-            connection.onStatusUpdate = (msg) => {
-                // handled in class
-            };
-            connection.connect();
-            
-            if (editor) {
-                editor.setWebSocket(connection);
-            }
-        }
+         function escapeHtml(text) {
+             const div = document.createElement('div');
+             div.textContent = text;
+             return div.innerHTML;
+         }
 
-        // Initialize
-        document.addEventListener('DOMContentLoaded', init);
-    </script>
-</body>
+         // ============================================================
+         // Terminal Actions
+         // ============================================================
+         function clearTerminal() {
+             if (terminal) {
+                 if (typeof terminal.clear === 'function') {
+                     terminal.clear();
+                 } else {
+                     const container = document.getElementById('terminal-container');
+                     const terminalEl = container.querySelector('.tcl-terminal');
+                     if (terminalEl) {
+                         const inputContainer = terminalEl.querySelector('.tcl-terminal-input-container');
+                         terminalEl.innerHTML = '';
+                         if (inputContainer) terminalEl.appendChild(inputContainer);
+                     }
+                 }
+             }
+         }
+
+         // ============================================================
+         // Reconnect
+         // ============================================================
+         function reconnect() {
+             if (connection && connection.ws) {
+                 connection.ws.close();
+             }
+             connection = new Stim2Connection();
+             connection.onStatusUpdate = (msg) => {
+                 // handled in class
+             };
+             connection.connect();
+
+             if (editor) {
+                 editor.setWebSocket(connection);
+             }
+         }
+
+         // Initialize
+         document.addEventListener('DOMContentLoaded', init);
+	</script>
+    </body>
 </html>
