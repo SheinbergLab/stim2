@@ -1,0 +1,5 @@
+anim_blink      "Blink examples"
+anim_basics	"Animation basics"
+anim_path       "Path animation"
+anim_compound   "Compound animations"
+anim_custom     "Custom animation"
