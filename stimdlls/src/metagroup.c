@@ -22,6 +22,7 @@
 
 #include <prmutil.h>
 #include <objname.h>
+#include <animate.h>
 
 /* If you want access to dlsh connectivity, include these */
 #include "df.h"
@@ -53,17 +54,15 @@ void metagroupDraw(GR_OBJ *o)
       g = OL_OBJ(mg->objlist,id);
 
       stimGetMatrix(STIM_MODELVIEW_MATRIX, modelmatrix);
-      //      glPushMatrix ();
+
+      animateUpdateObj(g, StimTicks, StimDeltaTime);
+
       executeScripts(GR_PRE_SCRIPTS(g),
 		     GR_PRE_SCRIPT_ACTIVES(g),
 		     GR_N_PRE_SCRIPTS(g));
 
       stimMultGrObjMatrix(STIM_MODELVIEW_MATRIX, g);
       
-      //      glTranslatef(GR_TX(g), GR_TY(g), GR_TZ(g));
-      //      glRotatef (GR_SPIN(g), GR_AX1(g), GR_AX2(g), GR_AX3(g));
-      //      glScalef(GR_SX(g), GR_SY(g), GR_SZ(g));
-
       if (GR_VISIBLE(g)) drawObj(g);
 
       executeScripts(GR_POST_SCRIPTS(g),
