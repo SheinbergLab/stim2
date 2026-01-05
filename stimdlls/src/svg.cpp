@@ -308,7 +308,8 @@ static int rasterize_to_cache(SVG_OBJ *svg, int cache_idx) {
         rgba[i*4 + 2] = b;
         rgba[i*4 + 3] = a;
     }
-    
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);    
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, rgba);
     
