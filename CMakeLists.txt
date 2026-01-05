@@ -160,6 +160,7 @@ set(STIM2_SOURCES
     src/objgroup.c
     src/objname.c
     src/grobj.c
+    src/animate.cpp
     src/tclproc.c
     src/prmutil.c
     src/timer.cpp
