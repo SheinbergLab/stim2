@@ -1,0 +1,10 @@
+# For SunFounder 7"
+#screen_set ScreenWidthCm 15.4
+#screen_set ScreenHeightCm 8.6
+
+# For SunFounder 10"
+screen_set ScreenWidthCm 21.7
+screen_set ScreenHeightCm 13.6
+
+# Set this system's subject distance to monitor
+screen_set DistanceToMonitor 40.0
