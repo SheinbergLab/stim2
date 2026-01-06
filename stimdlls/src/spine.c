@@ -1413,6 +1413,128 @@ int spineShaderCreate(Tcl_Interp *interp, SPINE_INFO *spineInfo)
 }
 
 
+/*
+ * sp::setTimeScale spine_obj scale
+ */
+static int spSetTimeScaleCmd(ClientData clientData, Tcl_Interp *interp,
+                             int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)clientData;
+    SpineObject *sp;
+    int id;
+    double scale;
+    
+    if (argc < 3) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " spine_obj scale", NULL);
+        return TCL_ERROR;
+    }
+    
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			   SpineID, "spine")) < 0)
+      return TCL_ERROR;  
+    
+    sp = (SpineObject *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    if (Tcl_GetDouble(interp, argv[2], &scale) != TCL_OK) return TCL_ERROR;
+    
+    sp->state->timeScale = (float)scale;
+    
+    return TCL_OK;
+}
+
+/*
+ * sp::setSkin spine_obj skin_name
+ */
+static int spSetSkinCmd(ClientData clientData, Tcl_Interp *interp,
+                        int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)clientData;
+    SpineObject *sp;
+    int id;
+    
+    if (argc < 3) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " spine_obj skin_name", NULL);
+        return TCL_ERROR;
+    }
+    
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			   SpineID, "spine")) < 0)
+      return TCL_ERROR;  
+    
+    sp = (SpineObject *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    if (!spSkeleton_setSkinByName(sp->skeleton, argv[2])) {
+        Tcl_AppendResult(interp, "skin not found: ", argv[2], NULL);
+        return TCL_ERROR;
+    }
+    spSkeleton_setSlotsToSetupPose(sp->skeleton);
+    
+    return TCL_OK;
+}
+
+static int spSetDefaultMixCmd(ClientData clientData, Tcl_Interp *interp,
+                              int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *)clientData;
+    SpineObject *sp;
+    int id;
+    double duration;
+    
+    if (argc < 3) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " spine_obj duration", NULL);
+        return TCL_ERROR;
+    }
+    
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+                           SpineID, "spine")) < 0)
+        return TCL_ERROR;
+    
+    sp = (SpineObject *)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    if (Tcl_GetDouble(interp, argv[2], &duration) != TCL_OK) 
+        return TCL_ERROR;
+    
+    sp->stateData->defaultMix = (float)duration;
+    
+    return TCL_OK;
+}
+
+static int spineassetCmd(ClientData clientData, Tcl_Interp *interp,
+                         int argc, char *argv[]) {
+    char skel_path[1024];
+    char atlas_path[1024];
+    char *result;
+    
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " skel_file ?atlas_file?", NULL);
+        return TCL_ERROR;
+    }
+    
+    /* Find skeleton file */
+    if (Tcl_VarEval(interp, "assetFind ", argv[1], NULL) != TCL_OK) {
+        return TCL_ERROR;
+    }
+    strncpy(skel_path, Tcl_GetStringResult(interp), sizeof(skel_path) - 1);
+    Tcl_ResetResult(interp);
+    
+    if (argc >= 3) {
+        /* Atlas explicitly provided */
+        if (Tcl_VarEval(interp, "assetFind ", argv[2], NULL) != TCL_OK) {
+            return TCL_ERROR;
+        }
+        strncpy(atlas_path, Tcl_GetStringResult(interp), sizeof(atlas_path) - 1);
+    } else {
+        /* Derive atlas from skeleton path - replace extension with .atlas */
+        char *dot;
+        strncpy(atlas_path, skel_path, sizeof(atlas_path) - 1);
+        dot = strrchr(atlas_path, '.');
+        if (dot) {
+            strcpy(dot, ".atlas");
+        } else {
+            strncat(atlas_path, ".atlas", sizeof(atlas_path) - strlen(atlas_path) - 1);
+        }
+    }
+    
+    /* Call sp::create */
+    return Tcl_VarEval(interp, "sp::create ", skel_path, " ", atlas_path, NULL);
+}
 
 #ifdef _WIN32
 EXPORT(int,Spine_Init) (Tcl_Interp *interp)
@@ -1491,6 +1613,21 @@ int Spine_Init(Tcl_Interp * interp)
 		    (Tcl_CmdProc *) spGetSizeCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
+  Tcl_CreateCommand(interp, "sp::setTimeScale", 
+		    (Tcl_CmdProc *)spSetTimeScaleCmd, 
+		    (ClientData)OBJList, (Tcl_CmdDeleteProc *)NULL);
+  
+  Tcl_CreateCommand(interp, "sp::setSkin", 
+		    (Tcl_CmdProc *)spSetSkinCmd, 
+		    (ClientData)OBJList, (Tcl_CmdDeleteProc *)NULL);
+ 
+  Tcl_CreateCommand(interp, "sp::setDefaultMix", 
+		    (Tcl_CmdProc *)spSetDefaultMixCmd, 
+		    (ClientData)OBJList, (Tcl_CmdDeleteProc *)NULL);
+
+  Tcl_CreateCommand(interp, "spineAsset",
+		    (Tcl_CmdProc *)spineassetCmd,
+		    (ClientData)OBJList, (Tcl_CmdDeleteProc *)NULL);
 
   return TCL_OK;
 }
