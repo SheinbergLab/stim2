@@ -1,0 +1,11 @@
+This directory is for site-specific configuration scripts.
+
+Any *.tcl files here will be sourced at startup before the
+standard configuration calculations, allowing you to override
+defaults like:
+
+    set distance_to_monitor 55.0
+
+Files are sourced in alphabetical order.
+
+This directory is preserved across package updates.
