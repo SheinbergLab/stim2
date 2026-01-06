@@ -97,7 +97,7 @@ void _spAtlasPage_createTexture (spAtlasPage* self, const char* path)
   glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, 
 	       GL_RGBA, GL_UNSIGNED_BYTE, imageData);
-
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
   stbi_image_free(imageData);
 
   SpineTexture *spine_texture = (SpineTexture *) calloc(1, sizeof(SpineTexture));
@@ -105,6 +105,8 @@ void _spAtlasPage_createTexture (spAtlasPage* self, const char* path)
   self->rendererObject = spine_texture;
   self->width = width;
   self->height = height;
+
+  glBindTexture(GL_TEXTURE_2D, 0);  
 }
 
 void _spAtlasPage_disposeTexture (spAtlasPage* self) {
@@ -472,7 +474,13 @@ void spineDraw(GR_OBJ *gobj)
 
   }
   spSkeletonClipping_clipEnd2(s->clipper);
-  
+
+ glBindVertexArray(0);
+ glBindBuffer(GL_ARRAY_BUFFER, 0);
+ glUseProgram(0);
+ glBindTexture(GL_TEXTURE_2D, 0);
+ glDisable(GL_BLEND);
+ glDisable(GL_TEXTURE_2D);  
 }
 
 void spineDelete(GR_OBJ *gobj) 
