@@ -1752,7 +1752,30 @@ proc setup_asset_paths {} {
 }
 setup_asset_paths
 )");
- 
+
+    Tcl_Eval(interp, R"(
+proc screen_config {} {
+    set monitor_hwidth  [expr {[screen_set ScreenWidthCm]/2.0}]
+    set monitor_hheight [expr {[screen_set ScreenHeightCm]/2.0}]
+    set distance_to_monitor [screen_set DistanceToMonitor]
+    set deg_per_cm [expr atan2(1.0,$distance_to_monitor)*(180./$::pi)]
+    
+    screen_set HalfScreenDegreeX [expr $deg_per_cm*$monitor_hwidth]
+    screen_set HalfScreenDegreeY [expr $deg_per_cm*$monitor_hheight]
+    
+    # Now reset pixels per degree variable
+    set xres [screen_set ScreenWidth]
+    set yres [screen_set ScreenHeight]
+    set w [expr 2.*$monitor_hwidth]
+    set h [expr 2.*$monitor_hheight]
+    set ppdx [expr 1.0/(atan2($w,$distance_to_monitor)*(180./$::pi))*$xres]
+    set ppdy [expr 1.0/(atan2($h,$distance_to_monitor)*(180./$::pi))*$yres]
+    screen_set PixPerDegreeX $ppdx
+    screen_set PixPerDegreeY $ppdy
+    reshape
+}
+)");
+
     // Add objid <-> name table support
     OL_NAMEINFO(OBJList) = objNameInitCommands(interp, OBJList);
     
