@@ -25,3 +25,20 @@ The system achieves frame accurate timing by running in C++, but configuration a
 
 Extensive library support for numerical processing, curve and image creation, and physics computations are made available through the extensive dlsh/tcl packages that are available within any stim2 script.
 
+## Coordinate System
+
+The program uses degrees visual angle as its core coordinate system (up and right positive). This of course depends on the size of the display **and** the distance to the display. These can be set using the following commands
+
+```
+screen_set ScreenWidthCm     10
+screen_set ScreenHeightCm     6
+screen_set DistanceToMonitor 25
+```
+
+and to have these take effect
+
+```
+screen_config
+```
+
+For real experiment systems, it is of course essential to get these numbers correct. For development systems, where the stim2 window might not be full screen, you would want to simulate settings that would be most like your target system.
