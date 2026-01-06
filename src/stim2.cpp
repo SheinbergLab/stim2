@@ -92,6 +92,8 @@ static int ScreenWidth_2;
 static int ScreenHeight;
 static float ScreenWidthCm;
 static float ScreenHeightCm;
+static float DistanceToMonitor = 40.0;
+
 static int RefreshRate;
 static float FrameDuration;
 int     winWidth = 580;
@@ -115,6 +117,7 @@ PARAM_ENTRY ScreenParamTable[] = {
   (char *) "ScreenHeight",        &ScreenHeight,          &dummyInt, PU_INT,
   (char *) "ScreenWidthCm",       &ScreenWidthCm,         &dummyInt, PU_FLOAT,
   (char *) "ScreenHeightCm",      &ScreenHeightCm,        &dummyInt, PU_FLOAT,
+  (char *) "DistanceToMonitor",   &DistanceToMonitor,     &dummyInt, PU_FLOAT,
   (char *) "ScaleX",              &XScale,                &dummyInt, PU_FLOAT,
   (char *) "ScaleY",              &YScale,                &dummyInt, PU_FLOAT,
   (char *) "WinWidth",            &winWidth,              &dummyInt, PU_INT,
