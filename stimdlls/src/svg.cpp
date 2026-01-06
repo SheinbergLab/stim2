@@ -291,27 +291,26 @@ static int rasterize_to_cache(SVG_OBJ *svg, int cache_idx) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    
-    /* LunaSVG outputs BGRA, need to swizzle or convert */
-    /* Actually it outputs ARGB premultiplied - let's convert to RGBA */
+
+    /* LunaSVG outputs BGRA */
     unsigned char* rgba = (unsigned char*)malloc(width * height * 4);
     const unsigned char* src = bitmap.data();
+    uint32_t stride = bitmap.stride();
     
-    for (int i = 0; i < width * height; i++) {
-        /* LunaSVG uses ARGB32 premultiplied format */
-        unsigned char b = src[i*4 + 0];
-        unsigned char g = src[i*4 + 1];
-        unsigned char r = src[i*4 + 2];
-        unsigned char a = src[i*4 + 3];
-        rgba[i*4 + 0] = r;
-        rgba[i*4 + 1] = g;
-        rgba[i*4 + 2] = b;
-        rgba[i*4 + 3] = a;
+    for (int y = 0; y < height; y++) {
+      const unsigned char* srcRow = src + y * stride;
+      unsigned char* dstRow = rgba + y * width * 4;
+      for (int x = 0; x < width; x++) {
+        dstRow[x*4 + 0] = srcRow[x*4 + 2];  // R
+        dstRow[x*4 + 1] = srcRow[x*4 + 1];  // G
+        dstRow[x*4 + 2] = srcRow[x*4 + 0];  // B
+        dstRow[x*4 + 3] = srcRow[x*4 + 3];  // A
+      }
     }
-
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);    
+    
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+		 GL_RGBA, GL_UNSIGNED_BYTE, rgba);    
     
     free(rgba);
     glBindTexture(GL_TEXTURE_2D, 0);
