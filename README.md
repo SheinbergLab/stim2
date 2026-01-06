@@ -1,41 +1,27 @@
 # stim2
+A cross platform system for visual stimulus presentation
 
-## Git Submodules
+## Design
 
-This repo uses [git submodules](https://git-scm.com/book/en/v2/Git-Tools-Submodules) to obtain source code for several dependencies (and specific commits/versions of each):
- - [tcl](https://github.com/tcltk/tcl) 9
- - [GLFW](https://github.com/glfw/glfw) OpenGL
- - [spine-runtimes](https://github.com/EsotericSoftware/spine-runtimes)
- - [box2d](https://github.com/erincatto/box2d) v3
+stim2 is an OpenGL/GLES based program for showing graphics objects. It uses GLFW to open and initialize its display. The core role of the main program is to provide containers (graphics lists). These objects are created using "stimdlls", which define a large variety of graphics objects:
 
-To clone this repo along with the submodules:
+* metagroups
+* polygons
+* images
+* motionpatches
+* text
+* svg objects
+* user defined shaders with uniform controls
+* spine2d animations
+* video
+* box2d worlds
+* tilemap game environments
 
-``` 
-git clone --recurse-submodules https://github.com/SheinbergLab/stim2.git
-```
+Examples of these are demonstrated through the stim2 development page, which is hosted by stim2 at [stim2-dev](http://localhost:4613/stim2-dev.html) and a terminal for interacting with the program is accessible at [terminal](http://localhost:4613/).
 
-If you already have this repo and you want to clone or update the submodules:
+The system allows mixing and matching of objects in a single frame, and supports animation.
 
-```
-git submodule update --init --recursive
-git pull --recurse-submodules
-```
+The system achieves frame accurate timing by running in C++, but configuration and frame callbacks are programming in Tcl, which provides high level access to the underlying graphics objects.
 
-## Releases with GitHub Actions
+Extensive library support for numerical processing, curve and image creation, and physics computations are made available through the extensive dlsh/tcl packages that are available within any stim2 script.
 
-This repo uses GitHub Actions to build stim2 whenever we push a new repo tag.
-The workflow might go like this:
-
- - Make changes locally.
- - Commit and push changes to this repo.
- - Create a new tag locally.
-   - The tag name should be a version number, like `0.0.1`.
-   - `git tag --list`
-   - Pick a new version number / tag name that doesn't exist yet.
-   - Annotated tags with `-a` can have metadata, including messages, which is nice.
-   - `git tag -a 0.0.2 -m "Now with lasers."`
-   - `git push --tags`
- - When the new tag is pused to GitHub, GitHub Actions will kick off a new build and release.
- - See workflow definition(s) like [package_and_release.yml](./.github/workflows/package_and_release.yml).
- - Follow workflow progress at the repo [Actions tab](https://github.com/SheinbergLab/stim2/actions).
- - See completed releases and build artifacts at the repo [Releases](https://github.com/SheinbergLab/stim2/releases).
