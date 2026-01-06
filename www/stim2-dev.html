@@ -674,6 +674,33 @@
              color: var(--text);
          }
 
+	 .action-buttons {
+	     display: flex;
+	     flex-wrap: wrap;
+	     gap: 6px;
+	     padding: 4px 0;
+	 }
+	 
+	 .action-button {
+	     padding: 6px 12px;
+	     background: #4a5568;
+	     border: 1px solid #5a6578;
+	     border-radius: 4px;
+	     color: #e2e8f0;
+	     font-size: 12px;
+	     cursor: pointer;
+	     transition: background 0.15s, transform 0.1s;
+	 }
+	 
+	 .action-button:hover {
+	     background: #5a6578;
+	 }
+
+	 .action-button:active {
+	     background: #6b7688;
+	     transform: scale(0.97);
+	 }	 
+	 
          .control-actions {
              display: flex;
              gap: 6px;
@@ -1734,39 +1761,69 @@
              return adj.colorpicker === true || adj.colorpicker === 1;
          }
 
-         function renderAdjusterGroup(group) {
-             const adj = group.adjuster;
-             let html = '<div class="adjuster-group">';
+	 function renderAdjusterGroup(group) {
+	     const adj = group.adjuster;
+	     let html = '<div class="adjuster-group">';
+	     
+	     // Header
+	     html += '<div class="adjuster-group-header">';
+	     html += `<span class="adjuster-label">${adj.label || group.name}</span>`;
+	     if (adj.target) {
+		 html += `<span class="target-badge">${adj.target}</span>`;
+	     }
+	     html += '</div>';
+	     
+	     // Check if this adjuster has action params
+	     const actionParams = (adj.params || []).filter(p => p.type === 'action');
+	     const otherParams = (adj.params || []).filter(p => p.type !== 'action');
+	     
+	     // Render non-action params normally
+	     if (group.isColor && adj.colorpicker) {
+		 // Color picker handling (existing code)
+		 for (const param of otherParams) {
+		     if (!['r','g','b','a'].includes(param.name.toLowerCase())) {
+			 html += renderParamControl('adjuster', group.name, param);
+		     }
+		 }
+		 html += renderColorPicker(group.name, adj);
+	     } else {
+		 for (const param of otherParams) {
+		     html += renderParamControl('adjuster', group.name, param);
+		 }
+	     }
+	     
+	     // Render action buttons as a group
+	     if (actionParams.length > 0) {
+		 html += renderActionButtons(group.name, adj);
+	     }
+	     
+	     html += '</div>';
+	     return html;
+	 }	 
+	 
+	 function renderActionButtons(adjusterName, adj) {
+	     const actionParams = (adj.params || []).filter(p => p.type === 'action');
+	     if (actionParams.length === 0) return '';
+	     
+	     let html = '<div class="action-buttons">';
+	     for (const param of actionParams) {
+		 const label = param.label || param.name;
+		 html += `<button class="action-button"
+                        data-adjuster="${adjusterName}"
+                        data-action="${param.name}"
+                        onclick="onActionClick(this)">
+                   ${label}
+                 </button>`;
+	     }
+	     html += '</div>';
+	     return html;
+	 }
 
-             // Header with label and target badge
-             html += '<div class="adjuster-group-header">';
-             html += `<span>${group.label}</span>`;
-             if (group.target) {
-                 html += `<span class="target-badge">${group.target}</span>`;
-             }
-             html += '</div>';
-
-             // Render as color picker or individual params
-             if (group.isColor) {
-                 // For color adjusters, render non-color params first, then color picker
-                 const colorParamNames = ['r', 'g', 'b', 'a'];
-                 for (const param of (adj.params || [])) {
-                     if (!colorParamNames.includes(param.name.toLowerCase())) {
-                         html += renderParamControl('adjuster', group.name, param);
-                     }
-                 }
-                 html += renderColorPicker(group.name, adj);
-             } else {
-                 // Regular params
-                 for (const param of (adj.params || [])) {
-                     html += renderParamControl('adjuster', group.name, param);
-                 }
-             }
-
-             html += '</div>';
-             return html;
-         }
-
+	 function isActionOnlyAdjuster(adj) {
+	     const params = adj.params || [];
+	     return params.length > 0 && params.every(p => p.type === 'action');
+	 }
+	 
          function renderColorPicker(adjusterName, adj) {
              // Extract RGB values from params
              const rParam = adj.params.find(p => p.name.toLowerCase() === 'r');
@@ -1840,6 +1897,22 @@
              };
          }
 
+	 function onActionClick(button) {
+	     const adjusterName = button.dataset.adjuster;
+	     const actionName = button.dataset.action;
+	     
+	     // Call workspace::invoke_action instead of invoke_adjuster
+	     const cmd = `workspace::invoke_action ${adjusterName} ${actionName}`;
+	     
+	     connection.eval(cmd).then(result => {
+		 if (result) {
+		     addLogEntry('', result);
+		 }
+	     }).catch(e => {
+		 addLogEntry('error', e.message);
+	     });
+	 }
+	 
          function onColorPickerChange(el) {
              const inputId = el.id;
              const hex = el.value;
@@ -1986,6 +2059,19 @@
                      html += '</select>';
                      break;
 
+                case 'action':
+                    // Action buttons don't use the standard label/row structure
+                    // They're rendered as a group by renderActionButtons()
+                    // This case shouldn't normally be hit if grouping is done right
+                    html += `<button class="action-button"
+                                    data-control-type="${type}"
+                                    data-parent="${parentName}"
+                                    data-action="${param.name}"
+                                    onclick="onActionClick(this)">
+                               ${label}
+                             </button>`;
+                     break;
+		     
                  default:
                      html += `<input type="text"
                                     id="${inputId}"
