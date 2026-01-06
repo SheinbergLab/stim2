@@ -493,10 +493,13 @@ else()
         COMPONENT stim2
     )
 
-    # Local configuration directory (preserved across updates)
-    install(DIRECTORY DESTINATION ${CMAKE_INSTALL_PREFIX}/local)
-    install(FILES ${CMAKE_SOURCE_DIR}/local/README 
-           DESTINATION ${CMAKE_INSTALL_PREFIX}/local)
+    # Add local
+    message("Bundling local from local/")
+    install(
+        DIRECTORY local/
+        DESTINATION "/usr/local/stim2/local"
+        COMPONENT stim2
+    )
 	
     # Add fonts
     message("Bundling fonts from fonts/")
