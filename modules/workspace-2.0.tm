@@ -74,6 +74,120 @@
 #     - Example: dict create r 1.0 g 0.5 b 0.0
 #
 # ============================================================
+# ACTION BUTTONS (stateless triggers)
+# ============================================================
+#   workspace::adjuster name {
+#       action1 {action "Button Label"}
+#       action2 {action "Another Button"}
+#   } -target obj -proc trigger_proc -label "Actions"
+#
+#   Proc signature: proc trigger_proc {target action_name}
+#     - First arg is target (from -target), unless -target {} (empty)
+#     - Second arg is the action name (e.g., "action1", "action2")
+#     - No return value needed
+#     - No getter needed (stateless)
+#
+#   Example:
+#     workspace::adjuster player_actions {
+#         jump  {action "Jump"}
+#         shoot {action "Shoot"}
+#         duck  {action "Duck"}
+#     } -target player -proc trigger_action -label "Actions"
+#
+#     proc trigger_action {target action} {
+#         switch $action {
+#             jump  { sp::setAnimationByName $target jump 0 0 }
+#             shoot { sp::setAnimationByName $target shoot 0 0 }
+#             duck  { sp::setAnimationByName $target duck 0 0 }
+#         }
+#         return
+#     }
+#
+#   Use action buttons for:
+#     - One-shot animations (jump, shoot, death)
+#     - Discrete events (reset, randomize, save)
+#     - State transitions (start, stop, toggle direction)
+#
+# ============================================================
+# GETTER PROC SIGNATURE
+# ============================================================
+#   Getter procs take an optional target parameter:
+#
+#     proc my_getter {{target {}}} {
+#         dict create param1 $value1 param2 $value2
+#     }
+#
+#   The target arg may be empty string if -target {} was used.
+#   Return a dict with keys matching your parameter names exactly.
+#
+#   For best results, query actual object state rather than
+#   cached namespace variables:
+#
+#     # Preferred - reads actual state:
+#     proc get_scale {{target {}}} {
+#         set s [scaleObj $target]
+#         dict create scale [lindex $s 0]
+#     }
+#
+#     # Acceptable for complex state not easily queried:
+#     proc get_animation {{target {}}} {
+#         dict create anim $myns::current_anim
+#     }
+#
+# ============================================================
+# STORING STATE WITH setObjProp
+# ============================================================
+#   Use setObjProp to attach custom state to objects rather than
+#   namespace variables. State stays with the object and survives
+#   re-sourcing the demo file (unless resetObjList is called).
+#
+#   Syntax: setObjProp objname key ?value?
+#     - With value: sets the property
+#     - Without value: gets the property
+#
+#   Example - tracking direction:
+#     # In setup:
+#     setObjProp $obj facing_right 1
+#
+#     # In setter:
+#     proc set_direction {target direction} {
+#         if {$direction eq "left"} {
+#             scaleObj $target -1.0 1.0
+#             setObjProp $target facing_right 0
+#         } else {
+#             scaleObj $target 1.0 1.0
+#             setObjProp $target facing_right 1
+#         }
+#         return
+#     }
+#
+#     # In getter:
+#     proc get_direction {{target {}}} {
+#         dict create facing_right [setObjProp $target facing_right]
+#     }
+#
+#   Benefits over namespace variables:
+#     - State tied to object lifetime
+#     - Works with multiple instances
+#     - Survives script re-sourcing
+#     - Cleaner separation of concerns
+#
+# ============================================================
+# SETTER PROC GUIDELINES  
+# ============================================================
+#   - Always end with: return
+#     (prevents command output from being logged)
+#   
+#   - Call redraw only if needed for immediate visual update
+#     (animated objects update automatically)
+#
+#   - Example:
+#     proc set_opacity {target value} {
+#         svgOpacity $target $value
+#         redraw
+#         return
+#     }
+# ============================================================
 # COLOR PICKER UI (-colorpicker flag)
 # ============================================================
 #   Add -colorpicker flag to get color picker UI for r/g/b/a params:
@@ -386,6 +500,8 @@ proc ::workspace::encode_param {yh param} {
                     } else {
                         $yh string $val
                     }
+                } elseif {$ptype eq "action"} {
+		   # Actions have no default value
                 } else {
                     $yh string $val
                 }
@@ -1525,6 +1641,26 @@ proc ::workspace::invoke_adjuster {adjuster_name args} {
     return [uplevel #0 [list $procname {*}$call_args]]
 }
 
+# Invoke an action (stateless button press)
+proc ::workspace::invoke_action {adjuster_name action_name} {
+    variable adjusters
+    
+    if {![dict exists $adjusters $adjuster_name]} {
+        error "Unknown adjuster: $adjuster_name"
+    }
+    
+    set info [dict get $adjusters $adjuster_name]
+    set procname [dict get $info proc]
+    set target [dict get $info target]
+    
+    # For actions, call proc with target (if any) and action name
+    if {$target ne ""} {
+        return [uplevel #0 [list $procname $target $action_name]]
+    } else {
+        return [uplevel #0 [list $procname $action_name]]
+    }
+}
+
 # ============================================================
 # QUERY FUNCTIONS
 # ============================================================
@@ -1693,6 +1829,10 @@ proc ::workspace::parse_params {spec_list} {
                 if {[llength $spec] > 2} { dict set p default [lindex $spec 2] }
                 if {[llength $spec] > 3} { dict set p label [lindex $spec 3] }
             }
+            action {
+                # Action buttons just have a label
+                if {[llength $spec] > 1} { dict set p label [lindex $spec 1] }
+            }	    
         }
         
         lappend params $p
