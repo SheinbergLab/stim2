@@ -513,13 +513,24 @@ proc ::workspace::encode_param {yh param} {
                     $yh double $val
                 }
             }
-            choices {
-                $yh array_open
-                foreach choice $val {
-                    $yh string $choice
-                }
-                $yh array_close
-            }
+	    choices {
+		$yh array_open
+		foreach choice $val {
+		    if {[llength $choice] == 2} {
+			# Paired: {value label}
+			$yh map_open
+			$yh string "value"
+			$yh string [lindex $choice 0]
+			$yh string "label"
+			$yh string [lindex $choice 1]
+			$yh map_close
+		    } else {
+			# Simple string
+			$yh string $choice
+		    }
+		}
+		$yh array_close
+	    }
         }
     }
     
