@@ -4,7 +4,7 @@ After=systemd-user-sessions.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/xinit /usr/local/stim2/stim2 -F -f /usr/local/stim2/config/linux.cfg -- :0 vt1 -keeptty -noreset
+ExecStart=/usr/bin/xinit /usr/local/stim2/stim2 -F -f /usr/local/stim2/config/linux.cfg -- :0 vt1 -keeptty -noreset -s 0 -dpms
 Restart=always
 RestartSec=5
 CPUSchedulingPolicy=fifo
