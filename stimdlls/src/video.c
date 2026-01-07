@@ -20,7 +20,12 @@
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
+#include <libswresample/swresample.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/opt.h>
+
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
 
 #include <tcl.h>
 
@@ -99,6 +104,25 @@ typedef struct _ffmpeg_video {
   float mask_feather;      // Soft edge width (0.0 = hard, 0.1 = 10% feather)
 
   float aspect_ratio;      // width/height ratio
+
+  // Audio playback
+  int has_audio;            // 1 if video has audio stream
+  int audio_enabled;        // 1 if audio playback is enabled
+  int audio_stream_idx;     // FFmpeg audio stream index
+  AVCodecContext *audio_codec_ctx;
+  struct SwrContext *swr_ctx;  // For resampling to output format
+  
+  ma_device audio_device;
+  int audio_device_initialized;
+  
+  // Ring buffer for decoded audio (interleaved float stereo)
+  float *audio_buffer;
+  int audio_buffer_size;     // Total size in samples (not bytes)
+  volatile int audio_write_pos;
+  volatile int audio_read_pos;
+  
+  int audio_sample_rate;
+  int audio_channels;
   
 } FFMPEG_VIDEO;
 
@@ -473,9 +497,32 @@ static void upload_frame_to_texture(FFMPEG_VIDEO *v) {
   glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+// Audio ring buffer helper functions
+static int audio_buffer_available(FFMPEG_VIDEO *v) {
+    int available = v->audio_write_pos - v->audio_read_pos;
+    if (available < 0) available += v->audio_buffer_size;
+    return available;
+}
+
+static int audio_buffer_free(FFMPEG_VIDEO *v) {
+    return v->audio_buffer_size - audio_buffer_available(v) - 1;
+}
+
+static void audio_buffer_write(FFMPEG_VIDEO *v, float *data, int samples) {
+    for (int i = 0; i < samples; i++) {
+        v->audio_buffer[v->audio_write_pos] = data[i];
+        v->audio_write_pos = (v->audio_write_pos + 1) % v->audio_buffer_size;
+    }
+}
+
 // Decode next frame if needed
 static int decode_next_frame(FFMPEG_VIDEO *v) {
   int ret;
+  AVFrame *audio_frame = NULL;
+  
+  if (v->has_audio && v->audio_enabled) {
+      audio_frame = av_frame_alloc();
+  }
   
   while ((ret = av_read_frame(v->format_ctx, v->packet)) >= 0) {
     if (v->packet->stream_index == v->video_stream_idx) {
@@ -500,20 +547,135 @@ static int decode_next_frame(FFMPEG_VIDEO *v) {
 	  av_q2d(v->time_base);
         
 	av_packet_unref(v->packet);
+	if (audio_frame) av_frame_free(&audio_frame);
 	return 1; // Got frame
+      }
+    } else if (v->has_audio && v->audio_enabled && 
+               v->packet->stream_index == v->audio_stream_idx && audio_frame) {
+      // Decode audio packet
+      if (avcodec_send_packet(v->audio_codec_ctx, v->packet) >= 0) {
+        while (avcodec_receive_frame(v->audio_codec_ctx, audio_frame) >= 0) {
+          // Resample to output format
+          int out_samples = av_rescale_rnd(
+              swr_get_delay(v->swr_ctx, v->audio_codec_ctx->sample_rate) + audio_frame->nb_samples,
+              v->audio_sample_rate,
+              v->audio_codec_ctx->sample_rate,
+              AV_ROUND_UP
+          );
+          
+          int free_space = audio_buffer_free(v) / v->audio_channels;
+          if (out_samples <= free_space) {
+            float *resample_buffer = (float *)malloc(out_samples * v->audio_channels * sizeof(float));
+            if (resample_buffer) {
+              uint8_t *out_planes[1] = { (uint8_t *)resample_buffer };
+              
+              int converted = swr_convert(v->swr_ctx, out_planes, out_samples,
+                                         (const uint8_t **)audio_frame->data, audio_frame->nb_samples);
+              
+              if (converted > 0) {
+                audio_buffer_write(v, resample_buffer, converted * v->audio_channels);
+              }
+              free(resample_buffer);
+            }
+          }
+          av_frame_unref(audio_frame);
+        }
       }
     }
     av_packet_unref(v->packet);
   }
+  
+  if (audio_frame) av_frame_free(&audio_frame);
   
   // End of file
   v->eof_reached = 1;
   return 0;
 }
 
+// Miniaudio callback - called from audio thread
+static void audio_data_callback(ma_device *pDevice, void *pOutput, const void *pInput, ma_uint32 frameCount) {
+    FFMPEG_VIDEO *v = (FFMPEG_VIDEO *)pDevice->pUserData;
+    float *output = (float *)pOutput;
+    int samples_needed = frameCount * v->audio_channels;
+    
+    (void)pInput;  // Unused
+    
+    if (!v || !v->audio_buffer || v->paused) {
+        // Output silence
+        memset(output, 0, samples_needed * sizeof(float));
+        return;
+    }
+    
+    int available = audio_buffer_available(v);
+    int samples_to_read = (available < samples_needed) ? available : samples_needed;
+    
+    // Read from ring buffer
+    for (int i = 0; i < samples_to_read; i++) {
+        output[i] = v->audio_buffer[v->audio_read_pos];
+        v->audio_read_pos = (v->audio_read_pos + 1) % v->audio_buffer_size;
+    }
+    
+    // Fill remainder with silence if needed
+    if (samples_to_read < samples_needed) {
+        memset(output + samples_to_read, 0, (samples_needed - samples_to_read) * sizeof(float));
+    }
+}
+
+// Decode audio packets and fill ring buffer
+// This is called from the timer and uses a separate packet read approach
+static void decode_audio_to_buffer(FFMPEG_VIDEO *v) {
+    if (!v->has_audio || !v->audio_enabled || !v->audio_buffer) return;
+    
+    // Check if we have enough audio buffered
+    int min_samples = v->audio_sample_rate * v->audio_channels / 4;  // 0.25 sec
+    if (audio_buffer_available(v) >= min_samples) return;
+    
+    AVFrame *audio_frame = av_frame_alloc();
+    if (!audio_frame) return;
+    
+    // Try to receive any pending frames from previous packets
+    while (avcodec_receive_frame(v->audio_codec_ctx, audio_frame) >= 0) {
+        // Resample to output format
+        int out_samples = av_rescale_rnd(
+            swr_get_delay(v->swr_ctx, v->audio_codec_ctx->sample_rate) + audio_frame->nb_samples,
+            v->audio_sample_rate,
+            v->audio_codec_ctx->sample_rate,
+            AV_ROUND_UP
+        );
+        
+        int free_space = audio_buffer_free(v) / v->audio_channels;
+        if (out_samples > free_space) {
+            av_frame_unref(audio_frame);
+            break;
+        }
+        
+        float *resample_buffer = (float *)malloc(out_samples * v->audio_channels * sizeof(float));
+        if (resample_buffer) {
+            uint8_t *out_planes[1] = { (uint8_t *)resample_buffer };
+            
+            int converted = swr_convert(v->swr_ctx, out_planes, out_samples,
+                                       (const uint8_t **)audio_frame->data, audio_frame->nb_samples);
+            
+            if (converted > 0) {
+                audio_buffer_write(v, resample_buffer, converted * v->audio_channels);
+            }
+            free(resample_buffer);
+        }
+        av_frame_unref(audio_frame);
+        
+        // Check if buffer is full enough now
+        if (audio_buffer_available(v) >= min_samples) break;
+    }
+    
+    av_frame_free(&audio_frame);
+}
+
 void videoOff(GR_OBJ *gobj) {
     FFMPEG_VIDEO *v = (FFMPEG_VIDEO *) GR_CLIENTDATA(gobj);
     v->paused = 1;
+    if (v->audio_device_initialized) {
+        ma_device_stop(&v->audio_device);
+    }
 }
 
 void videoShow(GR_OBJ *gobj) {
@@ -578,6 +740,11 @@ void videoTimer(GR_OBJ *gobj) {
         return;
     }
     
+    // Keep audio buffer filled
+    if (v->has_audio && v->audio_enabled) {
+        decode_audio_to_buffer(v);
+    }
+    
     // Handle EOF reached - one-shot EOF callback logic
     if (v->eof_reached) {
         if (!v->repeat_mode) {
@@ -586,6 +753,10 @@ void videoTimer(GR_OBJ *gobj) {
                 sendTclCommand(v->eof_script);
                 v->eof_fired = 1;  // Ensure one-shot behavior
             }
+            // Stop audio
+            if (v->audio_device_initialized) {
+                ma_device_stop(&v->audio_device);
+            }
             // Stay at EOF - no further processing needed
             return;
         }
@@ -593,6 +764,12 @@ void videoTimer(GR_OBJ *gobj) {
         // Handle repeat mode - restart the video
         av_seek_frame(v->format_ctx, v->video_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
         avcodec_flush_buffers(v->codec_ctx);
+        if (v->has_audio) {
+            avcodec_flush_buffers(v->audio_codec_ctx);
+            // Reset audio buffer
+            v->audio_write_pos = 0;
+            v->audio_read_pos = 0;
+        }
         v->eof_reached = 0;
         v->eof_fired = 0;      // Reset for potential future EOF
         v->current_time = 0.0;
@@ -652,6 +829,14 @@ void videoTimer(GR_OBJ *gobj) {
 void videoDelete(GR_OBJ *gobj) {
     FFMPEG_VIDEO *v = (FFMPEG_VIDEO *) GR_CLIENTDATA(gobj);
 
+    // Clean up audio resources
+    if (v->audio_device_initialized) {
+        ma_device_uninit(&v->audio_device);
+    }
+    if (v->audio_buffer) free(v->audio_buffer);
+    if (v->swr_ctx) swr_free(&v->swr_ctx);
+    if (v->audio_codec_ctx) avcodec_free_context(&v->audio_codec_ctx);
+
     // Clean up FFmpeg resources
     if (v->sws_ctx) sws_freeContext(v->sws_ctx);
     if (v->rgb_frame) av_frame_free(&v->rgb_frame);
@@ -673,9 +858,21 @@ void videoDelete(GR_OBJ *gobj) {
 void videoReset(GR_OBJ *gobj) {
     FFMPEG_VIDEO *v = (FFMPEG_VIDEO *) GR_CLIENTDATA(gobj);
     
+    // Stop audio
+    if (v->audio_device_initialized) {
+        ma_device_stop(&v->audio_device);
+    }
+    
     // Seek to beginning
     av_seek_frame(v->format_ctx, v->video_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
     avcodec_flush_buffers(v->codec_ctx);
+    
+    // Reset audio
+    if (v->has_audio) {
+        avcodec_flush_buffers(v->audio_codec_ctx);
+        v->audio_write_pos = 0;
+        v->audio_read_pos = 0;
+    }
     
     v->eof_reached = 0;
     v->current_time = 0.0;
@@ -824,6 +1021,70 @@ int videoCreate(OBJ_LIST *objlist, char *filename) {
     v->mask_width = 0.4f;      // 40% of video width
     v->mask_height = 0.3f;     // 30% of video height
     v->mask_feather = 0.05f;   // 5% feathering for soft edges
+
+    // Initialize audio (optional - video plays fine without audio)
+    v->has_audio = 0;
+    v->audio_enabled = 1;     // Enable by default if audio exists
+    v->audio_device_initialized = 0;
+    v->audio_stream_idx = av_find_best_stream(v->format_ctx, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
+    
+    if (v->audio_stream_idx >= 0) {
+        AVStream *audio_stream = v->format_ctx->streams[v->audio_stream_idx];
+        const AVCodec *audio_codec = avcodec_find_decoder(audio_stream->codecpar->codec_id);
+        
+        if (audio_codec) {
+            v->audio_codec_ctx = avcodec_alloc_context3(audio_codec);
+            avcodec_parameters_to_context(v->audio_codec_ctx, audio_stream->codecpar);
+            
+            if (avcodec_open2(v->audio_codec_ctx, audio_codec, NULL) >= 0) {
+                v->has_audio = 1;
+                
+                // Set up resampler to convert to float stereo at 48kHz
+                v->audio_sample_rate = 48000;
+                v->audio_channels = 2;
+                
+                v->swr_ctx = swr_alloc();
+                av_opt_set_chlayout(v->swr_ctx, "in_chlayout", &v->audio_codec_ctx->ch_layout, 0);
+                av_opt_set_int(v->swr_ctx, "in_sample_rate", v->audio_codec_ctx->sample_rate, 0);
+                av_opt_set_sample_fmt(v->swr_ctx, "in_sample_fmt", v->audio_codec_ctx->sample_fmt, 0);
+                
+                AVChannelLayout out_layout = AV_CHANNEL_LAYOUT_STEREO;
+                av_opt_set_chlayout(v->swr_ctx, "out_chlayout", &out_layout, 0);
+                av_opt_set_int(v->swr_ctx, "out_sample_rate", v->audio_sample_rate, 0);
+                av_opt_set_sample_fmt(v->swr_ctx, "out_sample_fmt", AV_SAMPLE_FMT_FLT, 0);
+                
+                if (swr_init(v->swr_ctx) >= 0) {
+                    // Allocate ring buffer (~1 second of audio)
+                    v->audio_buffer_size = v->audio_sample_rate * v->audio_channels * 2;
+                    v->audio_buffer = (float *)calloc(v->audio_buffer_size, sizeof(float));
+                    v->audio_write_pos = 0;
+                    v->audio_read_pos = 0;
+                    
+                    // Initialize miniaudio device
+                    ma_device_config config = ma_device_config_init(ma_device_type_playback);
+                    config.playback.format = ma_format_f32;
+                    config.playback.channels = v->audio_channels;
+                    config.sampleRate = v->audio_sample_rate;
+                    config.dataCallback = audio_data_callback;
+                    config.pUserData = v;
+                    
+                    if (ma_device_init(NULL, &config, &v->audio_device) == MA_SUCCESS) {
+                        v->audio_device_initialized = 1;
+                        // Don't start yet - will start when video plays
+                    } else {
+                        fprintf(getConsoleFP(), "warning: failed to initialize audio device\n");
+                        free(v->audio_buffer);
+                        v->audio_buffer = NULL;
+                        v->has_audio = 0;
+                    }
+                } else {
+                    fprintf(getConsoleFP(), "warning: failed to initialize audio resampler\n");
+                    swr_free(&v->swr_ctx);
+                    v->has_audio = 0;
+                }
+            }
+        }
+    }
     
     // Initialize OpenGL resources
     if (init_gl_resources(v) < 0) {
@@ -1009,6 +1270,16 @@ static int videopauseCmd(ClientData clientData, Tcl_Interp *interp,
         // Starting playback - record the start time
         v->video_start_time = getStimTime() / 1000.0;
         v->frames_decoded = 1;  // We already have first frame loaded
+        
+        // Start audio playback
+        if (v->audio_device_initialized && v->audio_enabled) {
+            ma_device_start(&v->audio_device);
+        }
+    } else if (pause && !v->paused) {
+        // Stopping playback - stop audio
+        if (v->audio_device_initialized) {
+            ma_device_stop(&v->audio_device);
+        }
     }
     
     v->paused = pause;
@@ -1453,6 +1724,57 @@ static int videomaskCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
+// Audio enable/disable control
+static int videoaudioCmd(ClientData clientData, Tcl_Interp *interp,
+                        int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *) clientData;
+    FFMPEG_VIDEO *v;
+    int id, enable;
+
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " id [enable(0/1)]", NULL);
+        return TCL_ERROR;
+    }
+
+    if ((id = resolveObjId(interp, (ObjNameInfo *)OL_NAMEINFO(olist),
+			   argv[1], VideoID, "video")) < 0)
+      return TCL_ERROR;
+    
+    v = GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    // Query mode - return current state and whether audio exists
+    if (argc == 2) {
+        Tcl_Obj *listObj = Tcl_NewListObj(0, NULL);
+        Tcl_ListObjAppendElement(interp, listObj, Tcl_NewIntObj(v->has_audio));
+        Tcl_ListObjAppendElement(interp, listObj, Tcl_NewIntObj(v->audio_enabled));
+        Tcl_SetObjResult(interp, listObj);
+        return TCL_OK;
+    }
+    
+    if (Tcl_GetInt(interp, argv[2], &enable) != TCL_OK) return TCL_ERROR;
+    
+    // Only matters if video has audio
+    if (!v->has_audio) {
+        return TCL_OK;
+    }
+    
+    if (enable && !v->audio_enabled) {
+        // Enabling audio
+        v->audio_enabled = 1;
+        if (!v->paused && v->audio_device_initialized) {
+            ma_device_start(&v->audio_device);
+        }
+    } else if (!enable && v->audio_enabled) {
+        // Disabling audio
+        v->audio_enabled = 0;
+        if (v->audio_device_initialized) {
+            ma_device_stop(&v->audio_device);
+        }
+    }
+    
+    return TCL_OK;
+}
+
 #ifdef _WIN32
 EXPORT(int, Video_Init) (Tcl_Interp *interp)
 #else
@@ -1525,12 +1847,9 @@ int Video_Init(Tcl_Interp *interp)
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
     Tcl_CreateCommand(interp, "videoMask", (Tcl_CmdProc *) videomaskCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+    Tcl_CreateCommand(interp, "videoAudio", (Tcl_CmdProc *) videoaudioCmd,
+                      (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
-    Tcl_Eval(interp, 
-	     "proc videoAsset {filename} {\n"
-	     "  return [video [assetFind $filename]]\n"
-	     "}\n");
-    
     return TCL_OK;
 }
 
