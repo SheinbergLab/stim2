@@ -1,0 +1,17 @@
+[Unit]
+Description=Stim2 Stimulus Presentation (X11)
+After=systemd-user-sessions.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/xinit /usr/local/stim2/stim2 -F -f /usr/local/stim2/config/linux.cfg -- :0 vt1 -keeptty -noreset
+Restart=always
+RestartSec=5
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=50
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=tty
+
+[Install]
+WantedBy=multi-user.target
