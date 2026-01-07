@@ -2053,8 +2053,11 @@
                                      data-paramtype="choice"
                                      onchange="onParamChange(this)">`;
                      for (const choice of choices) {
-                         const selected = choice === defaultVal ? 'selected' : '';
-                         html += `<option value="${choice}" ${selected}>${choice}</option>`;
+                         // Handle both simple strings and {value, label} objects
+                         const choiceValue = typeof choice === 'object' ? choice.value : choice;
+                         const choiceLabel = typeof choice === 'object' ? choice.label : choice;
+                         const selected = choiceValue === defaultVal ? 'selected' : '';
+                         html += `<option value="${choiceValue}" ${selected}>${choiceLabel}</option>`;
                      }
                      html += '</select>';
                      break;
