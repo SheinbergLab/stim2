@@ -1526,6 +1526,11 @@ int Video_Init(Tcl_Interp *interp)
     Tcl_CreateCommand(interp, "videoMask", (Tcl_CmdProc *) videomaskCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
+    Tcl_Eval(interp, 
+	     "proc videoAsset {filename} {\n"
+	     "  return [video [assetFind $filename]]\n"
+	     "}\n");
+    
     return TCL_OK;
 }
 
