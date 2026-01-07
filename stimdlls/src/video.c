@@ -18,11 +18,20 @@
 #include <string.h>
 
 #include <libavformat/avformat.h>
+#include <libavformat/version.h>
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
+#include <libavutil/version.h>
+
+// FFmpeg 5.1+ uses new channel layout API (AVChannelLayout)
+// Older versions use channel_layout (uint64_t bitmask)
+#if LIBAVUTIL_VERSION_MAJOR >= 57
+#define HAVE_NEW_CHANNEL_LAYOUT_API 1
+#include <libavutil/channel_layout.h>
+#endif
 
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
@@ -1044,12 +1053,20 @@ int videoCreate(OBJ_LIST *objlist, char *filename) {
                 v->audio_channels = 2;
                 
                 v->swr_ctx = swr_alloc();
+#if HAVE_NEW_CHANNEL_LAYOUT_API
                 av_opt_set_chlayout(v->swr_ctx, "in_chlayout", &v->audio_codec_ctx->ch_layout, 0);
                 av_opt_set_int(v->swr_ctx, "in_sample_rate", v->audio_codec_ctx->sample_rate, 0);
                 av_opt_set_sample_fmt(v->swr_ctx, "in_sample_fmt", v->audio_codec_ctx->sample_fmt, 0);
                 
                 AVChannelLayout out_layout = AV_CHANNEL_LAYOUT_STEREO;
                 av_opt_set_chlayout(v->swr_ctx, "out_chlayout", &out_layout, 0);
+#else
+                av_opt_set_channel_layout(v->swr_ctx, "in_channel_layout", v->audio_codec_ctx->channel_layout, 0);
+                av_opt_set_int(v->swr_ctx, "in_sample_rate", v->audio_codec_ctx->sample_rate, 0);
+                av_opt_set_sample_fmt(v->swr_ctx, "in_sample_fmt", v->audio_codec_ctx->sample_fmt, 0);
+                
+                av_opt_set_channel_layout(v->swr_ctx, "out_channel_layout", AV_CH_LAYOUT_STEREO, 0);
+#endif
                 av_opt_set_int(v->swr_ctx, "out_sample_rate", v->audio_sample_rate, 0);
                 av_opt_set_sample_fmt(v->swr_ctx, "out_sample_fmt", AV_SAMPLE_FMT_FLT, 0);
                 
@@ -1111,7 +1128,11 @@ static int videoinfoCmd(ClientData clientData, Tcl_Interp *interp,
 			int argc, char *argv[]) {
   AVFormatContext *format_ctx = NULL;
   AVStream *video_stream = NULL;
+#if LIBAVFORMAT_VERSION_MAJOR >= 59
   const AVCodec *codec = NULL;
+#else
+  AVCodec *codec = NULL;
+#endif
   int video_stream_idx;
   int ret;
   Tcl_Obj *dictObj;
