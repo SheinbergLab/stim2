@@ -40,6 +40,21 @@ typedef struct {
 
 static int MetagroupID = -1;	/* unique object id */
 
+void metagroupTimer(GR_OBJ *o)
+{
+  int i, id;
+  METAGROUP *mg = (METAGROUP *) GR_CLIENTDATA(o);
+  GR_OBJ *g;
+  
+  for (i = 0; i < mg->nobjs; i++) {
+    id = mg->objects[i];
+    if (id >= 0 && id < OL_NOBJS(mg->objlist)) {
+      g = OL_OBJ(mg->objlist, id);
+      if (g && GR_VISIBLE(g) && GR_TIMERFUNCP(g)) GR_TIMERFUNC(g)(g);
+    }
+  }
+}
+
 void metagroupDraw(GR_OBJ *o) 
 {
   int i, id;
@@ -131,7 +146,8 @@ int metagroupCreate(OBJ_LIST *objlist)
   GR_DELETEFUNCP(obj) = metagroupDelete;
   GR_UPDATEFUNCP(obj) = metagroupUpdate;
   GR_RESETFUNCP(obj) = metagroupReset;
-
+  GR_TIMERFUNCP(obj) = metagroupTimer;
+ 
   g = (METAGROUP *) calloc(1, sizeof(METAGROUP));
   GR_CLIENTDATA(obj) = g;
 
