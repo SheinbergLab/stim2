@@ -285,7 +285,7 @@ add_stim_module(text SOURCES ${SRC_DIR}/text.c)
 ###############################
 if(NOT WIN32)
     find_package(PkgConfig REQUIRED)
-    pkg_check_modules(FFMPEG REQUIRED libavformat libavcodec libswscale libavutil)
+    pkg_check_modules(FFMPEG REQUIRED libavformat libavcodec libswscale libswresample libavutil)
 
     add_stim_module(video
         SOURCES ${SRC_DIR}/video.c
