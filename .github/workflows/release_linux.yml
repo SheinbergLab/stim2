@@ -30,12 +30,25 @@ jobs:
             container: debian:13
             distro: trixie
             arch: arm64
+          # Ubuntu 22.04 (Jammy) - FFmpeg 4.x / libav 58
+          - runner: ubuntu-22.04
+            container: ubuntu:22.04
+            distro: jammy
+            arch: amd64
+          # Ubuntu 24.04 (Noble) - FFmpeg 6.x / libav 60
+          - runner: ubuntu-24.04
+            container: ubuntu:24.04
+            distro: noble
+            arch: amd64
 
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
 
     permissions:
       contents: write
+
+    env:
+      DEBIAN_FRONTEND: noninteractive
 
     steps:
 
@@ -153,9 +166,22 @@ jobs:
             container: debian:13
             distro: trixie
             arch: arm64
+          # Test Jammy packages on Ubuntu 22.04
+          - runner: ubuntu-22.04
+            container: ubuntu:22.04
+            distro: jammy
+            arch: amd64
+          # Test Noble packages on Ubuntu 24.04
+          - runner: ubuntu-24.04
+            container: ubuntu:24.04
+            distro: noble
+            arch: amd64
 
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
+
+    env:
+      DEBIAN_FRONTEND: noninteractive
 
     steps:
 
@@ -163,8 +189,14 @@ jobs:
         run: |
           apt update
           apt install -y sudo wget ca-certificates git build-essential zlib1g-dev
+          # Debian 12 (Bookworm) - libav 59
           sudo apt install -y libavformat59 libavcodec59 libswscale6 libswresample4 || true
+          # Debian 13 (Trixie) - libav 61
           sudo apt install -y libavformat61 libavcodec61 libswscale8 libswresample5 || true
+          # Ubuntu 22.04 (Jammy) - libav 58
+          sudo apt install -y libavformat58 libavcodec58 libswscale5 libswresample3 || true
+          # Ubuntu 24.04 (Noble) - libav 60
+          sudo apt install -y libavformat60 libavcodec60 libswscale7 libswresample4 || true
           sudo apt install -y libglew2.2 libfreetype6 libopenal1
 
       - name: Check out our stim2 code for the current tag
