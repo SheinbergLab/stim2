@@ -136,6 +136,13 @@ typedef struct _ffmpeg_video {
 } FFMPEG_VIDEO;
 
 static int VideoID = -1;  /* unique video object id */
+
+
+// Default audio device name pattern (NULL = system default)
+// Set to "Audio" to prefer USB audio devices by default
+static char *DefaultAudioDevice = NULL;
+
+
 static GLuint VideoShaderProgram = 0;  /* shared shader program */
 static GLint VideoUniformTexture = -1;
 static GLint VideoUniformModelview = -1;
@@ -522,6 +529,44 @@ static void audio_buffer_write(FFMPEG_VIDEO *v, float *data, int samples) {
         v->audio_buffer[v->audio_write_pos] = data[i];
         v->audio_write_pos = (v->audio_write_pos + 1) % v->audio_buffer_size;
     }
+}
+
+// Find audio device by name pattern, returns device ID or NULL for default
+// Caller must free the returned ma_device_id if non-NULL
+static ma_device_id *find_audio_device(const char *name_pattern, char *found_name, size_t name_size) {
+  if (!name_pattern || strlen(name_pattern) == 0) {
+    return NULL;  // Use default
+  }
+  
+  ma_context context;
+  ma_device_id *result = NULL;
+  
+  if (ma_context_init(NULL, 0, NULL, &context) != MA_SUCCESS) {
+    return NULL;
+  }
+  
+  ma_device_info *playback_devices;
+  ma_uint32 playback_count;
+  
+  if (ma_context_get_devices(&context, &playback_devices,
+			     &playback_count, NULL, NULL) == MA_SUCCESS) {
+    for (ma_uint32 i = 0; i < playback_count; i++) {
+      if (strstr(playback_devices[i].name, name_pattern) != NULL) {
+	result = (ma_device_id *)malloc(sizeof(ma_device_id));
+	if (result) {
+	  *result = playback_devices[i].id;
+	  if (found_name && name_size > 0) {
+	    strncpy(found_name, playback_devices[i].name, name_size - 1);
+	    found_name[name_size - 1] = '\0';
+	  }
+	}
+	break;
+      }
+    }
+  }
+  
+  ma_context_uninit(&context);
+  return result;
 }
 
 // Decode next frame if needed
@@ -1071,14 +1116,65 @@ int videoCreate(OBJ_LIST *objlist, char *filename) {
                 av_opt_set_sample_fmt(v->swr_ctx, "out_sample_fmt", AV_SAMPLE_FMT_FLT, 0);
                 
                 if (swr_init(v->swr_ctx) >= 0) {
-                    // Allocate ring buffer (~1 second of audio)
+                   // Allocate ring buffer (~1 second of audio)
                     v->audio_buffer_size = v->audio_sample_rate * v->audio_channels * 2;
                     v->audio_buffer = (float *)calloc(v->audio_buffer_size, sizeof(float));
                     v->audio_write_pos = 0;
                     v->audio_read_pos = 0;
                     
-                    // Initialize miniaudio device
+                    // Initialize miniaudio device with optional device selection
                     ma_device_config config = ma_device_config_init(ma_device_type_playback);
+                    config.playback.format = ma_format_f32;
+                    config.playback.channels = v->audio_channels;
+                    config.sampleRate = v->audio_sample_rate;
+                    config.dataCallback = audio_data_callback;
+                    config.pUserData = v;
+                    
+#ifdef __linux__
+                    // ALSA-specific: disable mmap for better USB audio compatibility
+                    config.alsa.noMMap = MA_TRUE;
+#endif
+                    
+                    // Determine which device to use:
+                    // 1. Environment variable STIM_AUDIO_DEVICE overrides all
+                    // 2. Otherwise use DefaultAudioDevice (set via audioDevice command)
+                    // 3. If device not found, fall back to system default
+                    const char *device_pattern = getenv("STIM_AUDIO_DEVICE");
+                    if (!device_pattern) {
+                        device_pattern = DefaultAudioDevice;
+                    }
+                    
+                    char found_device_name[256] = {0};
+                    ma_device_id *selected_device = find_audio_device(device_pattern, 
+                                                                       found_device_name, 
+                                                                       sizeof(found_device_name));
+                    
+                    if (selected_device) {
+                        config.playback.pDeviceID = selected_device;
+                        fprintf(getConsoleFP(), "audio: selected '%s'\n", found_device_name);
+                    } else if (device_pattern && strlen(device_pattern) > 0) {
+                        fprintf(getConsoleFP(), "audio: device '%s' not found, using default\n", 
+                                device_pattern);
+                    }
+                    
+                    if (ma_device_init(NULL, &config, &v->audio_device) == MA_SUCCESS) {
+                        v->audio_device_initialized = 1;
+                        fprintf(getConsoleFP(), "audio: initialized '%s' (%d ch @ %d Hz)\n",
+                                v->audio_device.playback.name,
+                                v->audio_device.playback.channels,
+                                v->audio_device.sampleRate);
+                    } else {
+                        fprintf(getConsoleFP(), "warning: failed to initialize audio device\n");
+                        free(v->audio_buffer);
+                        v->audio_buffer = NULL;
+                        v->has_audio = 0;
+                    }
+                    
+                    // Clean up device ID if we allocated one
+                    if (selected_device) {
+                        free(selected_device);
+                    }
+		    
                     config.playback.format = ma_format_f32;
                     config.playback.channels = v->audio_channels;
                     config.sampleRate = v->audio_sample_rate;
@@ -1796,6 +1892,95 @@ static int videoaudioCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
+
+static int audiodevicesCmd(ClientData clientData, Tcl_Interp *interp,
+                           int argc, char *argv[]) {
+    (void)clientData;
+    (void)argc;
+    (void)argv;
+    
+    ma_context context;
+    
+    if (ma_context_init(NULL, 0, NULL, &context) != MA_SUCCESS) {
+        Tcl_SetResult(interp, "failed to initialize audio context", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    ma_device_info *playback_devices;
+    ma_uint32 playback_count;
+    
+    if (ma_context_get_devices(&context, &playback_devices, &playback_count, NULL, NULL) != MA_SUCCESS) {
+        ma_context_uninit(&context);
+        Tcl_SetResult(interp, "failed to enumerate audio devices", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    Tcl_Obj *listObj = Tcl_NewListObj(0, NULL);
+    
+    for (ma_uint32 i = 0; i < playback_count; i++) {
+        Tcl_Obj *deviceObj = Tcl_NewListObj(0, NULL);
+        Tcl_ListObjAppendElement(interp, deviceObj, Tcl_NewIntObj(i));
+        Tcl_ListObjAppendElement(interp, deviceObj, 
+                                 Tcl_NewStringObj(playback_devices[i].name, -1));
+        Tcl_ListObjAppendElement(interp, deviceObj, 
+                                 Tcl_NewIntObj(playback_devices[i].isDefault));
+        Tcl_ListObjAppendElement(interp, listObj, deviceObj);
+    }
+    
+    ma_context_uninit(&context);
+    Tcl_SetObjResult(interp, listObj);
+    return TCL_OK;
+}
+
+// Set or query default audio device pattern
+// Usage: audioDevice [pattern]
+//   With no args: returns current default device pattern
+//   With pattern: sets default device pattern for future video loads
+//   Pattern is matched against device names (e.g., "Audio" matches "USB Audio")
+//   Use "" or "default" to use system default
+static int audiodeviceCmd(ClientData clientData, Tcl_Interp *interp,
+                          int argc, char *argv[]) {
+  (void)clientData;
+  
+  if (argc == 1) {
+    // Query mode
+    Tcl_SetResult(interp, DefaultAudioDevice ? DefaultAudioDevice :
+		  "default", TCL_VOLATILE);
+    return TCL_OK;
+  }
+  
+  if (argc != 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " [device_pattern]", NULL);
+    return TCL_ERROR;
+  }
+  
+  // Set new default
+  // Set new default
+  if (DefaultAudioDevice) {
+    free(DefaultAudioDevice);
+    DefaultAudioDevice = NULL;
+  }
+  
+  if (strlen(argv[1]) == 0 || strcmp(argv[1], "default") == 0) {
+    DefaultAudioDevice = NULL;
+    Tcl_SetResult(interp, "default", TCL_STATIC);
+  } else {
+    DefaultAudioDevice = strdup(argv[1]);
+    Tcl_SetResult(interp, DefaultAudioDevice, TCL_VOLATILE);
+  }
+  
+  if (strlen(argv[1]) == 0 || strcmp(argv[1], "default") == 0) {
+    DefaultAudioDevice = NULL;
+    Tcl_SetResult(interp, "default", TCL_STATIC);
+  } else {
+    DefaultAudioDevice = strdup(argv[1]);
+    Tcl_SetResult(interp, DefaultAudioDevice, TCL_VOLATILE);
+  }
+  
+  return TCL_OK;
+}
+
+
 #ifdef _WIN32
 EXPORT(int, Video_Init) (Tcl_Interp *interp)
 #else
@@ -1835,6 +2020,11 @@ int Video_Init(Tcl_Interp *interp)
     }
     else return TCL_OK;
 
+
+    if (DefaultAudioDevice == NULL) {
+      DefaultAudioDevice = strdup("Audio");
+    }
+    
     Tcl_CreateCommand(interp, "videoInfo", (Tcl_CmdProc *) videoinfoCmd,
 		      (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
@@ -1871,6 +2061,11 @@ int Video_Init(Tcl_Interp *interp)
     Tcl_CreateCommand(interp, "videoAudio", (Tcl_CmdProc *) videoaudioCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
+    Tcl_CreateCommand(interp, "audioDevices", (Tcl_CmdProc *) audiodevicesCmd,
+                      (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+    Tcl_CreateCommand(interp, "audioDevice", (Tcl_CmdProc *) audiodeviceCmd,
+                      (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+    
     return TCL_OK;
 }
 
