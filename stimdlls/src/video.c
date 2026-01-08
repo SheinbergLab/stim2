@@ -1122,78 +1122,27 @@ int videoCreate(OBJ_LIST *objlist, char *filename) {
                     v->audio_write_pos = 0;
                     v->audio_read_pos = 0;
                     
-                    // Initialize miniaudio device with optional device selection
+                    // Initialize miniaudio device
                     ma_device_config config = ma_device_config_init(ma_device_type_playback);
                     config.playback.format = ma_format_f32;
                     config.playback.channels = v->audio_channels;
                     config.sampleRate = v->audio_sample_rate;
                     config.dataCallback = audio_data_callback;
                     config.pUserData = v;
-                    
+		    
 #ifdef __linux__
                     // ALSA-specific: disable mmap for better USB audio compatibility
                     config.alsa.noMMap = MA_TRUE;
 #endif
                     
-                    // Determine which device to use:
-                    // 1. Environment variable STIM_AUDIO_DEVICE overrides all
-                    // 2. Otherwise use DefaultAudioDevice (set via audioDevice command)
-                    // 3. If device not found, fall back to system default
-                    const char *device_pattern = getenv("STIM_AUDIO_DEVICE");
-                    if (!device_pattern) {
-                        device_pattern = DefaultAudioDevice;
-                    }
-                    
-                    char found_device_name[256] = {0};
-                    ma_device_id *selected_device = find_audio_device(device_pattern, 
-                                                                       found_device_name, 
-                                                                       sizeof(found_device_name));
-                    
-                    if (selected_device) {
-                        config.playback.pDeviceID = selected_device;
-                        fprintf(getConsoleFP(), "audio: selected '%s'\n", found_device_name);
-                    } else if (device_pattern && strlen(device_pattern) > 0) {
-                        fprintf(getConsoleFP(), "audio: device '%s' not found, using default\n", 
-                                device_pattern);
-                    }
-                    
-                    if (ma_device_init(NULL, &config, &v->audio_device) == MA_SUCCESS) {
-                        v->audio_device_initialized = 1;
-                        fprintf(getConsoleFP(), "audio: initialized '%s' (%d ch @ %d Hz)\n",
-                                v->audio_device.playback.name,
-                                v->audio_device.playback.channels,
-                                v->audio_device.sampleRate);
-                    } else {
-                        fprintf(getConsoleFP(), "warning: failed to initialize audio device\n");
-                        free(v->audio_buffer);
-                        v->audio_buffer = NULL;
-                        v->has_audio = 0;
-                    }
-                    
-                    // Clean up device ID if we allocated one
-                    if (selected_device) {
-                        free(selected_device);
-                    }
-		    
-                    config.playback.format = ma_format_f32;
-                    config.playback.channels = v->audio_channels;
-                    config.sampleRate = v->audio_sample_rate;
-                    config.dataCallback = audio_data_callback;
-                    config.pUserData = v;
-                    
-                    if (ma_device_init(NULL, &config, &v->audio_device) == MA_SUCCESS) {
-                        v->audio_device_initialized = 1;
-                        // Don't start yet - will start when video plays
-                    } else {
-                        fprintf(getConsoleFP(), "warning: failed to initialize audio device\n");
-                        free(v->audio_buffer);
-                        v->audio_buffer = NULL;
-                        v->has_audio = 0;
-                    }
-                } else {
-                    fprintf(getConsoleFP(), "warning: failed to initialize audio resampler\n");
-                    swr_free(&v->swr_ctx);
-                    v->has_audio = 0;
+		    if (ma_device_init(NULL, &config, &v->audio_device) == MA_SUCCESS) {
+		      v->audio_device_initialized = 1;
+		    } else {
+		      fprintf(getConsoleFP(), "warning: failed to initialize audio device\n");
+		      free(v->audio_buffer);
+		      v->audio_buffer = NULL;
+		      v->has_audio = 0;
+		    }
                 }
             }
         }
@@ -2020,11 +1969,6 @@ int Video_Init(Tcl_Interp *interp)
     }
     else return TCL_OK;
 
-
-    if (DefaultAudioDevice == NULL) {
-      DefaultAudioDevice = strdup("Audio");
-    }
-    
     Tcl_CreateCommand(interp, "videoInfo", (Tcl_CmdProc *) videoinfoCmd,
 		      (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
