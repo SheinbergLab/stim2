@@ -1404,7 +1404,8 @@ static int videoseekCmd(ClientData clientData, Tcl_Interp *interp,
     double time;
     
     if (argc < 3) {
-        Tcl_AppendResult(interp, "usage: ", argv[0], " id time_in_seconds", NULL);
+        Tcl_AppendResult(interp, "usage: ", argv[0],
+			 " id time_in_seconds", NULL);
         return TCL_ERROR;
     }
     
@@ -1419,7 +1420,8 @@ static int videoseekCmd(ClientData clientData, Tcl_Interp *interp,
     // Seek to specified time
     int64_t timestamp = av_rescale_q(time * AV_TIME_BASE, 
                                      AV_TIME_BASE_Q, v->time_base);
-    av_seek_frame(v->format_ctx, v->video_stream_idx, timestamp, AVSEEK_FLAG_BACKWARD);
+    av_seek_frame(v->format_ctx, v->video_stream_idx,
+		  timestamp, AVSEEK_FLAG_BACKWARD);
     avcodec_flush_buffers(v->codec_ctx);
 
     // Reset audio state
@@ -1427,10 +1429,17 @@ static int videoseekCmd(ClientData clientData, Tcl_Interp *interp,
         avcodec_flush_buffers(v->audio_codec_ctx);
         v->audio_write_pos = 0;
         v->audio_read_pos = 0;
+
+        // Restart audio device if video is playing
+        if (v->audio_device_initialized && v->audio_enabled && !v->paused) {
+	  ma_device_stop(&v->audio_device);
+	  ma_device_start(&v->audio_device);
+        }	
     }
     
     v->current_time = time;
     v->eof_reached = 0;
+    v->eof_fired = 0;    
     v->needs_frame_update = 1;
     
     return TCL_OK;
