@@ -1421,6 +1421,13 @@ static int videoseekCmd(ClientData clientData, Tcl_Interp *interp,
                                      AV_TIME_BASE_Q, v->time_base);
     av_seek_frame(v->format_ctx, v->video_stream_idx, timestamp, AVSEEK_FLAG_BACKWARD);
     avcodec_flush_buffers(v->codec_ctx);
+
+    // Reset audio state
+    if (v->has_audio) {
+        avcodec_flush_buffers(v->audio_codec_ctx);
+        v->audio_write_pos = 0;
+        v->audio_read_pos = 0;
+    }
     
     v->current_time = time;
     v->eof_reached = 0;
