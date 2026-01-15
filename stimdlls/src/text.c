@@ -10,6 +10,10 @@
  *   - Multiple sizes from same font
  *   - Text measurement
  *   - Justification (left/center/right)
+ *   - Multiline text with \n
+ *   - Word wrapping to specified width
+ *   - Line spacing control
+ *   - Vertical alignment (top/center/bottom)
  *
  *  No FreeType dependency - uses header-only stb_truetype
  */
@@ -70,19 +74,36 @@ static FontSystem* gFontSystem = NULL;
 /*                    Text Object Structure                     */
 /****************************************************************/
 
+enum { 
+    TEXT_JUSTIFY_LEFT = 0, 
+    TEXT_JUSTIFY_CENTER = 1, 
+    TEXT_JUSTIFY_RIGHT = 2 
+};
+
+enum {
+    TEXT_VALIGN_TOP = 0,
+    TEXT_VALIGN_CENTER = 1,
+    TEXT_VALIGN_BOTTOM = 2
+};
+
 typedef struct {
     char* string;
     int fontId;
     float fontSize;
     float color[4];
     int justify;             /* 0=left, 1=center, 2=right */
+    int valign;              /* 0=top, 1=center, 2=bottom */
+    
+    /* Multiline support */
+    float wrapWidth;         /* 0 = no wrap, >0 = wrap to this width in degrees */
+    float lineSpacing;       /* Line height multiplier (default 1.3) */
     
     /* Cached geometry */
     GLfloat* verts;
     GLfloat* texcoords;
     int numQuads;
     
-    /* Measured bounds */
+    /* Measured bounds (total for all lines) */
     float width;
     float height;
     float ascender;
@@ -103,8 +124,6 @@ static GLint TextUniformTexture = -1;
 static GLint TextUniformModelview = -1;
 static GLint TextUniformProjection = -1;
 static GLint TextUniformColor = -1;
-
-enum { TEXT_JUSTIFY_LEFT = 0, TEXT_JUSTIFY_CENTER = 1, TEXT_JUSTIFY_RIGHT = 2 };
 
 /****************************************************************/
 /*                    Shader Code                               */
@@ -397,7 +416,180 @@ static int get_font_by_name(const char* name) {
 }
 
 /****************************************************************/
-/*                    Text Object                               */
+/*                    Line Processing                           */
+/****************************************************************/
+
+/* Structure for a processed line */
+typedef struct {
+    char* text;
+    float width;      /* Width in degrees */
+} TextLine;
+
+/* Measure text width in degrees at given font/size */
+static float measure_text_width(const char* str, int fontId, float fontSize) {
+    if (!gFontSystem || !gFontSystem->fs || !str || !*str) return 0.0f;
+    
+    FONScontext* fs = gFontSystem->fs;
+    float rasterSize = 64.0f;
+    
+    fonsSetFont(fs, fontId);
+    fonsSetSize(fs, rasterSize);
+    
+    float ascender, descender, lineHeight;
+    fonsVertMetrics(fs, &ascender, &descender, &lineHeight);
+    float emHeight = ascender - descender;
+    float scale = fontSize / emHeight;
+    
+    float bounds[4];
+    fonsTextBounds(fs, 0, 0, str, NULL, bounds);
+    
+    return (bounds[2] - bounds[0]) * scale;
+}
+
+/* Word wrap a single line to fit within maxWidth (in degrees)
+ * Returns array of TextLine structs, terminated by NULL text
+ * Caller must free the array and each text string
+ */
+static TextLine* wrap_line(const char* line, int fontId, float fontSize, float maxWidth) {
+    /* Count words to estimate max lines needed */
+    int wordCount = 1;
+    for (const char* p = line; *p; p++) {
+        if (*p == ' ') wordCount++;
+    }
+    
+    /* Allocate for worst case (each word on its own line) + terminator */
+    TextLine* lines = (TextLine*)calloc(wordCount + 1, sizeof(TextLine));
+    int lineCount = 0;
+    
+    if (maxWidth <= 0 || !*line) {
+        /* No wrapping - just copy the line */
+        lines[0].text = strdup(line);
+        lines[0].width = measure_text_width(line, fontId, fontSize);
+        return lines;
+    }
+    
+    /* Build lines word by word */
+    char* lineBuf = (char*)malloc(strlen(line) + 1);
+    lineBuf[0] = '\0';
+    float lineWidth = 0;
+    
+    const char* wordStart = line;
+    while (*wordStart) {
+        /* Skip leading spaces */
+        while (*wordStart == ' ') wordStart++;
+        if (!*wordStart) break;
+        
+        /* Find word end */
+        const char* wordEnd = wordStart;
+        while (*wordEnd && *wordEnd != ' ') wordEnd++;
+        
+        /* Extract word */
+        int wordLen = wordEnd - wordStart;
+        char* word = (char*)malloc(wordLen + 1);
+        strncpy(word, wordStart, wordLen);
+        word[wordLen] = '\0';
+        
+        /* Measure word (with leading space if not first word on line) */
+        char* testStr;
+        if (lineBuf[0]) {
+            testStr = (char*)malloc(strlen(lineBuf) + wordLen + 2);
+            sprintf(testStr, "%s %s", lineBuf, word);
+        } else {
+            testStr = strdup(word);
+        }
+        
+        float testWidth = measure_text_width(testStr, fontId, fontSize);
+        
+        if (testWidth > maxWidth && lineBuf[0]) {
+            /* Word doesn't fit - finish current line, start new one */
+            lines[lineCount].text = strdup(lineBuf);
+            lines[lineCount].width = lineWidth;
+            lineCount++;
+            
+            strcpy(lineBuf, word);
+            lineWidth = measure_text_width(word, fontId, fontSize);
+        } else {
+            /* Word fits - add to current line */
+            strcpy(lineBuf, testStr);
+            lineWidth = testWidth;
+        }
+        
+        free(word);
+        free(testStr);
+        wordStart = wordEnd;
+    }
+    
+    /* Don't forget the last line */
+    if (lineBuf[0]) {
+        lines[lineCount].text = strdup(lineBuf);
+        lines[lineCount].width = lineWidth;
+        lineCount++;
+    }
+    
+    free(lineBuf);
+    return lines;
+}
+
+/* Split string on newlines and apply word wrapping
+ * Returns array of TextLine structs, terminated by NULL text
+ */
+static TextLine* process_lines(const char* str, int fontId, float fontSize, float wrapWidth) {
+    /* Count newlines to estimate line count */
+    int newlineCount = 1;
+    for (const char* p = str; *p; p++) {
+        if (*p == '\n') newlineCount++;
+    }
+    
+    /* Allocate generous initial array */
+    int maxLines = newlineCount * 10;  /* Allow for word wrapping */
+    TextLine* allLines = (TextLine*)calloc(maxLines + 1, sizeof(TextLine));
+    int totalLines = 0;
+    
+    /* Make a working copy we can modify */
+    char* work = strdup(str);
+    char* line = work;
+    char* next;
+    
+    while (line) {
+        /* Find next newline */
+        next = strchr(line, '\n');
+        if (next) {
+            *next = '\0';
+            next++;
+        }
+        
+        /* Wrap this line */
+        TextLine* wrapped = wrap_line(line, fontId, fontSize, wrapWidth);
+        
+        /* Copy wrapped lines to output */
+        for (int i = 0; wrapped[i].text; i++) {
+            if (totalLines < maxLines) {
+                allLines[totalLines] = wrapped[i];
+                totalLines++;
+            } else {
+                free(wrapped[i].text);
+            }
+        }
+        free(wrapped);
+        
+        line = next;
+    }
+    
+    free(work);
+    return allLines;
+}
+
+/* Free lines array */
+static void free_lines(TextLine* lines) {
+    if (!lines) return;
+    for (int i = 0; lines[i].text; i++) {
+        free(lines[i].text);
+    }
+    free(lines);
+}
+
+/****************************************************************/
+/*                    Geometry Building                         */
 /****************************************************************/
 
 static void text_build_geometry(TEXT_OBJ* t) {
@@ -406,7 +598,7 @@ static void text_build_geometry(TEXT_OBJ* t) {
     FONScontext* fs = gFontSystem->fs;
     
     /* Set font state - use a reference size for rasterization */
-    float rasterSize = 64.0f;  /* Rasterize at 64px for quality */
+    float rasterSize = 64.0f;
     fonsSetFont(fs, t->fontId);
     fonsSetSize(fs, rasterSize);
     fonsSetAlign(fs, FONS_ALIGN_LEFT | FONS_ALIGN_BASELINE);
@@ -415,103 +607,142 @@ static void text_build_geometry(TEXT_OBJ* t) {
     float ascender, descender, lineHeight;
     fonsVertMetrics(fs, &ascender, &descender, &lineHeight);
     
-    /* Calculate scale: convert pixels to degrees
-     * fontSize is now in degrees (e.g., 1.0 = 1 degree tall)
-     * We use the em-height (ascender - descender) as the reference
-     * Note: descender is negative, so this is ascender + |descender|
-     */
+    /* Calculate scale */
     float emHeight = ascender - descender;
-    float scale = t->fontSize / emHeight;  /* degrees per pixel */
+    float scale = t->fontSize / emHeight;
     
-    /* Measure text */
-    float bounds[4];
-    float advance = fonsTextBounds(fs, 0, 0, t->string, NULL, bounds);
+    /* Process lines (split on \n and word wrap) */
+    TextLine* lines = process_lines(t->string, t->fontId, t->fontSize, t->wrapWidth);
     
-    /* Store dimensions in degrees */
-    t->width = (bounds[2] - bounds[0]) * scale;
-    t->height = (bounds[3] - bounds[1]) * scale;
+    /* Count lines and find max width */
+    int numLines = 0;
+    float maxWidth = 0;
+    for (int i = 0; lines[i].text; i++) {
+        numLines++;
+        if (lines[i].width > maxWidth) {
+            maxWidth = lines[i].width;
+        }
+    }
+    
+    /* Calculate total dimensions */
+    float lineHeightDeg = t->fontSize * t->lineSpacing;
+    float totalHeight = lineHeightDeg * numLines;
+    
+    t->width = maxWidth;
+    t->height = totalHeight;
     t->ascender = ascender * scale;
     t->descender = descender * scale;
     
-    /* Count quads needed */
-    int len = strlen(t->string);
-    int maxQuads = len;  /* One quad per character max */
+    /* Count total characters for geometry allocation */
+    int totalChars = 0;
+    for (int i = 0; lines[i].text; i++) {
+        totalChars += strlen(lines[i].text);
+    }
     
     /* Allocate geometry */
     if (t->verts) free(t->verts);
     if (t->texcoords) free(t->texcoords);
     
-    t->verts = (GLfloat*)malloc(maxQuads * 6 * 2 * sizeof(GLfloat));     /* 6 verts * 2 coords (x,y) */
-    t->texcoords = (GLfloat*)malloc(maxQuads * 6 * 2 * sizeof(GLfloat)); /* 6 verts * 2 coords (s,t) */
-    
-    /* Calculate offset based on justification (in pixels, will scale later) 
-     * For centering, we center the em-box, not just the glyph bounds.
-     * Em-box center is at y = (ascender + descender) / 2 from baseline
-     */
-    float pixelWidth = bounds[2] - bounds[0];
-    float emCenter = (ascender + descender) / 2.0f;  /* Center of em-box relative to baseline */
-    
-    float xoff = 0, yoff = 0;
-    switch (t->justify) {
-        case TEXT_JUSTIFY_CENTER:
-            xoff = -pixelWidth / 2.0f;
-            yoff = emCenter;  /* Shift baseline so em-box center is at origin */
-            break;
-        case TEXT_JUSTIFY_RIGHT:
-            xoff = -pixelWidth;
-            yoff = emCenter;
-            break;
-        case TEXT_JUSTIFY_LEFT:
-        default:
-            xoff = 0;
-            yoff = emCenter;
-            break;
-    }
-    
-    /* First call fonsDrawText to ensure glyphs are rasterized to atlas */
-    fonsDrawText(fs, 0, 0, t->string, NULL);
-    
-    /* Now build quads using fontstash iterator */
-    FONStextIter iter;
-    FONSquad quad;
+    int maxQuads = totalChars;
+    t->verts = (GLfloat*)malloc(maxQuads * 6 * 2 * sizeof(GLfloat));
+    t->texcoords = (GLfloat*)malloc(maxQuads * 6 * 2 * sizeof(GLfloat));
     
     GLfloat* vptr = t->verts;
     GLfloat* tptr = t->texcoords;
     int numQuads = 0;
     
-    /* Start at xoff, with baseline at y=0 (yoff adjusts for centering) */
-    fonsTextIterInit(fs, &iter, xoff, 0, t->string, NULL);
+    /* Calculate starting Y based on vertical alignment */
+    float startY;
+    float emCenter = (ascender + descender) / 2.0f * scale;
     
-    while (fonsTextIterNext(fs, &iter, &quad)) {
-        /* Scale positions to degrees and flip Y axis (negate Y) 
-         * Apply yoff for vertical centering */
-        float x0 = quad.x0 * scale;
-        float x1 = quad.x1 * scale;
-        float y0 = -(quad.y0 + yoff) * scale;  /* Flip Y and apply centering offset */
-        float y1 = -(quad.y1 + yoff) * scale;  /* Flip Y and apply centering offset */
-        
-        /* Triangle 1: v0, v1, v2 */
-        *vptr++ = x0; *vptr++ = y0;
-        *tptr++ = quad.s0; *tptr++ = quad.t0;
-        
-        *vptr++ = x1; *vptr++ = y0;
-        *tptr++ = quad.s1; *tptr++ = quad.t0;
-        
-        *vptr++ = x1; *vptr++ = y1;
-        *tptr++ = quad.s1; *tptr++ = quad.t1;
-        
-        /* Triangle 2: v0, v2, v3 */
-        *vptr++ = x0; *vptr++ = y0;
-        *tptr++ = quad.s0; *tptr++ = quad.t0;
-        
-        *vptr++ = x1; *vptr++ = y1;
-        *tptr++ = quad.s1; *tptr++ = quad.t1;
-        
-        *vptr++ = x0; *vptr++ = y1;
-        *tptr++ = quad.s0; *tptr++ = quad.t1;
-        
-        numQuads++;
+    switch (t->valign) {
+        case TEXT_VALIGN_TOP:
+            /* First line baseline at top, accounting for ascender */
+            startY = -t->ascender + emCenter;
+            break;
+        case TEXT_VALIGN_CENTER:
+            /* Center the whole block vertically */
+            startY = (totalHeight / 2.0f) - lineHeightDeg / 2.0f + emCenter;
+            break;
+        case TEXT_VALIGN_BOTTOM:
+            /* Last line at bottom */
+            startY = totalHeight - lineHeightDeg + emCenter;
+            break;
+        default:
+            startY = (totalHeight / 2.0f) - lineHeightDeg / 2.0f + emCenter;
     }
+    
+    /* Render each line */
+    float currentY = startY;
+    
+    for (int lineIdx = 0; lines[lineIdx].text; lineIdx++) {
+        const char* lineText = lines[lineIdx].text;
+        float lineWidth = lines[lineIdx].width;
+        
+        if (!lineText[0]) {
+            /* Empty line - just advance Y */
+            currentY -= lineHeightDeg;
+            continue;
+        }
+        
+        /* Calculate X offset based on justification */
+        float xoff = 0;
+        switch (t->justify) {
+            case TEXT_JUSTIFY_CENTER:
+                xoff = -lineWidth / (2.0f * scale);  /* Convert back to pixels for fontstash */
+                break;
+            case TEXT_JUSTIFY_RIGHT:
+                xoff = -lineWidth / scale;
+                break;
+            case TEXT_JUSTIFY_LEFT:
+            default:
+                xoff = 0;
+                break;
+        }
+        
+        /* Ensure glyphs are rasterized */
+        fonsDrawText(fs, 0, 0, lineText, NULL);
+        
+        /* Build quads for this line */
+        FONStextIter iter;
+        FONSquad quad;
+        
+        fonsTextIterInit(fs, &iter, xoff, 0, lineText, NULL);
+        
+        while (fonsTextIterNext(fs, &iter, &quad)) {
+            /* Scale positions to degrees and apply Y offset */
+            float x0 = quad.x0 * scale;
+            float x1 = quad.x1 * scale;
+            float y0 = currentY - quad.y0 * scale;
+            float y1 = currentY - quad.y1 * scale;
+            
+            /* Triangle 1 */
+            *vptr++ = x0; *vptr++ = y0;
+            *tptr++ = quad.s0; *tptr++ = quad.t0;
+            
+            *vptr++ = x1; *vptr++ = y0;
+            *tptr++ = quad.s1; *tptr++ = quad.t0;
+            
+            *vptr++ = x1; *vptr++ = y1;
+            *tptr++ = quad.s1; *tptr++ = quad.t1;
+            
+            /* Triangle 2 */
+            *vptr++ = x0; *vptr++ = y0;
+            *tptr++ = quad.s0; *tptr++ = quad.t0;
+            
+            *vptr++ = x1; *vptr++ = y1;
+            *tptr++ = quad.s1; *tptr++ = quad.t1;
+            
+            *vptr++ = x0; *vptr++ = y1;
+            *tptr++ = quad.s0; *tptr++ = quad.t1;
+            
+            numQuads++;
+        }
+        
+        currentY -= lineHeightDeg;
+    }
+    
+    free_lines(lines);
     
     t->numQuads = numQuads;
     
@@ -597,6 +828,9 @@ static int textCreate(OBJ_LIST* objlist, const char* string, int fontId, float f
     t->fontId = (fontId >= 0) ? fontId : gFontSystem->defaultFont;
     t->fontSize = fontSize;
     t->justify = TEXT_JUSTIFY_CENTER;
+    t->valign = TEXT_VALIGN_CENTER;
+    t->wrapWidth = 0;          /* No wrapping by default */
+    t->lineSpacing = 1.3f;     /* Default line spacing */
     
     /* Default white */
     t->color[0] = 1.0f;
@@ -610,12 +844,12 @@ static int textCreate(OBJ_LIST* objlist, const char* string, int fontId, float f
     
     glGenBuffers(1, &t->vbo_pos);
     glBindBuffer(GL_ARRAY_BUFFER, t->vbo_pos);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);  /* vec2 position */
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
     glEnableVertexAttribArray(0);
     
     glGenBuffers(1, &t->vbo_tex);
     glBindBuffer(GL_ARRAY_BUFFER, t->vbo_tex);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, NULL);  /* vec2 texcoord */
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, NULL);
     glEnableVertexAttribArray(1);
     
     glBindVertexArray(0);
@@ -631,7 +865,7 @@ static int textCreate(OBJ_LIST* objlist, const char* string, int fontId, float f
 /*                    Tcl Commands                              */
 /****************************************************************/
 
-/* textFont name filename ?size? - Load a font */
+/* textFont name filename - Load a font */
 static int textfontCmd(ClientData clientData, Tcl_Interp *interp,
                        int argc, char *argv[]) {
     if (argc < 3) {
@@ -668,19 +902,22 @@ static int textpathCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
-/* text string ?-font fontname? ?-size pts? */
+/* text string ?-font fontname? ?-size pts? ?-wrap width? ?-spacing mult? */
 static int textCmd(ClientData clientData, Tcl_Interp *interp,
                    int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST*)clientData;
     
     if (argc < 2) {
-        Tcl_AppendResult(interp, "usage: ", argv[0], " string ?-font name? ?-size pts?", NULL);
+        Tcl_AppendResult(interp, "usage: ", argv[0], 
+            " string ?-font name? ?-size pts? ?-wrap width? ?-spacing mult?", NULL);
         return TCL_ERROR;
     }
     
     const char* string = argv[1];
     int fontId = gFontSystem ? gFontSystem->defaultFont : FONS_INVALID;
-    float fontSize = 24.0f;
+    float fontSize = 0.5f;
+    float wrapWidth = 0;
+    float lineSpacing = 1.3f;
     
     /* Parse options */
     for (int i = 2; i < argc - 1; i += 2) {
@@ -696,6 +933,18 @@ static int textCmd(ClientData clientData, Tcl_Interp *interp,
                 return TCL_ERROR;
             }
             fontSize = (float)tempSize;
+        } else if (strcmp(argv[i], "-wrap") == 0) {
+            double tempWrap;
+            if (Tcl_GetDouble(interp, argv[i+1], &tempWrap) != TCL_OK) {
+                return TCL_ERROR;
+            }
+            wrapWidth = (float)tempWrap;
+        } else if (strcmp(argv[i], "-spacing") == 0) {
+            double tempSpacing;
+            if (Tcl_GetDouble(interp, argv[i+1], &tempSpacing) != TCL_OK) {
+                return TCL_ERROR;
+            }
+            lineSpacing = (float)tempSpacing;
         }
     }
     
@@ -710,11 +959,20 @@ static int textCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
     
+    /* Apply optional settings */
+    TEXT_OBJ* t = (TEXT_OBJ*)GR_CLIENTDATA(OL_OBJ(olist, id));
+    t->wrapWidth = wrapWidth;
+    t->lineSpacing = lineSpacing;
+    if (wrapWidth > 0 || lineSpacing != 1.3f) {
+        t->dirty = 1;
+        text_build_geometry(t);
+    }
+    
     Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
     return TCL_OK;
 }
 
-/* textString id newstring - Update text content */
+/* textString id ?newstring? - Get or update text content */
 static int textstringCmd(ClientData clientData, Tcl_Interp *interp,
                          int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST*)clientData;
@@ -841,6 +1099,184 @@ static int textjustifyCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
+/* textValign id ?top|center|bottom? - Get or set vertical alignment */
+static int textvalignCmd(ClientData clientData, Tcl_Interp *interp,
+                         int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST*)clientData;
+    int id;
+    
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " id ?top|center|bottom?", NULL);
+        return TCL_ERROR;
+    }
+    
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], TextID, "text")) < 0)
+        return TCL_ERROR;
+    
+    TEXT_OBJ* t = (TEXT_OBJ*)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    if (argc == 2) {
+        const char* names[] = {"top", "center", "bottom"};
+        Tcl_SetResult(interp, (char*)names[t->valign], TCL_STATIC);
+        return TCL_OK;
+    }
+    
+    if (strcmp(argv[2], "top") == 0) {
+        t->valign = TEXT_VALIGN_TOP;
+    } else if (strcmp(argv[2], "center") == 0) {
+        t->valign = TEXT_VALIGN_CENTER;
+    } else if (strcmp(argv[2], "bottom") == 0) {
+        t->valign = TEXT_VALIGN_BOTTOM;
+    } else {
+        Tcl_AppendResult(interp, argv[0], ": invalid vertical alignment: ", argv[2], NULL);
+        return TCL_ERROR;
+    }
+    
+    t->dirty = 1;
+    return TCL_OK;
+}
+
+/* textWrap id ?width? - Get or set wrap width (0 = no wrap) */
+static int textwrapCmd(ClientData clientData, Tcl_Interp *interp,
+                       int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST*)clientData;
+    int id;
+    
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " id ?width?", NULL);
+        return TCL_ERROR;
+    }
+    
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], TextID, "text")) < 0)
+        return TCL_ERROR;
+    
+    TEXT_OBJ* t = (TEXT_OBJ*)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    if (argc == 2) {
+        Tcl_SetObjResult(interp, Tcl_NewDoubleObj(t->wrapWidth));
+        return TCL_OK;
+    }
+    
+    double width;
+    if (Tcl_GetDouble(interp, argv[2], &width) != TCL_OK) return TCL_ERROR;
+    
+    t->wrapWidth = (float)width;
+    t->dirty = 1;
+    
+    return TCL_OK;
+}
+
+/* textSpacing id ?multiplier? - Get or set line spacing */
+static int textspacingCmd(ClientData clientData, Tcl_Interp *interp,
+                          int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST*)clientData;
+    int id;
+    
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " id ?multiplier?", NULL);
+        return TCL_ERROR;
+    }
+    
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], TextID, "text")) < 0)
+        return TCL_ERROR;
+    
+    TEXT_OBJ* t = (TEXT_OBJ*)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    if (argc == 2) {
+        Tcl_SetObjResult(interp, Tcl_NewDoubleObj(t->lineSpacing));
+        return TCL_OK;
+    }
+    
+    double spacing;
+    if (Tcl_GetDouble(interp, argv[2], &spacing) != TCL_OK) return TCL_ERROR;
+    
+    t->lineSpacing = (float)spacing;
+    t->dirty = 1;
+    
+    return TCL_OK;
+}
+
+/* Calculate bounding box based on justify and valign settings
+ * Returns bounds in object-local coordinates (before any transforms)
+ */
+static void text_calc_bounds(TEXT_OBJ* t, float* x0, float* y0, float* x1, float* y1) {
+    float w = t->width;
+    float h = t->height;
+    
+    /* X bounds based on horizontal justification */
+    switch (t->justify) {
+        case TEXT_JUSTIFY_LEFT:
+            *x0 = 0;
+            *x1 = w;
+            break;
+        case TEXT_JUSTIFY_CENTER:
+            *x0 = -w / 2.0f;
+            *x1 = w / 2.0f;
+            break;
+        case TEXT_JUSTIFY_RIGHT:
+            *x0 = -w;
+            *x1 = 0;
+            break;
+        default:
+            *x0 = -w / 2.0f;
+            *x1 = w / 2.0f;
+    }
+    
+    /* Y bounds based on vertical alignment
+     * Note: Y increases upward in stim2 coordinates
+     */
+    switch (t->valign) {
+        case TEXT_VALIGN_TOP:
+            *y0 = -h;
+            *y1 = 0;
+            break;
+        case TEXT_VALIGN_CENTER:
+            *y0 = -h / 2.0f;
+            *y1 = h / 2.0f;
+            break;
+        case TEXT_VALIGN_BOTTOM:
+            *y0 = 0;
+            *y1 = h;
+            break;
+        default:
+            *y0 = -h / 2.0f;
+            *y1 = h / 2.0f;
+    }
+}
+
+/* textBounds id - Get bounding box as list {x0 y0 x1 y1} */
+static int textboundsCmd(ClientData clientData, Tcl_Interp *interp,
+                         int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST*)clientData;
+    int id;
+    
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " id", NULL);
+        return TCL_ERROR;
+    }
+    
+    if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], TextID, "text")) < 0)
+        return TCL_ERROR;
+    
+    TEXT_OBJ* t = (TEXT_OBJ*)GR_CLIENTDATA(OL_OBJ(olist, id));
+    
+    if (t->dirty) {
+        text_build_geometry(t);
+    }
+    
+    float x0, y0, x1, y1;
+    text_calc_bounds(t, &x0, &y0, &x1, &y1);
+    
+    Tcl_Obj* list = Tcl_NewListObj(0, NULL);
+    Tcl_ListObjAppendElement(interp, list, Tcl_NewDoubleObj(x0));
+    Tcl_ListObjAppendElement(interp, list, Tcl_NewDoubleObj(y0));
+    Tcl_ListObjAppendElement(interp, list, Tcl_NewDoubleObj(x1));
+    Tcl_ListObjAppendElement(interp, list, Tcl_NewDoubleObj(y1));
+    
+    Tcl_SetObjResult(interp, list);
+    return TCL_OK;
+}
+
 /* textInfo id - Get text metrics */
 static int textinfoCmd(ClientData clientData, Tcl_Interp *interp,
                        int argc, char *argv[]) {
@@ -861,6 +1297,16 @@ static int textinfoCmd(ClientData clientData, Tcl_Interp *interp,
         text_build_geometry(t);
     }
     
+    /* Count lines */
+    int numLines = 1;
+    for (const char* p = t->string; *p; p++) {
+        if (*p == '\n') numLines++;
+    }
+    
+    /* Calculate bounds */
+    float x0, y0, x1, y1;
+    text_calc_bounds(t, &x0, &y0, &x1, &y1);
+    
     Tcl_Obj* dict = Tcl_NewDictObj();
     Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("width", -1), Tcl_NewDoubleObj(t->width));
     Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("height", -1), Tcl_NewDoubleObj(t->height));
@@ -868,8 +1314,192 @@ static int textinfoCmd(ClientData clientData, Tcl_Interp *interp,
     Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("descender", -1), Tcl_NewDoubleObj(t->descender));
     Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("fontSize", -1), Tcl_NewDoubleObj(t->fontSize));
     Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("numChars", -1), Tcl_NewIntObj(strlen(t->string)));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("numLines", -1), Tcl_NewIntObj(numLines));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("wrapWidth", -1), Tcl_NewDoubleObj(t->wrapWidth));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("lineSpacing", -1), Tcl_NewDoubleObj(t->lineSpacing));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("x0", -1), Tcl_NewDoubleObj(x0));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("y0", -1), Tcl_NewDoubleObj(y0));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("x1", -1), Tcl_NewDoubleObj(x1));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("y1", -1), Tcl_NewDoubleObj(y1));
     
     Tcl_SetObjResult(interp, dict);
+    return TCL_OK;
+}
+
+/* Parse edge name to enum value */
+enum {
+    EDGE_TOP = 0,
+    EDGE_BOTTOM,
+    EDGE_LEFT,
+    EDGE_RIGHT,
+    EDGE_CENTERX,
+    EDGE_CENTERY,
+    EDGE_INVALID
+};
+
+static int parse_edge(const char* name) {
+    if (strcmp(name, "top") == 0) return EDGE_TOP;
+    if (strcmp(name, "bottom") == 0) return EDGE_BOTTOM;
+    if (strcmp(name, "left") == 0) return EDGE_LEFT;
+    if (strcmp(name, "right") == 0) return EDGE_RIGHT;
+    if (strcmp(name, "centerx") == 0) return EDGE_CENTERX;
+    if (strcmp(name, "centery") == 0) return EDGE_CENTERY;
+    /* Shorthand aliases */
+    if (strcmp(name, "t") == 0) return EDGE_TOP;
+    if (strcmp(name, "b") == 0) return EDGE_BOTTOM;
+    if (strcmp(name, "l") == 0) return EDGE_LEFT;
+    if (strcmp(name, "r") == 0) return EDGE_RIGHT;
+    if (strcmp(name, "cx") == 0) return EDGE_CENTERX;
+    if (strcmp(name, "cy") == 0) return EDGE_CENTERY;
+    return EDGE_INVALID;
+}
+
+/* Get edge coordinate from bounds */
+static float get_edge_coord(int edge, float x0, float y0, float x1, float y1) {
+    switch (edge) {
+        case EDGE_TOP:     return y1;
+        case EDGE_BOTTOM:  return y0;
+        case EDGE_LEFT:    return x0;
+        case EDGE_RIGHT:   return x1;
+        case EDGE_CENTERX: return (x0 + x1) / 2.0f;
+        case EDGE_CENTERY: return (y0 + y1) / 2.0f;
+        default: return 0;
+    }
+}
+
+/* Check if edge is vertical (top/bottom/centery) or horizontal (left/right/centerx) */
+static int is_vertical_edge(int edge) {
+    return (edge == EDGE_TOP || edge == EDGE_BOTTOM || edge == EDGE_CENTERY);
+}
+
+/* textAlign targetId targetEdge refId refEdge ?gap?
+ * Aligns target's edge to reference's edge with optional gap.
+ * 
+ * Examples:
+ *   textAlign $body top $title bottom 0.3   ;# body's top at title's bottom - 0.3
+ *   textAlign $label left $body right 0.4   ;# label's left at body's right + 0.4
+ *
+ * Gap is subtracted for top/right alignment (moving away from reference)
+ * Gap is added for bottom/left alignment (moving away from reference)
+ */
+static int textalignCmd(ClientData clientData, Tcl_Interp *interp,
+                        int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST*)clientData;
+    int targetId, refId;
+    double gap = 0;
+    
+    if (argc < 5) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], 
+            " targetId targetEdge refId refEdge ?gap?\n"
+            "  edges: top/t, bottom/b, left/l, right/r, centerx/cx, centery/cy", NULL);
+        return TCL_ERROR;
+    }
+    
+    /* Parse target */
+    if ((targetId = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], TextID, "text")) < 0)
+        return TCL_ERROR;
+    
+    int targetEdge = parse_edge(argv[2]);
+    if (targetEdge == EDGE_INVALID) {
+        Tcl_AppendResult(interp, argv[0], ": invalid target edge: ", argv[2], NULL);
+        return TCL_ERROR;
+    }
+    
+    /* Parse reference */
+    if ((refId = resolveObjId(interp, OL_NAMEINFO(olist), argv[3], TextID, "text")) < 0)
+        return TCL_ERROR;
+    
+    int refEdge = parse_edge(argv[4]);
+    if (refEdge == EDGE_INVALID) {
+        Tcl_AppendResult(interp, argv[0], ": invalid reference edge: ", argv[4], NULL);
+        return TCL_ERROR;
+    }
+    
+    /* Check edge compatibility */
+    if (is_vertical_edge(targetEdge) != is_vertical_edge(refEdge)) {
+        Tcl_AppendResult(interp, argv[0], 
+            ": cannot align vertical edge to horizontal edge", NULL);
+        return TCL_ERROR;
+    }
+    
+    /* Parse optional gap */
+    if (argc > 5) {
+        if (Tcl_GetDouble(interp, argv[5], &gap) != TCL_OK)
+            return TCL_ERROR;
+    }
+    
+    /* Get text objects */
+    GR_OBJ* targetObj = OL_OBJ(olist, targetId);
+    GR_OBJ* refObj = OL_OBJ(olist, refId);
+    TEXT_OBJ* target = (TEXT_OBJ*)GR_CLIENTDATA(targetObj);
+    TEXT_OBJ* ref = (TEXT_OBJ*)GR_CLIENTDATA(refObj);
+    
+    /* Ensure geometry is up to date */
+    if (target->dirty) text_build_geometry(target);
+    if (ref->dirty) text_build_geometry(ref);
+    
+    /* Get bounds for both objects */
+    float tx0, ty0, tx1, ty1;
+    float rx0, ry0, rx1, ry1;
+    text_calc_bounds(target, &tx0, &ty0, &tx1, &ty1);
+    text_calc_bounds(ref, &rx0, &ry0, &rx1, &ry1);
+    
+    /* Get current translation from position (set by gobjTranslateObj/translateObj) */
+    float refTransX = GR_TX(refObj);
+    float refTransY = GR_TY(refObj);
+    float targetTransX = GR_TX(targetObj);
+    float targetTransY = GR_TY(targetObj);
+    
+    /* Calculate edge positions in world coordinates */
+    float targetEdgeCoord = get_edge_coord(targetEdge, tx0, ty0, tx1, ty1) + 
+                           (is_vertical_edge(targetEdge) ? targetTransY : targetTransX);
+    float refEdgeCoord = get_edge_coord(refEdge, rx0, ry0, rx1, ry1) +
+                        (is_vertical_edge(refEdge) ? refTransY : refTransX);
+    
+    /* Calculate required translation delta
+     * Basic formula: move target edge to reference edge position
+     * Gap: positive gap always means "add space between" the edges
+     */
+    float delta = refEdgeCoord - targetEdgeCoord;
+    
+    if (is_vertical_edge(targetEdge)) {
+        /* Vertical alignment
+         * If target's top aligns to ref's bottom, target is BELOW ref
+         * So gap should push target further down (negative Y)
+         * If target's bottom aligns to ref's top, target is ABOVE ref
+         * So gap should push target further up (positive Y)
+         */
+        if (targetEdge == EDGE_TOP && refEdge == EDGE_BOTTOM) {
+            /* Target below reference - gap pushes down */
+            delta -= gap;
+        } else if (targetEdge == EDGE_BOTTOM && refEdge == EDGE_TOP) {
+            /* Target above reference - gap pushes up */
+            delta += gap;
+        }
+        /* For same-edge or center alignment, no gap adjustment */
+        
+        /* Set new Y position directly */
+        GR_TY(targetObj) = targetTransY + delta;
+    } else {
+        /* Horizontal alignment
+         * If target's left aligns to ref's right, target is RIGHT of ref
+         * So gap should push target further right (positive X)
+         * If target's right aligns to ref's left, target is LEFT of ref  
+         * So gap should push target further left (negative X)
+         */
+        if (targetEdge == EDGE_LEFT && refEdge == EDGE_RIGHT) {
+            /* Target to right of reference - gap pushes right */
+            delta += gap;
+        } else if (targetEdge == EDGE_RIGHT && refEdge == EDGE_LEFT) {
+            /* Target to left of reference - gap pushes left */
+            delta -= gap;
+        }
+        /* For same-edge or center alignment, no gap adjustment */
+        
+        /* Set new X position directly */
+        GR_TX(targetObj) = targetTransX + delta;
+    }
+    
     return TCL_OK;
 }
 
@@ -985,7 +1615,17 @@ int Text_Init(Tcl_Interp *interp)
                       (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "textJustify", (Tcl_CmdProc*)textjustifyCmd,
                       (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "textValign", (Tcl_CmdProc*)textvalignCmd,
+                      (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "textWrap", (Tcl_CmdProc*)textwrapCmd,
+                      (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "textSpacing", (Tcl_CmdProc*)textspacingCmd,
+                      (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "textInfo", (Tcl_CmdProc*)textinfoCmd,
+                      (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "textBounds", (Tcl_CmdProc*)textboundsCmd,
+                      (ClientData)OBJList, NULL);
+    Tcl_CreateCommand(interp, "textAlign", (Tcl_CmdProc*)textalignCmd,
                       (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "textFonts", (Tcl_CmdProc*)textfontsCmd,
                       (ClientData)OBJList, NULL);
