@@ -151,14 +151,18 @@ proc keyboard::create {args} {
     set num_rows $layouts($current_layout,rows)
     set offsets $layouts($current_layout,offsets)
     
-    # Create text display area
+    # Create metagroup to hold all keyboard elements
+    set mg [metagroup]
+    objName $mg keyboard
+    
+    # Create text display area (position relative to keyboard origin 0,0)
+    set display_y [expr {($num_rows + 1) * $key_h}]
     set display_obj [text "" -font mono -size $config(key_size)]
     objName $display_obj kb_display
     textJustify $display_obj center
     textColor $display_obj 1.0 1.0 1.0 1.0
-    set display_y [expr {$config(origin_y) + ($num_rows + 1) * $key_h}]
-    translateObj $display_obj $config(origin_x) $display_y 0
-    glistAddObject $display_obj 0
+    translateObj $display_obj 0 $display_y 0
+    metagroupAdd $mg $display_obj
     lappend objects $display_obj
     
     # Create keys for each row
@@ -169,35 +173,33 @@ proc keyboard::create {args} {
         
         # Center the row
         set row_width [expr {$num_keys * $key_w}]
-        set start_x [expr {$config(origin_x) - $row_width/2.0 + $key_w/2.0 + $row_offset * $key_w}]
-        set y [expr {$config(origin_y) + ($num_rows - 1 - $row) * $key_h}]
+        set start_x [expr {-$row_width/2.0 + $key_w/2.0 + $row_offset * $key_w}]
+        set y [expr {($num_rows - 1 - $row) * $key_h}]
         
         for {set col 0} {$col < $num_keys} {incr col} {
             set char [string index $chars $col]
             set x [expr {$start_x + $col * $key_w}]
             
-            # Create key background (simple approach - could use polygons)
-            # For now just create the text
             set t [text $char -font mono -size $config(key_size)]
             objName $t "kb_key_${row}_${col}"
             textJustify $t center
             textColor $t 0.8 0.8 0.8 1.0
             translateObj $t $x $y 0
-            glistAddObject $t 0
+            metagroupAdd $mg $t
             lappend objects $t
         }
     }
     
     # Create special keys
-    set bottom_y [expr {$config(origin_y) - $key_h}]
+    set bottom_y [expr {-$key_h}]
     
     # Backspace
     set bksp [text "DEL" -font mono -size [expr {$config(key_size) * 0.6}]]
     objName $bksp kb_backspace
     textJustify $bksp center
     textColor $bksp 1.0 0.6 0.6 1.0
-    translateObj $bksp [expr {$config(origin_x) + 4 * $key_w}] $bottom_y 0
-    glistAddObject $bksp 0
+    translateObj $bksp [expr {4 * $key_w}] $bottom_y 0
+    metagroupAdd $mg $bksp
     lappend objects $bksp
     
     # Space
@@ -205,8 +207,8 @@ proc keyboard::create {args} {
     objName $space kb_space
     textJustify $space center
     textColor $space 0.8 0.8 0.8 1.0
-    translateObj $space $config(origin_x) $bottom_y 0
-    glistAddObject $space 0
+    translateObj $space 0 $bottom_y 0
+    metagroupAdd $mg $space
     lappend objects $space
     
     # Enter/Done
@@ -214,9 +216,15 @@ proc keyboard::create {args} {
     objName $enter kb_enter
     textJustify $enter center
     textColor $enter 0.6 1.0 0.6 1.0
-    translateObj $enter [expr {$config(origin_x) - 4 * $key_w}] $bottom_y 0
-    glistAddObject $enter 0
+    translateObj $enter [expr {-4 * $key_w}] $bottom_y 0
+    metagroupAdd $mg $enter
     lappend objects $enter
+    
+    # Position the metagroup
+    translateObj $mg $config(origin_x) $config(origin_y) 0
+    
+    # Add metagroup to glist (not individual objects)
+    glistAddObject $mg 0
     
     set initialized 1
     set config(visible) 1
@@ -248,6 +256,16 @@ proc keyboard::hit_test {deg_x deg_y} {
     variable layouts
     variable current_layout
     
+    # Get metagroup's current transform
+    lassign [translateObj keyboard] mg_x mg_y mg_z
+    lassign [scaleObj keyboard] scale_x scale_y scale_z
+    
+    # Transform touch coordinates into metagroup's local space
+    # local = (world - origin) / scale
+    set local_x [expr {($deg_x - $mg_x) / $scale_x}]
+    set local_y [expr {($deg_y - $mg_y) / $scale_y}]
+    
+    # Now use original (unscaled) key layout for hit testing
     set key_w [expr {$config(key_size) * $config(key_spacing)}]
     set key_h [expr {$config(key_size) * $config(key_spacing)}]
     set half_key [expr {$key_w / 2.0}]
@@ -255,19 +273,19 @@ proc keyboard::hit_test {deg_x deg_y} {
     set num_rows $layouts($current_layout,rows)
     set offsets $layouts($current_layout,offsets)
     
-    # Check special keys first (bottom row)
-    set bottom_y [expr {$config(origin_y) - $key_h}]
-    if {abs($deg_y - $bottom_y) < $half_key} {
+    # Check special keys first (bottom row) - positions relative to metagroup origin (0,0)
+    set bottom_y [expr {-$key_h}]
+    if {abs($local_y - $bottom_y) < $half_key} {
         # Space bar region (wider)
-        if {abs($deg_x - $config(origin_x)) < [expr {$key_w * 1.5}]} {
+        if {abs($local_x) < [expr {$key_w * 1.5}]} {
             return "SPACE"
         }
         # Backspace
-        if {abs($deg_x - ($config(origin_x) + 4 * $key_w)) < $key_w} {
+        if {abs($local_x - (4 * $key_w)) < $key_w} {
             return "BACKSPACE"
         }
         # Enter
-        if {abs($deg_x - ($config(origin_x) - 4 * $key_w)) < $key_w} {
+        if {abs($local_x - (-4 * $key_w)) < $key_w} {
             return "ENTER"
         }
     }
@@ -279,15 +297,15 @@ proc keyboard::hit_test {deg_x deg_y} {
         set num_keys [string length $chars]
         
         set row_width [expr {$num_keys * $key_w}]
-        set start_x [expr {$config(origin_x) - $row_width/2.0 + $key_w/2.0 + $row_offset * $key_w}]
-        set y [expr {$config(origin_y) + ($num_rows - 1 - $row) * $key_h}]
+        set start_x [expr {-$row_width/2.0 + $key_w/2.0 + $row_offset * $key_w}]
+        set y [expr {($num_rows - 1 - $row) * $key_h}]
         
         # Check if in this row's Y range
-        if {abs($deg_y - $y) < $half_key} {
+        if {abs($local_y - $y) < $half_key} {
             # Check which column
             for {set col 0} {$col < $num_keys} {incr col} {
                 set key_x [expr {$start_x + $col * $key_w}]
-                if {abs($deg_x - $key_x) < $half_key} {
+                if {abs($local_x - $key_x) < $half_key} {
                     return [string index $chars $col]
                 }
             }
@@ -551,33 +569,7 @@ proc keyboard_on_done {text} {
 # ADJUSTERS
 # ============================================================
 
-proc keyboard_set_size {size} {
-    # Recreate with new size
-    set layout $keyboard::current_layout
-    set y $keyboard::config(origin_y)
-    keyboard::destroy
-    keyboard::create -x 0 -y $y -size $size -layout $layout -callback keyboard_on_done
-    keyboard::subscribe
-    redraw
-}
-
-proc keyboard_get_size {{target {}}} {
-    dict create size $keyboard::config(key_size)
-}
-
-proc keyboard_set_position {y} {
-    set layout $keyboard::current_layout
-    set size $keyboard::config(key_size)
-    keyboard::destroy
-    keyboard::create -x 0 -y $y -size $size -layout $layout -callback keyboard_on_done
-    keyboard::subscribe
-    redraw
-}
-
-proc keyboard_get_position {{target {}}} {
-    dict create y $keyboard::config(origin_y)
-}
-
+# Text adjuster - custom since it's not a standard transform
 proc keyboard_set_text {str} {
     keyboard::set_text $str
 }
@@ -595,20 +587,14 @@ proc keyboard_clear_text {} {
 # ============================================================
 workspace::reset
 
-# QWERTY layout (main)
+# QWERTY layout (main) - no setup params, use adjusters
 workspace::setup setup_qwerty {} \
-    -adjusters {kb_size kb_position kb_text} \
+    -adjusters {kb_scale kb_position kb_text} \
     -label "QWERTY Keyboard"
 
-workspace::adjuster kb_size {
-    size {float 0.2 0.8 0.05 0.4 "Key Size" deg}
-} -target {} -proc keyboard_set_size -getter keyboard_get_size \
-  -label "Key Size"
-
-workspace::adjuster kb_position {
-    y {float -3.0 2.0 0.1 -0.5 "Y Position" deg}
-} -target {} -proc keyboard_set_position -getter keyboard_get_position \
-  -label "Position"
+# Scale and position adjusters target the metagroup "keyboard"
+workspace::adjuster kb_scale -template scale -target keyboard
+workspace::adjuster kb_position -template position -target keyboard
 
 workspace::adjuster kb_text {
     str {string "" "Text"}
@@ -617,18 +603,11 @@ workspace::adjuster kb_text {
 
 # Numeric keypad variant
 workspace::variant numeric {} \
-    -proc setup_numeric -adjusters {num_size num_position} \
+    -proc setup_numeric -adjusters {num_scale num_position} \
     -label "Numeric Keypad"
 
-workspace::adjuster num_size {
-    size {float 0.3 1.0 0.05 0.5 "Key Size" deg}
-} -target {} -proc keyboard_set_size -getter keyboard_get_size \
-  -label "Key Size"
-
-workspace::adjuster num_position {
-    y {float -3.0 2.0 0.1 -0.5 "Y Position" deg}
-} -target {} -proc keyboard_set_position -getter keyboard_get_position \
-  -label "Position"
+workspace::adjuster num_scale -template scale -target keyboard
+workspace::adjuster num_position -template position -target keyboard
 
 
 # ============================================================
