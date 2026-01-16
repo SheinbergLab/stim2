@@ -304,6 +304,7 @@ typedef struct _grobj {
   float matrix[16];		/* transformation matrix            */
   int drawcount;		/* number of draws since reset      */
   void *anim_state;             /* animation state pointer          */
+  float priority;               /* z-order priority (higher=front)  */
 } GR_OBJ;
 
 #define GR_NAME(o)         ((o)->name)
@@ -324,6 +325,7 @@ typedef struct _grobj {
 #define GR_MATRIX(o)       (&(o)->matrix[0])
 
 #define GR_COUNT(o)        ((o)->drawcount)
+#define GR_PRIORITY(o)     ((o)->priority)
 
 #define GR_LEFT_EYE(o)     ((o)->eye[0])
 #define GR_RIGHT_EYE(o)    ((o)->eye[1])
@@ -465,6 +467,9 @@ int gobjAddObj(OBJ_LIST *olist, GR_OBJ *obj);
 OBJ_LIST *getOBJList(void);
 int gobjRegisterType(void);
 
+float gobjSetPriority(GR_OBJ *obj, float priority);
+float gobjGetPriority(GR_OBJ *obj);
+  
 /* From main.c */
 extern OBJ_LIST *OBJList;
 void gobjInit(GR_OBJ *obj);
