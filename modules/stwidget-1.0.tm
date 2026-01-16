@@ -12,6 +12,12 @@
 #   stwidget::textinput::create myinput -x 0 -y 1 -placeholder "Enter text"
 #   stwidget::subscribe  ;# connect to dserv touch events
 #
+# Scale factors (default: widget_scale=1.5, keyboard_scale=2.0):
+#   stwidget::set_scale 1.5 2.0    ;# set both scales (call before creating widgets)
+#   stwidget::get_scale            ;# returns {widget_scale keyboard_scale}
+#   Or set directly: set stwidget::widget_scale 1.5
+#                    set stwidget::keyboard_scale 2.0
+#
 # After resetObjList, call stwidget::reset to clear widget state.
 #
 # Testing without touch hardware:
@@ -37,6 +43,10 @@ namespace eval stwidget {
         scale_y     1.0
     }
     
+    # Widget scale factors - adjust these to resize all widgets
+    variable widget_scale 1.5      ;# General widget scale (buttons, dropdowns, etc.)
+    variable keyboard_scale 2.0    ;# Keyboard-specific scale (often needs to be larger)
+    
     variable handlers {}
     variable focus_widget ""
     variable focus_namespace ""
@@ -51,6 +61,27 @@ proc stwidget::init {} {
     catch { textFont mono NotoSansMono-Regular.ttf }
     
     set initialized 1
+}
+
+proc stwidget::set_scale {scale {kb_scale ""}} {
+    # Set widget scale factors. If kb_scale not provided, uses scale value.
+    # Call BEFORE creating widgets - does not affect already-created widgets.
+    variable widget_scale
+    variable keyboard_scale
+    
+    set widget_scale $scale
+    if {$kb_scale eq ""} {
+        set keyboard_scale $scale
+    } else {
+        set keyboard_scale $kb_scale
+    }
+}
+
+proc stwidget::get_scale {} {
+    # Returns list: {widget_scale keyboard_scale}
+    variable widget_scale
+    variable keyboard_scale
+    return [list $widget_scale $keyboard_scale]
 }
 
 proc stwidget::reset {} {
@@ -280,11 +311,12 @@ proc stwidget::button::create {name label args} {
     variable initialized
     if {!$initialized} { init }
     
-    array set opts {
-        x 0.0  y 0.0  width 2.5  height 0.6
-        callback ""  font mono  font_size 0.35
-        enabled 1  bg_color "#4a4a4a"  text_color "#ffffff"
-    }
+    set s $::stwidget::widget_scale
+    array set opts [list \
+        x 0.0  y 0.0  width [expr {2.5 * $s}]  height [expr {0.6 * $s}] \
+        callback ""  font mono  font_size [expr {0.35 * $s}] \
+        enabled 1  bg_color "#4a4a4a"  text_color "#ffffff" \
+    ]
     foreach {key val} $args {
         set opts([string trimleft $key -]) $val
     }
@@ -460,11 +492,12 @@ proc stwidget::dropdown::create {name items args} {
     variable initialized
     if {!$initialized} { init }
     
-    array set opts {
-        x 0.0  y 0.0  width 4.0  item_height 0.5
-        selected 0  callback ""  font mono  font_size 0.35
-        max_visible 6  bg_color "#3a3a3a"  highlight_color "#4a6da7"
-    }
+    set s $::stwidget::widget_scale
+    array set opts [list \
+        x 0.0  y 0.0  width [expr {4.0 * $s}]  item_height [expr {0.5 * $s}] \
+        selected 0  callback ""  font mono  font_size [expr {0.35 * $s}] \
+        max_visible 6  bg_color "#3a3a3a"  highlight_color "#4a6da7" \
+    ]
     foreach {key val} $args {
         set opts([string trimleft $key -]) $val
     }
@@ -519,7 +552,7 @@ proc stwidget::dropdown::create_header {name} {
     objName $txt "dd_${name}_text"
     textJustify $txt left
     textColor $txt 0.9 0.9 0.9 1.0
-    translateObj $txt [expr {-$w/2.0 + 0.15}] 0 0
+    translateObj $txt [expr {-$w/2.0 + 0.15 * $::stwidget::widget_scale}] 0 0
     priorityObj $txt 1.0
     metagroupAdd $mg $txt
     lappend widgets($name,objects) $txt
@@ -586,7 +619,7 @@ proc stwidget::dropdown::create_popup {name} {
         objName $itxt "dd_${name}_item_$i"
         textJustify $itxt left
         textColor $itxt 0.85 0.85 0.85 1.0
-        translateObj $itxt [expr {-$w/2.0 + 0.15}] $iy 0
+        translateObj $itxt [expr {-$w/2.0 + 0.15 * $::stwidget::widget_scale}] $iy 0
         priorityObj $itxt 2.0
         metagroupAdd $popup $itxt
         lappend widgets($name,objects) $itxt
@@ -841,15 +874,16 @@ proc stwidget::keyboard::create {name args} {
     
     if {!$initialized} { init }
     
-    array set opts {
-        x 0.0  y -2.5
-        key_size 0.45
-        key_spacing 1.15
-        callback ""
-        secure 0
-        bg_color "#2a2a2a"
-        key_color "#3a3a3a"
-    }
+    set s $::stwidget::keyboard_scale
+    array set opts [list \
+        x 0.0  y -3.5 \
+        key_size [expr {0.45 * $s}] \
+        key_spacing 1.15 \
+        callback "" \
+        secure 0 \
+        bg_color "#2a2a2a" \
+        key_color "#3a3a3a" \
+    ]
     foreach {key val} $args {
         set opts([string trimleft $key -]) $val
     }
@@ -1388,15 +1422,16 @@ proc stwidget::textinput::create {name args} {
     
     if {!$initialized} { init }
     
-    array set opts {
-        x 0.0  y 0.0  width 5.0  height 0.6
-        placeholder "Enter text"
-        secure 0
-        font mono  font_size 0.35
-        callback ""
-        bg_color "#3a3a3a"
-        text_color "#ffffff"
-    }
+    set s $::stwidget::widget_scale
+    array set opts [list \
+        x 0.0  y 0.0  width [expr {5.0 * $s}]  height [expr {0.6 * $s}] \
+        placeholder "Enter text" \
+        secure 0 \
+        font mono  font_size [expr {0.35 * $s}] \
+        callback "" \
+        bg_color "#3a3a3a" \
+        text_color "#ffffff" \
+    ]
     foreach {key val} $args {
         set opts([string trimleft $key -]) $val
     }
@@ -1444,7 +1479,7 @@ proc stwidget::textinput::create_visuals {name} {
     objName $txt "ti_${name}_text"
     textJustify $txt left
     textColor $txt 0.5 0.5 0.5 1.0
-    translateObj $txt [expr {-$w/2.0 + 0.15}] 0 0
+    translateObj $txt [expr {-$w/2.0 + 0.15 * $::stwidget::widget_scale}] 0 0
     priorityObj $txt 1.0
     metagroupAdd $mg $txt
     lappend widgets($name,objects) $txt
