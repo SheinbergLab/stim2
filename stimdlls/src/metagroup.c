@@ -40,6 +40,34 @@ typedef struct {
 
 static int MetagroupID = -1;	/* unique object id */
 
+/* Sort context for qsort comparator (single-threaded, so this is safe) */
+static METAGROUP *sort_context;
+
+/*
+ * Compare two object IDs by their priority.
+ * Lower priority draws first (behind), higher priority draws last (in front).
+ * For equal priorities, preserve original array order (stable sort).
+ */
+static int comparePriority(const void *a, const void *b)
+{
+  int idA = *(const int *)a;
+  int idB = *(const int *)b;
+  GR_OBJ *objA = OL_OBJ(sort_context->objlist, idA);
+  GR_OBJ *objB = OL_OBJ(sort_context->objlist, idB);
+  float diff;
+
+  /* Handle NULL objects - push to end */
+  if (!objA && !objB) return 0;
+  if (!objA) return 1;
+  if (!objB) return -1;
+
+  diff = GR_PRIORITY(objA) - GR_PRIORITY(objB);
+  if (diff != 0.0f) return (diff > 0.0f) - (diff < 0.0f);
+
+  /* Stable sort: preserve original order for equal priorities */
+  return (a > b) - (a < b);
+}
+
 void metagroupTimer(GR_OBJ *o)
 {
   int i, id;
@@ -61,8 +89,14 @@ void metagroupDraw(GR_OBJ *o)
   METAGROUP *mg = (METAGROUP *) GR_CLIENTDATA(o);
   GR_OBJ *g;
   float modelmatrix[16];
+
+  /* Sort by priority (stable - preserves insertion order for equal priorities) */
+  if (mg->nobjs > 1) {
+    sort_context = mg;
+    qsort(mg->objects, mg->nobjs, sizeof(int), comparePriority);
+  }
   
-  /* To do: check for recursive groups? */
+  /* Draw contained objects */
   for (i = 0; i < mg->nobjs; i++) {
     id = mg->objects[i];
     if (id >= 0 && id < OL_NOBJS(mg->objlist)) {
@@ -85,7 +119,6 @@ void metagroupDraw(GR_OBJ *o)
 		     GR_N_POST_SCRIPTS(g));
 
       stimPutMatrix(STIM_MODELVIEW_MATRIX, modelmatrix);
-      //      glPopMatrix ();
     }
   }
 }
@@ -96,7 +129,6 @@ void metagroupUpdate(GR_OBJ *o)
   METAGROUP *mg = (METAGROUP *) GR_CLIENTDATA(o);
   GR_OBJ *g;
   
-  /* To do: check for recursive groups? */
   for (i = 0; i < mg->nobjs; i++) {
     id = mg->objects[i];
     if (id >= 0 && id < OL_NOBJS(mg->objlist)) {
@@ -112,7 +144,6 @@ void metagroupReset(GR_OBJ *o)
   METAGROUP *mg = (METAGROUP *) GR_CLIENTDATA(o);
   GR_OBJ *g;
   
-  /* To do: check for recursive groups? */
   for (i = 0; i < mg->nobjs; i++) {
     id = mg->objects[i];
     if (id >= 0 && id < OL_NOBJS(mg->objlist)) {
@@ -165,13 +196,7 @@ static int metagroupCmd(ClientData clientData, Tcl_Interp *interp,
 {
   OBJ_LIST *olist = (OBJ_LIST *) clientData;
   int id;
-  char *handle;
-  if (argc < 1) {
-    Tcl_AppendResult(interp, "usage: ", argv[0], NULL);
-    return TCL_ERROR;
-  }
-  else handle = argv[1];
-  
+
   if ((id = metagroupCreate(olist)) < 0) {
     Tcl_AppendResult(interp, "error creating metagroup", TCL_STATIC);
     return(TCL_ERROR);
@@ -224,6 +249,52 @@ static int metagroupAddCmd(ClientData clientData, Tcl_Interp *interp,
   return TCL_OK;
 } 
 
+static int metagroupRemoveCmd(ClientData clientData, Tcl_Interp *interp,
+                              int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  METAGROUP *mg;
+  DYN_LIST *objs;
+  int i, j, id, *objids;
+  
+  if (argc < 3) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " metagroup idlist", NULL);
+    return TCL_ERROR;
+  }
+  
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+                         MetagroupID, "metagroup")) < 0)
+    return TCL_ERROR;  
+    
+  mg = GR_CLIENTDATA(OL_OBJ(olist,id));
+  
+  if (tclFindDynList(interp, argv[2], &objs) != TCL_OK) {
+    return TCL_ERROR;
+  }
+  
+  if (DYN_LIST_DATATYPE(objs) != DF_LONG) {
+    Tcl_AppendResult(interp, argv[0], ": object list must be ints", NULL);
+    return TCL_ERROR;
+  }
+  
+  objids = (int *) DYN_LIST_VALS(objs);
+  
+  /* For each object to remove */
+  for (i = 0; i < DYN_LIST_N(objs); i++) {
+    /* Find and remove from metagroup's object list */
+    for (j = 0; j < mg->nobjs; j++) {
+      if (mg->objects[j] == objids[i]) {
+        /* Shift remaining objects down */
+        memmove(&mg->objects[j], &mg->objects[j+1], 
+                sizeof(int) * (mg->nobjs - j - 1));
+        mg->nobjs--;
+        break;
+      }
+    }
+  }
+  
+  return TCL_OK;
+}
 
 static int metagroupClearCmd(ClientData clientData, Tcl_Interp *interp,
 			     int argc, char *argv[])
@@ -288,6 +359,7 @@ static int metagroupContentsCmd(ClientData clientData, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+
 #ifdef _WIN32
 EXPORT(int,Metagroup_Init) (Tcl_Interp *interp)
 #else
@@ -311,15 +383,20 @@ int Metagroup_Init(Tcl_Interp *interp)
   
   if (MetagroupID < 0) MetagroupID = gobjRegisterType();
 
-Tcl_CreateCommand(interp, "metagroup", (Tcl_CmdProc *) metagroupCmd, 
+  Tcl_CreateCommand(interp, "metagroup", (Tcl_CmdProc *) metagroupCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "metagroupAdd", (Tcl_CmdProc *) metagroupAddCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateCommand(interp, "metagroupClear", (Tcl_CmdProc *) metagroupClearCmd, 
+  Tcl_CreateCommand(interp, "metagroupRemove",
+		    (Tcl_CmdProc *) metagroupRemoveCmd, 
+                  (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);  
+  Tcl_CreateCommand(interp, "metagroupClear",
+		    (Tcl_CmdProc *) metagroupClearCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "metagroupSet", (Tcl_CmdProc *) metagroupSetCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateCommand(interp, "metagroupContents", (Tcl_CmdProc *) metagroupContentsCmd, 
+  Tcl_CreateCommand(interp, "metagroupContents",
+		    (Tcl_CmdProc *) metagroupContentsCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   
   return TCL_OK;

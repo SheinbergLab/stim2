@@ -274,6 +274,8 @@ GR_OBJ *gobjCreateObj(void)
   GR_MATRIX(obj)[10] = 1.;
   GR_MATRIX(obj)[15] = 1.;
 
+  GR_PRIORITY(obj) = 0.0; /* default: draw in insertion order */
+  
   return(obj);
 }
 
@@ -657,4 +659,32 @@ int gobjGetCount(GR_OBJ *obj, int count)
   return (GR_COUNT(obj));
 }
 
+/********************************************************************
+ * Function:     gobjSetPriority
+ * Returns:      float old
+ * Arguments:    GR_OBJ *obj, float priority
+ * Description:  Set the object's z-order priority (higher = front)
+ ********************************************************************/
+
+float gobjSetPriority(GR_OBJ *obj, float priority)
+{
+  float old;
+  if (!obj) return 0.0f;
+  old = GR_PRIORITY(obj);
+  GR_PRIORITY(obj) = priority;
+  return old;
+}
+
+/********************************************************************
+ * Function:     gobjGetPriority
+ * Returns:      float priority
+ * Arguments:    GR_OBJ *obj
+ * Description:  Get the object's z-order priority
+ ********************************************************************/
+
+float gobjGetPriority(GR_OBJ *obj)
+{
+  if (!obj) return 0.0f;
+  return GR_PRIORITY(obj);
+}
 

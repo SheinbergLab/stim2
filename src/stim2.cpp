@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <chrono>
 #include <queue>
+#include <algorithm>
 
 #if !defined(_WIN32)
 #include <sys/stat.h>
@@ -81,6 +82,9 @@ void log_message(const char* level, const char* fmt, ...);
 OBJ_LIST *OBJList = NULL;  /* main entry point to object stimuli  */
 OBJ_LIST curobjlist;
 OBJ_LIST *curobjlistp = &curobjlist;
+
+// for z-sorting comparison
+static OBJ_LIST *sort_objlist_context;
 
 float BackgroundColor[]      = { 0.0f,  0.0f, 0.0f, 1.0f };
 float GreenBackgroundColor[] = { 0.0f,  .8f, .2f };
@@ -617,16 +621,44 @@ void defaultProjection(void)
             -HALF_SCREEN_DEG_Z, HALF_SCREEN_DEG_Z);
 }
 
+
+static int compareGroupPriority(const void *a, const void *b)
+{
+  int idA = *(const int *)a;
+  int idB = *(const int *)b;
+  GR_OBJ *objA = OL_OBJ(sort_objlist_context, idA);
+  GR_OBJ *objB = OL_OBJ(sort_objlist_context, idB);
+  float diff;
+
+  /* Handle NULL objects - push to end */
+  if (!objA && !objB) return 0;
+  if (!objA) return 1;
+  if (!objB) return -1;
+
+  diff = GR_PRIORITY(objA) - GR_PRIORITY(objB);
+  if (diff != 0.0f) return (diff > 0.0f) - (diff < 0.0f);
+
+  /* Stable sort: preserve original order for equal priorities */
+  return (a > b) - (a < b);
+}
+
 static void drawGroup(OBJ_GROUP *g) 
 {
   GR_OBJ *o;
   int i;
 
   /*
-   * Stash the current ObjList away it doesn't get changed
+   * Stash the current ObjList away so it doesn't get changed
    * during this update 
    */
   memcpy(curobjlistp, OBJList, sizeof(OBJ_LIST));
+
+  /* Sort objects by priority
+     (stable - preserves insertion order for equal priorities) */
+  if (g && OG_NOBJS(g) > 1) {
+    sort_objlist_context = OBJList;
+    qsort(OG_OBJIDLIST(g), OG_NOBJS(g), sizeof(int), compareGroupPriority);
+  }
 
   /* Kick the animation if we just turned on a dynamic stimulus */
   if (OGL_NEWLY_VISIBLE(GList) && g && 

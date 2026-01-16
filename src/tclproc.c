@@ -956,6 +956,51 @@ static int setVisibleCmd(ClientData clientData, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/********************************************************************
+ * Function:     priorityObjCmd
+ * Usage:        priorityObj objid ?priority?
+ * Description:  Get or set the z-order priority of an object.
+ *               Higher priority objects are drawn in front (later).
+ ********************************************************************/
+
+static int priorityObjCmd(ClientData clientData, Tcl_Interp *interp,
+                          int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  GR_OBJ *o;
+  int id;
+  double priority;
+  static char buf[32];
+
+  if (argc < 2) {
+    Tcl_SetResult(interp, "usage: priorityObj objid ?priority?", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  
+  if (findObj(interp, olist, argv[1], &id) != TCL_OK) 
+    return TCL_ERROR;
+
+  o = OL_OBJ(olist, id);
+  if (!o) {
+    Tcl_SetResult(interp, "priorityObj: invalid object specified", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  
+  /* Getter: return current priority */
+  if (argc == 2) {
+    sprintf(buf, "%.4f", GR_PRIORITY(o));
+    Tcl_SetResult(interp, buf, TCL_STATIC);
+    return TCL_OK;
+  }
+  
+  /* Setter: set new priority */
+  if (Tcl_GetDouble(interp, argv[2], &priority) != TCL_OK) 
+    return TCL_ERROR;
+
+  gobjSetPriority(o, (float) priority);
+
+  return TCL_OK;
+}
 
 static int setProjMatrixCmd(ClientData clientData, Tcl_Interp *interp,
 			    int argc, char *argv[])
@@ -2548,7 +2593,7 @@ void addTclCommands(Tcl_Interp *interp)
 
   Tcl_CreateCommand(interp, "setVisible", (Tcl_CmdProc *) setVisibleCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-
+ 
   Tcl_CreateCommand(interp, "setEye", (Tcl_CmdProc *) setEyeCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
@@ -2560,6 +2605,8 @@ void addTclCommands(Tcl_Interp *interp)
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "resetObj", (Tcl_CmdProc *) resetObjCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "priorityObj", (Tcl_CmdProc *) priorityObjCmd,
+                    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
   Tcl_CreateCommand(interp, "setProjMatrix", (Tcl_CmdProc *) setProjMatrixCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
