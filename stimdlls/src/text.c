@@ -761,12 +761,16 @@ static void text_build_geometry(TEXT_OBJ* t) {
 static void textDraw(GR_OBJ* g) {
     TEXT_OBJ* t = (TEXT_OBJ*)GR_CLIENTDATA(g);
     
-    if (!t->string || !t->numQuads) return;
+    if (!t->string) return;
     if (!gFontSystem || !gFontSystem->texture) return;
     
+    /* Rebuild geometry BEFORE checking numQuads, in case string was updated */
     if (t->dirty) {
         text_build_geometry(t);
     }
+    
+    /* Now safe to check numQuads - it reflects current string */
+    if (!t->numQuads) return;
     
     float modelview[16], projection[16];
     stimGetMatrix(STIM_MODELVIEW_MATRIX, modelview);
