@@ -658,15 +658,16 @@ static void text_build_geometry(TEXT_OBJ* t) {
     switch (t->valign) {
         case TEXT_VALIGN_TOP:
             /* First line baseline at top, accounting for ascender */
-            startY = -t->ascender + emCenter;
+	  //            startY = -t->ascender + emCenter;
+	    startY = -t->ascender + emCenter;
             break;
         case TEXT_VALIGN_CENTER:
             /* Center the whole block vertically */
-            startY = (totalHeight / 2.0f) - lineHeightDeg / 2.0f + emCenter;
+            startY = (totalHeight / 2.0f) - lineHeightDeg / 2.0f - emCenter;
             break;
         case TEXT_VALIGN_BOTTOM:
             /* Last line at bottom */
-            startY = totalHeight - lineHeightDeg + emCenter;
+            startY = totalHeight - lineHeightDeg;
             break;
         default:
             startY = (totalHeight / 2.0f) - lineHeightDeg / 2.0f + emCenter;
