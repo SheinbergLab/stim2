@@ -1,0 +1,4 @@
+shader_demo        "Shader examples"
+shader_image_demo  "Image shader"
+shader_inline_demo "Inline shader"
+shader_grid_demo   "Shader grid"
