@@ -251,6 +251,10 @@
 #   - Built-in helper procs for common operations
 #   - Added -colorpicker flag for explicit color picker UI
 #
+# Key changes in 2.0:
+#   - Auto-generated adjusters (from shader_adjusters) are cleared
+#     when invoke_setup runs, preventing accumulation across variants
+#
 # Usage:
 #   package require workspace
 #   set ::workspace::system_examples_path /path/to/examples
@@ -1608,6 +1612,20 @@ proc ::workspace::shader_adjusters {obj_name args} {
 # INVOKE FUNCTIONS
 # ============================================================
 
+# Clear auto-generated adjusters (e.g., shader uniforms from previous setup)
+# Called automatically before each setup runs
+proc ::workspace::clear_auto_adjusters {} {
+    variable adjusters
+    
+    set new_adjusters {}
+    dict for {name info} $adjusters {
+        if {![dict exists $info auto_generated] || ![dict get $info auto_generated]} {
+            dict set new_adjusters $name $info
+        }
+    }
+    set adjusters $new_adjusters
+}
+
 proc ::workspace::invoke_setup {setup_name args} {
     variable setups
     variable active_setup
@@ -1615,6 +1633,9 @@ proc ::workspace::invoke_setup {setup_name args} {
     if {![dict exists $setups $setup_name]} {
         error "Unknown setup: $setup_name"
     }
+    
+    # Clear auto-generated adjusters from previous setup
+    clear_auto_adjusters
     
     set info [dict get $setups $setup_name]
     set procname [dict get $info proc]
