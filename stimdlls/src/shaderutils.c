@@ -212,7 +212,7 @@ static void add_default_paths(void)
     shaderAddPath("c:/stim/shaders/");
 #elif defined(__APPLE__)
     shaderAddPath("./shaders/");
-    shaderAddPath("/usr/local/share/stim/shaders/");
+    shaderAddPath("/Applications/stim2.app/Contents/Resources/shaders/");
 #else
     shaderAddPath("./shaders/");
     shaderAddPath("/usr/share/stim/shaders/");
@@ -251,15 +251,25 @@ static int find_shader_file(const char *shadername)
     
     /* Try each path in order */
     for (i = 0; i < shader_config.count; i++) {
-        snprintf(fullpath, sizeof(fullpath), "%s%s%s",
-                 shader_config.paths[i], shadername, shader_config.suffix);
-        
-        if (access(fullpath, F_OK) == 0) {
-            /* Found it - save the successful path */
-            strncpy(shader_config.resolved_path, shader_config.paths[i], MAX_PATH - 1);
-            shader_config.resolved_path[MAX_PATH - 1] = '\0';
-            return 1;
-        }
+      snprintf(fullpath, sizeof(fullpath), "%s%s%s",
+	       shader_config.paths[i], shadername, shader_config.suffix);
+      
+      if (access(fullpath, F_OK) == 0) {
+	/* Found it - save the successful path */
+	strncpy(shader_config.resolved_path, shader_config.paths[i], MAX_PATH - 1);
+	shader_config.resolved_path[MAX_PATH - 1] = '\0';
+	return 1;
+      }
+      
+      snprintf(fullpath, sizeof(fullpath), "%s/%s%s",
+	       shader_config.paths[i], shadername, shader_config.suffix);
+      
+      if (access(fullpath, F_OK) == 0) {
+	/* Found it - save the successful path */
+	strncpy(shader_config.resolved_path, shader_config.paths[i], MAX_PATH - 1);
+	shader_config.resolved_path[MAX_PATH - 1] = '\0';
+	return 1;
+      }
     }
     
     /* Not found in any path */
@@ -271,6 +281,9 @@ static int find_shader_file(const char *shadername)
  */
 static int ensure_glsw_initialized(const char *path)
 {
+    char pathbuf[MAX_PATH];
+    size_t len;
+    
     if (shader_config.glsw_initialized) {
         /* Check if we need to reinit for a different path */
         if (strcmp(path, shader_config.resolved_path) != 0) {
@@ -281,8 +294,21 @@ static int ensure_glsw_initialized(const char *path)
         }
     }
     
+    /* Ensure path has trailing slash for glsw */
+    len = strlen(path);
+    if (len > 0 && len < MAX_PATH - 2) {
+        strcpy(pathbuf, path);
+        if (pathbuf[len-1] != '/' && pathbuf[len-1] != '\\') {
+            pathbuf[len] = '/';
+            pathbuf[len+1] = '\0';
+        }
+    } else {
+        strncpy(pathbuf, path, MAX_PATH - 1);
+        pathbuf[MAX_PATH - 1] = '\0';
+    }
+    
     glswInit();
-    glswSetPath(path, shader_config.suffix);
+    glswSetPath(pathbuf, shader_config.suffix);
     
 #ifndef STIM2_USE_GLES
     glswAddDirectiveToken("", "#version 330");

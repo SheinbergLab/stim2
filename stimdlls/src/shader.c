@@ -1347,7 +1347,17 @@ int Shader_Init(Tcl_Interp *interp)
                imageSetFilterType,
                NULL, NULL);
 
-
+  /* Add default shader path based on executable location */
+#ifdef __APPLE__
+  Tcl_Eval(interp,
+	   "shaderAddPath [file join [file dirname [info nameofexecutable]] .. Resources shaders]"
+	   );
+#else
+  Tcl_Eval(interp,
+	   "shaderAddPath [file join [file dirname [info nameofexecutable]] shaders]"
+	   );
+#endif  
+  
   return TCL_OK;
 }
 
