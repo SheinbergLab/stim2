@@ -314,6 +314,8 @@ static int ensure_glsw_initialized(const char *path)
     glswAddDirectiveToken("", "#version 330");
 #else
     glswAddDirectiveToken("", "#version 300 es");
+    glswAddDirectiveToken("Fragment", "precision highp float;");
+    glswAddDirectiveToken("Fragment", "precision highp int;");
 #endif
     
     strncpy(shader_config.resolved_path, path, MAX_PATH - 1);
