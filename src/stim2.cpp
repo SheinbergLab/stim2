@@ -2897,33 +2897,34 @@ void key_callback(GLFWwindow *window, int key,
   else if (key == GLFW_KEY_F && action == GLFW_PRESS) {
     toggleFullscreen(window);
   }
-  if (action == GLFW_PRESS) {
+  if (action == GLFW_PRESS || action == GLFW_RELEASE) {
     char procname[64];
+    const char *suffix = (action == GLFW_RELEASE) ? "Release" : "";
     switch(key) {
     case GLFW_KEY_UP:
-      strcpy(procname,"onUpArrow");
+      snprintf(procname, 63, "onUpArrow%s", suffix);
       if (!Tcl_FindCommand(OurInterp, procname, NULL, 0)) return;
       break;
     case GLFW_KEY_DOWN:
-      strcpy(procname,"onDownArrow");
+      snprintf(procname, 63, "onDownArrow%s", suffix);
       if (!Tcl_FindCommand(OurInterp, procname, NULL, 0)) return;
       break;
     case GLFW_KEY_LEFT:
-      strcpy(procname,"onLeftArrow");
+      snprintf(procname, 63, "onLeftArrow%s", suffix);
       if (!Tcl_FindCommand(OurInterp, procname, NULL, 0)) return;
       break;
     case GLFW_KEY_RIGHT:
-      strcpy(procname,"onRightArrow");
+      snprintf(procname, 63, "onRightArrow%s", suffix);
       if (!Tcl_FindCommand(OurInterp, procname, NULL, 0)) return;
       break;
-    default:
-      if (!Tcl_FindCommand(OurInterp, "onKeyPress", NULL, 0)) return;
-      snprintf(procname, 63, "onKeyPress %d", key);  break;
+    default: {
+      const char *cmd = (action == GLFW_RELEASE) ? "onKeyRelease" : "onKeyPress";
+      if (!Tcl_FindCommand(OurInterp, cmd, NULL, 0)) return;
+      snprintf(procname, 63, "%s %d", cmd, key);  break;
+    }
     }
     if (procname[0]) {
       sendTclCommand(procname);
-      //      Tcl_Eval(OurInterp, procname);
-      //      Tcl_ResetResult(OurInterp);
     }
   }
 }
