@@ -42,6 +42,7 @@ typedef struct Sprite       Sprite;
 typedef struct Camera       Camera;
 typedef struct Atlas        Atlas;
 typedef struct SpriteSheet  SpriteSheet;
+typedef struct Maze3D Maze3D;
 
 /*========================================================================
  * Collision Types (shared by sprite, tilemap)
@@ -132,6 +133,7 @@ typedef struct {
     float x, y, w, h;
     float u0, v0, u1, v1;
     int layer, atlas_id, has_body;
+    int is_collision;    /* on collision layer (even if body is merged) */
 } TileInstance;
 
 /*========================================================================
@@ -279,6 +281,10 @@ struct World {
     /* Callbacks */
     char collision_callback[256];
     Tcl_Interp *interp;
+
+    /* 3D Maze (world_maze3d.c) */
+    Maze3D *maze3d;
+  
 };
 
 /*========================================================================
@@ -326,6 +332,17 @@ SpriteSheet* world_find_sprite_sheet_by_gid(World *w, int gid);
 /* world_spritesheet.c */
 void   world_spritesheet_register_commands(Tcl_Interp *interp, OBJ_LIST *olist);
 int    world_spritesheet_find_frame(SpriteSheet *ss, const char *name);
+
+/* world_maze3d.c */
+Maze3D* maze3d_create(void);
+void    maze3d_destroy(Maze3D *m);
+void    maze3d_render(World *w, Maze3D *m);
+void    maze3d_render_2d_marker(World *w, Maze3D *m);
+void    maze3d_update_items(World *w, Maze3D *m, float dt);
+void    maze3d_sync_camera(World *w, Maze3D *m);
+void    maze3d_rotate(Maze3D *m, float dyaw, float dpitch);
+int     maze3d_is_enabled(Maze3D *m);
+void    world_maze3d_register_commands(Tcl_Interp *interp, OBJ_LIST *olist);
 
 /*========================================================================
  * Global State

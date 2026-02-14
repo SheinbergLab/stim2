@@ -405,6 +405,7 @@ int worldLoadTMXCmd(ClientData cd, Tcl_Interp *interp, int argc, char *argv[])
                 t->atlas_id = (int)(atlas - w->atlases);
                 world_get_tile_uvs(atlas, gid, &t->u0, &t->v0, &t->u1, &t->v1);
                 t->has_body = 0;
+                t->is_collision = is_collision;
                 
                 if (is_collision) {
                     int has_custom = (world_get_tile_collision(w, gid) != NULL);

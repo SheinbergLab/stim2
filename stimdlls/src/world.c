@@ -52,8 +52,13 @@ void world_join_path(char *dest, int max, const char *dir, const char *file)
 
 static void world_draw_callback(GR_OBJ *obj)
 {
-    World *w = (World *)GR_CLIENTDATA(obj);
+  World *w = (World *)GR_CLIENTDATA(obj);
+  if (maze3d_is_enabled(w->maze3d)) {
+    maze3d_render(w, w->maze3d);
+  } else {
     world_render(w);
+    maze3d_render_2d_marker(w, w->maze3d);
+  }
 }
 
 static const char* world_find_name_from_body(World *w, b2BodyId bodyId)
@@ -100,6 +105,12 @@ static void world_update_callback(GR_OBJ *obj)
         world_sprite_update_animation(w, sp, dt);
     }
 
+    /* Sync maze camera from physics body + update 2D camera position */
+    if (w->maze3d) {
+      maze3d_sync_camera(w, w->maze3d);
+      maze3d_update_items(w, w->maze3d, dt);
+    }
+    
     if (w->collision_callback[0] != '\0') {
         b2ContactEvents ev = b2World_GetContactEvents(w->world_id);
         for (int i = 0; i < ev.beginCount; i++) {
@@ -141,6 +152,9 @@ static void world_delete_callback(GR_OBJ *obj)
     if (w->sprite_vao) glDeleteVertexArrays(1, &w->sprite_vao);
     if (w->sprite_vbo) glDeleteBuffers(1, &w->sprite_vbo);
     if (w->shader_program) glDeleteProgram(w->shader_program);
+
+    if (w->maze3d) maze3d_destroy(w->maze3d);
+ 
     for (int i = 0; i < w->atlas_count; i++)
         if (w->atlases[i].texture) glDeleteTextures(1, &w->atlases[i].texture);
     /* Clean up sprite sheet frame name hash tables */
@@ -200,6 +214,8 @@ static int worldCreateCmd(ClientData cd, Tcl_Interp *interp, int argc, char *arg
     w->gravity = (b2Vec2){0, -10};
     w->substep_count = 4;
     w->auto_center = 1;
+    w->maze3d = NULL;
+    
     Tcl_InitHashTable(&w->body_table, TCL_STRING_KEYS);
     world_camera_init(&w->camera);
 
@@ -407,12 +423,13 @@ int World_Init(Tcl_Interp *interp)
     Tcl_CreateCommand(interp, "worldSetAutoCenter", (Tcl_CmdProc*)worldSetAutoCenterCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "worldQueryPoint", (Tcl_CmdProc*)worldQueryPointCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "worldQueryAABB", (Tcl_CmdProc*)worldQueryAABBCmd, (ClientData)OBJList, NULL);
-
+    
     world_camera_register_commands(interp, OBJList);
     world_sprite_register_commands(interp, OBJList);
     world_spritesheet_register_commands(interp, OBJList);
     world_tilemap_register_commands(interp, OBJList);
-
+    world_maze3d_register_commands(interp, OBJList);
+ 
     return TCL_OK;
 }
 
