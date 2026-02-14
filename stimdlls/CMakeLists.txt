@@ -255,7 +255,8 @@ set(WORLD_SOURCES
     ${SRC_DIR}/world_render.c
     ${SRC_DIR}/world_sprite.c
     ${SRC_DIR}/world_spritesheet.c    
-    ${SRC_DIR}/world_tilemap.c    
+    ${SRC_DIR}/world_tilemap.c
+    ${SRC_DIR}/world_maze3d.c    
     ${SRC_DIR}/tmx_xml.cpp
     ${SRC_DIR}/aseprite_json.cpp
     ${APP_DIR}/glad.c
