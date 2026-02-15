@@ -212,8 +212,8 @@ proc maze_onUpdate {} {
 # KEYBOARD
 # ============================================================
 
-proc onLeftArrow {}  { set maze_demo::turn_yaw  0.05 }
-proc onRightArrow {} { set maze_demo::turn_yaw -0.05 }
+proc onLeftArrow {}  { set maze_demo::turn_yaw  1.0 }
+proc onRightArrow {} { set maze_demo::turn_yaw -1.0 }
 proc onUpArrow {}    { set maze_demo::move_fwd  1.0 }
 proc onDownArrow {}  { set maze_demo::move_fwd -1.0 }
 
@@ -249,6 +249,17 @@ proc onKeyRelease {keycode} {
 # ============================================================
 # TOGGLE / STATUS
 # ============================================================
+
+# Discrete turn for action buttons (bypasses turn_speed*dt scaling)
+proc maze3d_step_turn {delta_yaw} {
+    set w $maze_demo::w
+    if {$w eq ""} return
+    set info [worldMaze3DInfo $w]
+    set x [dict get $info cam_x]
+    set z [dict get $info cam_z]
+    set yaw [expr {[dict get $info cam_yaw] + $delta_yaw}]
+    worldMaze3DCamera $w $x $z $yaw
+}
 
 proc maze_toggle_view {} {
     set w $maze_demo::w
@@ -370,8 +381,8 @@ proc maze_trigger {action} {
         move_back   { worldMaze3DMove $w -1.0 0.0 }
         strafe_left { worldMaze3DMove $w  0.0 -1.0 }
         strafe_right { worldMaze3DMove $w 0.0  1.0 }
-        turn_left   { worldMaze3DRotate $w  0.15 }
-        turn_right  { worldMaze3DRotate $w -0.15 }
+        turn_left   { maze3d_step_turn  0.3 }
+        turn_right  { maze3d_step_turn -0.3 }
         toggle_view { maze_toggle_view }
         reset_pos   { worldMaze3DPlaceAt $w "spawn"; puts "Reset to spawn" }
         reset_items { maze_reset_items }
