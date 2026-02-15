@@ -362,9 +362,18 @@ proc maze_get_speed {{target {}}} {
 }
 
 proc maze_trigger {action} {
+    set w $maze_demo::w
+    if {$w eq ""} return
+
     switch $action {
+        move_fwd    { worldMaze3DMove $w  1.0 0.0 }
+        move_back   { worldMaze3DMove $w -1.0 0.0 }
+        strafe_left { worldMaze3DMove $w  0.0 -1.0 }
+        strafe_right { worldMaze3DMove $w 0.0  1.0 }
+        turn_left   { worldMaze3DRotate $w  0.15 }
+        turn_right  { worldMaze3DRotate $w -0.15 }
         toggle_view { maze_toggle_view }
-        reset_pos   { worldMaze3DPlaceAt $maze_demo::w "spawn"; puts "Reset to spawn" }
+        reset_pos   { worldMaze3DPlaceAt $w "spawn"; puts "Reset to spawn" }
         reset_items { maze_reset_items }
         status      { maze_status }
     }
@@ -378,8 +387,22 @@ workspace::reset
 
 workspace::setup maze_setup {
     num_items {int 1 30 1 15 "Number of Items"}
-} -adjusters {maze_actions maze_rendering maze_fog maze_speed} \
+} -adjusters {maze_move maze_nav maze_actions maze_rendering maze_fog maze_speed} \
   -label "3D Maze Explorer"
+
+workspace::adjuster maze_move {
+    move_fwd     {action "Forward (↑/W)"}
+    move_back    {action "Back (↓/S)"}
+    strafe_left  {action "Strafe Left (A)"}
+    strafe_right {action "Strafe Right (D)"}
+} -target {} -proc maze_trigger \
+  -label "Move"
+
+workspace::adjuster maze_nav {
+    turn_left   {action "Turn Left (←)"}
+    turn_right  {action "Turn Right (→)"}
+} -target {} -proc maze_trigger \
+  -label "Turn"
 
 workspace::adjuster maze_actions {
     toggle_view {action "Toggle 2D/3D (M)"}

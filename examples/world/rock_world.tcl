@@ -253,9 +253,16 @@ proc rock_get_anim {{target {}}} {
 }
 
 proc rock_trigger {action} {
+    set w $rock_demo::w
+    set player $rock_demo::player
+    if {$w eq "" || $player eq ""} return
+
     switch $action {
-        jump  { rock_do_jump }
-        reset { rock_reset }
+        move_left  { onLeftArrow }
+        move_right { onRightArrow }
+        stop       { onDownArrow }
+        jump       { rock_do_jump }
+        reset      { rock_reset }
     }
     return
 }
@@ -278,8 +285,11 @@ workspace::adjuster rock_anim {
   -label "Animation"
 
 workspace::adjuster rock_actions {
-    jump  {action "Jump (↑/Space)"}
-    reset {action "Reset (R)"}
+    move_left  {action "← Left"}
+    move_right {action "Right →"}
+    stop       {action "Stop (↓)"}
+    jump       {action "Jump (↑/Space)"}
+    reset      {action "Reset (R)"}
 } -target {} -proc rock_trigger \
   -label "Actions"
 
