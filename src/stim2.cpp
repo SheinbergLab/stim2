@@ -3166,6 +3166,10 @@ main(int argc, char *argv[]) {
     std::cout << " OpenGL version supported: " <<  version << std::endl;
   }
 
+  // Ensure tightly packed pixel data for all texture uploads
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  
   app.init();
   app.init_imgui();
 
