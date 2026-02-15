@@ -309,7 +309,9 @@ static void parse_sheet_metadata(Tcl_Interp *interp, Tcl_Obj *meta, SpriteSheet 
     *tex_w = dict_get_int(interp, meta, "texture_width", *tex_w);
     *tex_h = dict_get_int(interp, meta, "texture_height", *tex_h);
     
-    Tcl_Obj *img = dict_get(interp, meta, "image");
+    /* Prefer full path from sprite_sheet, fall back to bare image name */
+    Tcl_Obj *img = dict_get(interp, meta, "sprite_sheet");
+    if (!img) img = dict_get(interp, meta, "image");
     if (img) *png_file = Tcl_GetString(img);
 
     Tcl_Obj *canvas = dict_get(interp, meta, "canonical_canvas");
