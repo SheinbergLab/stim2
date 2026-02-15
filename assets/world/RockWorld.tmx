@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.10" tiledversion="1.11.2" orientation="orthogonal" renderorder="right-down" width="16" height="8" tilewidth="128" tileheight="128" infinite="0" nextlayerid="4" nextobjectid="7">
+ <tileset firstgid="1" source="SmallRockTiles.tsx"/>
+ <tileset firstgid="49" source="PinkStar.tsx"/>
+ <tileset firstgid="88" source="FierceTooth.tsx"/>
+ <layer id="3" name="Background" width="16" height="8">
+  <data encoding="csv">
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+</data>
+ </layer>
+ <layer id="1" name="Collision" width="16" height="8">
+  <data encoding="csv">
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,37,39,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,
+11,11,11,11,12,0,0,0,0,0,10,11,11,46,23,23,
+23,23,23,23,45,11,11,11,11,11,46,23,23,23,23,23
+</data>
+ </layer>
+ <objectgroup id="2" name="Objects">
+  <object id="1" name="player_spawn" type="spawn" x="66.6667" y="736.667">
+   <point/>
+  </object>
+  <object id="6" x="1113.33" y="1400" width="3.33333"/>
+ </objectgroup>
+</map>
