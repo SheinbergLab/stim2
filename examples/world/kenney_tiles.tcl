@@ -34,20 +34,18 @@ namespace eval kenney_demo {
 # SETUP
 # ============================================================
 
-proc kenney_setup { {gravity -9.8} {bounciness 0.3} } {
+proc kenney_setup {} {
     glistInit 1
     resetObjList
 
     set kenney_demo::objects [list]
-    set kenney_demo::gravity_y $gravity
-    set kenney_demo::restitution $bounciness
 
     # Create world
     set w [worldCreate]
     objName $w kenney_world
     set kenney_demo::w $w
 
-    worldSetGravity $w 0 $gravity
+    worldSetGravity $w 0 $kenney_demo::gravity_y
 
     # Load Kenney sprite sheet
     set sheet_json [spritesheet::process \
@@ -122,7 +120,8 @@ proc kenney_drop_batch {} {
 
 proc kenney_clear {} {
     set w $kenney_demo::w
-    foreach obj $kenney_demo::objects {
+    # Remove in reverse order; ground=0, left=1, right=2 are static
+    foreach obj [lreverse $kenney_demo::objects] {
         catch {worldRemoveSprite $w $obj}
     }
     set kenney_demo::objects [list]
@@ -197,11 +196,9 @@ proc onKeyPress {keycode} {
 # ============================================================
 workspace::reset
 
-workspace::setup kenney_setup {
-    gravity    {float -20.0 0.0 0.5 -9.8 "Gravity" m/s²}
-    bounciness {float 0.0 1.0 0.05 0.3 "Bounciness"}
-} -adjusters {kenney_actions kenney_gravity kenney_physics kenney_limits} \
-  -label "Kenney Sprite Physics"
+workspace::setup kenney_setup {} \
+    -adjusters {kenney_actions kenney_gravity kenney_physics kenney_limits} \
+    -label "Kenney Sprite Physics"
 
 workspace::adjuster kenney_actions {
     drop_one   {action "Drop One (↓)"}
