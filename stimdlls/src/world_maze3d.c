@@ -527,9 +527,9 @@ static void maze3d_move_grid(Maze3D *m, float forward, float strafe, float dt)
         m->cam_z = nz;
 }
 
-void maze3d_rotate(Maze3D *m, float dyaw, float dpitch)
+void maze3d_rotate(Maze3D *m, float dyaw, float dpitch, float dt)
 {
-    m->cam_yaw += dyaw;
+    m->cam_yaw += dyaw * m->turn_speed * dt;
     m->cam_pitch += dpitch;
     if (m->cam_pitch >  1.4f) m->cam_pitch =  1.4f;
     if (m->cam_pitch < -1.4f) m->cam_pitch = -1.4f;
@@ -1218,7 +1218,10 @@ static int worldMaze3DRotateCmd(ClientData cd, Tcl_Interp *interp,
     double dyaw, dpitch = 0;
     if (Tcl_GetDouble(interp, argv[2], &dyaw) != TCL_OK) return TCL_ERROR;
     if (argc > 3) Tcl_GetDouble(interp, argv[3], &dpitch);
-    maze3d_rotate(m, (float)dyaw, (float)dpitch);
+
+    float dt = getFrameDuration() / 1000.0f;
+    if (dt > 0.1f) dt = 0.016f;
+    maze3d_rotate(m, (float)dyaw, (float)dpitch, dt);    
     return TCL_OK;
 }
 

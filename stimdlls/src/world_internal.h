@@ -340,7 +340,7 @@ void    maze3d_render(World *w, Maze3D *m);
 void    maze3d_render_2d_marker(World *w, Maze3D *m);
 void    maze3d_update_items(World *w, Maze3D *m, float dt);
 void    maze3d_sync_camera(World *w, Maze3D *m);
-void    maze3d_rotate(Maze3D *m, float dyaw, float dpitch);
+void    maze3d_rotate(Maze3D *m, float dyaw, float dpitch, float dt);
 int     maze3d_is_enabled(Maze3D *m);
 void    world_maze3d_register_commands(Tcl_Interp *interp, OBJ_LIST *olist);
 
