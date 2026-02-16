@@ -438,6 +438,6 @@ workspace::adjuster maze_fog {
 
 workspace::adjuster maze_speed {
     move_speed {float 1.0 10.0 0.5 3.0 "Move Speed"}
-    turn_speed {float 0.5 5.0 0.5 2.0 "Turn Speed"}
+    turn_speed {float 0.5 10.0 0.5 6.0 "Turn Speed"}
 } -target maze_world -proc maze_set_speed -getter maze_get_speed \
   -label "Movement"
