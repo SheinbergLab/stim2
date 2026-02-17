@@ -1073,6 +1073,15 @@ static int Box2DRevoluteJointCreateCmd(ClientData clientData, Tcl_Interp *interp
   if (find_body(bw, Tcl_GetString(objv[2]), &bodyA) != TCL_OK) return TCL_ERROR;
   if (find_body(bw, Tcl_GetString(objv[3]), &bodyB) != TCL_OK) return TCL_ERROR;
 
+  /* guard: Box2D asserts bodyA != bodyB and will crash if violated */
+  if (B2_ID_EQUALS(bodyA, bodyB)) {
+    Tcl_AppendResult(interp, "cannot create joint: bodyA \"",
+                     Tcl_GetString(objv[2]), "\" and bodyB \"",
+                     Tcl_GetString(objv[3]),
+                     "\" resolve to the same body", NULL);
+    return TCL_ERROR;
+  }
+
   /* check this, was get GetWorldCenter for 2.4 */
   b2Vec2 pivot = b2Body_GetWorldCenterOfMass(bodyA);
   b2RevoluteJointDef jointDef = b2DefaultRevoluteJointDef();
