@@ -82,8 +82,13 @@ int world_load_atlas(World *w, const char *file, int tw, int th, int firstgid)
     if (w->atlas_count >= WORLD_MAX_ATLASES) return -1;
     
     char path[WORLD_MAX_PATH_LEN];
-    world_join_path(path, WORLD_MAX_PATH_LEN, w->base_path, file);
-    
+    if (file[0] == '/') {
+      strncpy(path, file, WORLD_MAX_PATH_LEN - 1);
+      path[WORLD_MAX_PATH_LEN - 1] = '\0';
+    } else {
+      world_join_path(path, WORLD_MAX_PATH_LEN, w->base_path, file);
+    }
+
     int img_w, img_h;
     GLuint texture = world_load_texture(path, &img_w, &img_h);
     if (!texture) return -1;
