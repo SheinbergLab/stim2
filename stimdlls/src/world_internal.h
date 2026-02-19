@@ -27,8 +27,8 @@
 #define WORLD_MAX_OBJECTS        256
 #define WORLD_MAX_PATH_LEN       512
 #define WORLD_MAX_COLLISION_VERTS    8
+#define WORLD_MAX_TILE_COLLISIONS  256
 #define WORLD_MAX_SHAPES_PER_TILE    8
-#define WORLD_MAX_TILE_COLLISIONS    256
 #define WORLD_MAX_SPRITE_TILESETS    16
 #define WORLD_MAX_OBJECT_PROPS       16
 #define WORLD_MAX_SHAPES_PER_BODY    16
@@ -184,7 +184,7 @@ struct SpriteSheet {
     float canonical_w, canonical_h;
     
     /* Per-frame collision */
-    TileCollision frame_collisions[WORLD_MAX_TILE_COLLISIONS];
+    TileCollision frame_collisions[WORLD_MAX_FRAMES];
     int tile_collision_count;
 };
 
