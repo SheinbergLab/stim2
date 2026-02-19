@@ -144,11 +144,6 @@ static int worldCreateSpriteCmd(ClientData cd, Tcl_Interp *interp, int argc, cha
     
     World *w = (World *)GR_CLIENTDATA(OL_OBJ(olist, id));
     
-    fprintf(stderr, "worldCreateSprite: sprite_count=%d max=%d w=%p\n",
-        w->sprite_count, WORLD_MAX_SPRITES, (void*)w);
-  
-
-  
     if (w->sprite_count >= WORLD_MAX_SPRITES) {
         Tcl_AppendResult(interp, "max sprites", NULL);
         return TCL_ERROR;

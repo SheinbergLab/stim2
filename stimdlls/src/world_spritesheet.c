@@ -411,13 +411,6 @@ static void parse_frame_collision(Tcl_Interp *interp, Tcl_Obj *fixtures_obj,
 static int worldAddSpriteSheetCmd(ClientData cd, Tcl_Interp *interp,
                                    int objc, Tcl_Obj *const objv[])
 {
-  fprintf(stderr, "sizeof(SpriteSheet)=%zu sizeof(TileCollision)=%zu "
-	  "sizeof(AsepriteData)=%zu "
-	  "offsetof(frame_collisions)=%zu offsetof(tile_collision_count)=%zu\n",
-	  sizeof(SpriteSheet), sizeof(TileCollision), sizeof(AsepriteData),
-	  offsetof(SpriteSheet, frame_collisions),
-	  offsetof(SpriteSheet, tile_collision_count));
-  
     OBJ_LIST *olist = (OBJ_LIST *)cd;
     if (objc != 4) { Tcl_WrongNumArgs(interp, 1, objv, "world name sheetDict"); return TCL_ERROR; }
 
