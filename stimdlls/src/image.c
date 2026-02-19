@@ -385,7 +385,8 @@ static int texture_pool_upload(int slot, int width, int height, int channels,
     GLenum format = GL_RGB;
     if (channels == 4) format = GL_RGBA;
     else if (channels == 1) format = GL_RED;
-    
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);    
     glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, 
                  format, GL_UNSIGNED_BYTE, pixels);
 
