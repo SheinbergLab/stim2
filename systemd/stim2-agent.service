@@ -1,0 +1,20 @@
+[Unit]
+Description=stim2 Management Agent
+After=network.target
+Wants=stim2.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/dserv-agent --service stim2-x11 --no-tls --allow-reboot --components /usr/local/stim2/config/components.json
+Restart=always
+RestartSec=5
+ProtectHome=read-only
+PrivateTmp=true
+EnvironmentFile=-/etc/stim2-agent/env
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=stim2-agent
+
+[Install]
+WantedBy=multi-user.target
