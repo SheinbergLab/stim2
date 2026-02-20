@@ -445,7 +445,13 @@ else()
     set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA ${CMAKE_CURRENT_SOURCE_DIR}/dpkg/postinst)
     
     install(TARGETS stim2 DESTINATION "/usr/local/stim2")
-    
+
+    install(
+	PROGRAMS start-stim2.sh
+	DESTINATION "/usr/local/stim2"
+	COMPONENT stim2
+    )
+
     # Add stimdlls
     file(GLOB STIMDLLS stimdlls/build/*.so)
     message("Adding STIMDLLS: ${STIMDLLS}")
