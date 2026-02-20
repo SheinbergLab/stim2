@@ -4,3 +4,61 @@ set -e
 
 # Refresh dynamic lib cache for libs installed with package.
 ldconfig
+
+# Install systemd services if not already present (don't overwrite, don't enable)
+for svc in stim2.service stim2-x11.service; do
+    if [ ! -f /etc/systemd/system/$svc ]; then
+        cp /usr/local/stim2/systemd/$svc /etc/systemd/system/
+        echo "Installed $svc (not enabled)"
+    fi
+done
+systemctl daemon-reload
+
+# Bootstrap dlsh if not already installed
+if [ ! -f /usr/local/dlsh/dlsh.zip ]; then
+    echo "dlsh not found, installing..."
+    DLSH_URL=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest \
+        | grep "browser_download_url.*dlsh.*\.zip" \
+        | head -1 | cut -d'"' -f4)
+
+    if [ -n "$DLSH_URL" ]; then
+        DLSH_VER=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest \
+            | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+        mkdir -p /usr/local/dlsh
+        curl -fSL "$DLSH_URL" -o /usr/local/dlsh/dlsh.zip
+        echo "$DLSH_VER" > /usr/local/dlsh/VERSION
+        echo "Installed dlsh $DLSH_VER to /usr/local/dlsh/"
+    else
+        echo "Warning: could not determine dlsh download URL"
+    fi
+fi
+
+# Bootstrap dserv-agent if not already installed (standalone stim2 systems)
+if ! command -v dserv-agent >/dev/null 2>&1; then
+    echo "dserv-agent not found, installing for stim2 management..."
+    ARCH=$(dpkg --print-architecture)
+    case "$ARCH" in
+        amd64) AGENT_ARCH="amd64" ;;
+        arm64) AGENT_ARCH="arm64" ;;
+        *) echo "Unsupported architecture: $ARCH"; exit 0 ;;
+    esac
+
+    AGENT_URL=$(curl -s https://api.github.com/repos/SheinbergLab/dserv/releases/latest \
+        | grep "browser_download_url.*dserv-agent_linux_${AGENT_ARCH}" \
+        | head -1 | cut -d'"' -f4)
+
+    if [ -n "$AGENT_URL" ]; then
+        curl -fSL "$AGENT_URL" -o /usr/local/bin/dserv-agent
+        chmod +x /usr/local/bin/dserv-agent
+        echo "Installed dserv-agent to /usr/local/bin/dserv-agent"
+
+        if [ ! -f /etc/systemd/system/stim2-agent.service ]; then
+            cp /usr/local/stim2/systemd/stim2-agent.service /etc/systemd/system/
+            systemctl daemon-reload
+            systemctl enable stim2-agent
+            systemctl start stim2-agent
+        fi
+    else
+        echo "Warning: could not determine dserv-agent download URL"
+    fi
+fi
