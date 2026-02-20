@@ -105,7 +105,9 @@ void world_sprite_update_animation(World *w, Sprite *sp, float dt)
             sp->tile_id = sp->anim_frames[sp->anim_current_frame];
             if (sp->atlas_id < w->atlas_count) {
                 Atlas *a = &w->atlases[sp->atlas_id];
-                world_get_tile_uvs(a, sp->tile_id, &sp->u0, &sp->v0, &sp->u1, &sp->v1);
+		if (a->cols > 0) { /* only grid atlases */
+		  world_get_tile_uvs(a, sp->tile_id, &sp->u0, &sp->v0, &sp->u1, &sp->v1);
+		}
             }
         }
     }
@@ -168,7 +170,8 @@ static int worldCreateSpriteCmd(ClientData cd, Tcl_Interp *interp, int argc, cha
     
     if (atlas_id < w->atlas_count) {
         Atlas *a = &w->atlases[atlas_id];
-        world_get_tile_uvs(a, tile_id, &sp->u0, &sp->v0, &sp->u1, &sp->v1);
+	if (a->cols > 0)  // only grid atlases
+	  world_get_tile_uvs(a, tile_id, &sp->u0, &sp->v0, &sp->u1, &sp->v1);
     }
     Tcl_SetObjResult(interp, Tcl_NewIntObj(w->sprite_count++));
     return TCL_OK;
@@ -369,6 +372,7 @@ static int worldSetSpriteTileCmd(ClientData cd, Tcl_Interp *interp, int argc, ch
     Sprite *sp = &w->sprites[sid];
     sp->tile_id = tile_id;
     if (sp->atlas_id < w->atlas_count) {
+      if (w->atlases[sp->atlas_id].cols > 0)
         world_get_tile_uvs(&w->atlases[sp->atlas_id], tile_id, &sp->u0, &sp->v0, &sp->u1, &sp->v1);
     }
     return TCL_OK;

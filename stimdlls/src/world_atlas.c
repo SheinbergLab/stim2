@@ -29,13 +29,17 @@ Atlas* world_find_atlas_for_gid(World *w, int gid)
 
 void world_get_tile_uvs(Atlas *a, int gid, float *u0, float *v0, float *u1, float *v1)
 {
-    int local = gid - a->firstgid;
-    if (local < 0) local = 0;
-    int col = local % a->cols, row = local / a->cols;
-    *u0 = col * a->tile_u; 
-    *v0 = row * a->tile_v;
-    *u1 = *u0 + a->tile_u; 
-    *v1 = *v0 + a->tile_v;
+  if (a->cols <= 0 || a->rows <= 0) {
+    *u0 = *v0 = 0.0f; *u1 = *v1 = 1.0f;
+    return;
+  }
+  int local = gid - a->firstgid;
+  if (local < 0) local = 0;
+  int col = local % a->cols, row = local / a->cols;
+  *u0 = col * a->tile_u; 
+  *v0 = row * a->tile_v;
+  *u1 = *u0 + a->tile_u; 
+  *v1 = *v0 + a->tile_v;
 }
 
 /*========================================================================
