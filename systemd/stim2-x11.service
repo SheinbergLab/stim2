@@ -1,25 +1,17 @@
-# Mask getty@tty1.service or it will compete with xinit for vt1
-# systemctl mask getty@tty1.service
-
 [Unit]
 Description=Stim2 Stimulus Presentation (X11)
 After=systemd-user-sessions.service
 
 [Service]
 Type=simple
-User=root
-PAMName=login
-ExecStart=/usr/bin/xinit /usr/local/stim2/stim2 -F -f /usr/local/stim2/config/linux.cfg -- :0 vt1
+ExecStart=/usr/bin/xinit /usr/local/stim2/start-stim2.sh -- :0 vt1 -keeptty -noreset -s 0 -dpms
 Restart=always
 RestartSec=5
 CPUSchedulingPolicy=fifo
 CPUSchedulingPriority=50
-StandardInput=tty
 TTYPath=/dev/tty1
-TTYReset=yes
-TTYVHangup=yes
-SupplementaryGroups=video input tty
-WorkingDirectory=/root
+StandardInput=tty
+StandardOutput=tty
 
 [Install]
 WantedBy=multi-user.target
