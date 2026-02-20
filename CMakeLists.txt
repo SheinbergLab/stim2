@@ -540,6 +540,20 @@ else()
     set(SYSTEMD_SCRIPT systemd/stim2.service)
     set(SYSTEMD_SCRIPT_X11 systemd/stim2-x11.service)
     message("Bundling systemd service: ${SYSTEMD_SCRIPT}, ${SYSTEMD_SCRIPT_X11}")
+
+    # Add stim2-agent service and components
+    install(
+        FILES systemd/stim2-agent.service
+        DESTINATION "/usr/local/stim2/systemd"
+        COMPONENT stim2
+    )
+    
+    install(
+        FILES config/components.json
+        DESTINATION "/usr/local/stim2/config"
+        COMPONENT stim2
+    )
+
     install(
         FILES ${SYSTEMD_SCRIPT} ${SYSTEMD_SCRIPT_X11}
         DESTINATION /usr/local/stim2/systemd
