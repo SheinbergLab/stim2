@@ -1165,6 +1165,11 @@ static int uniform_get(Tcl_Interp *interp, Tcl_HashTable *table,
     return TCL_ERROR;
   }
 
+  if (!uinfo->val) {
+    Tcl_AppendResult(interp, "uniform \"", name, "\" has no value set", NULL);
+    return TCL_ERROR;
+  }
+ 
   // Create a new Tcl list object to hold the uniform values
   listObj = Tcl_NewListObj(0, NULL);
 

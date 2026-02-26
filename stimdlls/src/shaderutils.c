@@ -512,8 +512,16 @@ int add_defaults_to_table(Tcl_Interp *interp, Tcl_HashTable *dtable,
         if (pch[0] != '#') {
             if (Tcl_SplitList(interp, pch, &argc, (const char ***)&argv) == TCL_OK) {
                 if (argc == 2) {
-                    entryPtr = Tcl_CreateHashEntry(dtable, argv[0], &newentry);
-                    Tcl_SetHashValue(entryPtr, strdup(argv[1]));
+		  /* Rejoin argv[1..argc-1] as the value string */
+		  Tcl_DString ds;
+		  Tcl_DStringInit(&ds);
+		  for (int i = 1; i < argc; i++) {
+		    if (i > 1) Tcl_DStringAppend(&ds, " ", 1);
+		    Tcl_DStringAppend(&ds, argv[i], -1);
+		  }
+		  entryPtr = Tcl_CreateHashEntry(dtable, argv[0], &newentry);
+		  Tcl_SetHashValue(entryPtr, strdup(Tcl_DStringValue(&ds)));
+		  Tcl_DStringFree(&ds);		  
                 }
                 Tcl_Free((char *)argv);
             }
