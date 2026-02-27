@@ -5,14 +5,20 @@ set -e
 # Refresh dynamic lib cache for libs installed with package.
 ldconfig
 
-# Install systemd services if not already present (don't overwrite, don't enable)
-for svc in stim2.service stim2-x11.service; do
-    if [ ! -f /etc/systemd/system/$svc ]; then
-        cp /usr/local/stim2/systemd/$svc /etc/systemd/system/
-        echo "Installed $svc (not enabled)"
-    fi
-done
-systemctl daemon-reload
+# Determine platform-appropriate stim2 service
+ARCH=$(dpkg --print-architecture)
+if [ "$ARCH" = "arm64" ]; then
+    STIM2_SVC=stim2.service
+else
+    STIM2_SVC=stim2-x11.service
+fi
+
+# Install stim2 service on first install only (never clobber existing config)
+if [ ! -f /etc/systemd/system/stim2.service ] && [ ! -f /etc/systemd/system/stim2-x11.service ]; then
+    cp /usr/local/stim2/systemd/$STIM2_SVC /etc/systemd/system/
+    echo "Installed $STIM2_SVC (not enabled)"
+    systemctl daemon-reload
+fi
 
 # Bootstrap dlsh if not already installed
 if [ ! -f /usr/local/dlsh/dlsh.zip ]; then
@@ -36,7 +42,6 @@ fi
 # Bootstrap dserv-agent only on standalone stim2 systems (no dserv)
 if ! dpkg -s dserv >/dev/null 2>&1 && ! command -v dserv-agent >/dev/null 2>&1; then
     echo "dserv-agent not found (standalone stim2), installing..."
-    ARCH=$(dpkg --print-architecture)
     case "$ARCH" in
         amd64) AGENT_ARCH="amd64" ;;
         arm64) AGENT_ARCH="arm64" ;;

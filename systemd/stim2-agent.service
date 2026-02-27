@@ -1,7 +1,6 @@
 [Unit]
 Description=stim2 Management Agent
 After=network.target
-Wants=stim2.service
 
 [Service]
 Type=simple
