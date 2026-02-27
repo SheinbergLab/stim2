@@ -8,3 +8,9 @@ screen_set ScreenHeightCm 13.6
 
 # Set this system's subject distance to monitor
 screen_set DistanceToMonitor 40.0
+
+# For Display++ Systems
+#screen_set ScreenWidthCm 21.7
+#screen_set ScreenHeightCm 13.6
+#screen_set DistanceToMonitor 120.0
+
