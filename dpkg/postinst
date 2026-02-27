@@ -33,9 +33,9 @@ if [ ! -f /usr/local/dlsh/dlsh.zip ]; then
     fi
 fi
 
-# Bootstrap dserv-agent if not already installed (standalone stim2 systems)
-if ! command -v dserv-agent >/dev/null 2>&1; then
-    echo "dserv-agent not found, installing for stim2 management..."
+# Bootstrap dserv-agent only on standalone stim2 systems (no dserv)
+if ! dpkg -s dserv >/dev/null 2>&1 && ! command -v dserv-agent >/dev/null 2>&1; then
+    echo "dserv-agent not found (standalone stim2), installing..."
     ARCH=$(dpkg --print-architecture)
     case "$ARCH" in
         amd64) AGENT_ARCH="amd64" ;;
