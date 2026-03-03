@@ -15,62 +15,54 @@ void main(void)
 }
 
 -- Fragment
-
 #ifdef GL_ES
 precision mediump float;
-precision mediump int;
 #endif
 
 in vec2 texcoord;
 out vec4 fragcolor;
 
 uniform float time;
-
 uniform float NCycles;
 uniform float CyclesPerSec;
 uniform float Phase;
 uniform float Contrast;
-uniform float Sigma;
+uniform float Sigma;         // Physical Sigma / Quad Size
 uniform int Envelope;
 uniform int Circular;
-uniform float ColorR;
-uniform float ColorG;
-uniform float ColorB;
-uniform float ColorA;
-uniform int InvertR;
-uniform int InvertG;
-uniform int InvertB;
+
+uniform float ColorR; uniform float ColorG; uniform float ColorB; uniform float ColorA;
+uniform int InvertR;  uniform int InvertG;  uniform int InvertB;
 
 void main(void)
 {
-  float r;
-  float g;
-  float b;
-  float alpha = 1.0;
-  float dx = texcoord.s-.5;
-  float dy = texcoord.t-.5;
-  float d = sqrt(dx*dx+dy*dy);
-  float scaled_t;
-  if (Circular == 1) scaled_t = 1. * d * NCycles;
-  else scaled_t = 1. * dy * NCycles;
-  
-  float angle = scaled_t*6.283+Phase+(time*CyclesPerSec);
-  
-  float modulation = (sin(angle)/2.)*Contrast;
-  float intensity = clamp(modulation+0.5,0.,1.);
-  if (Envelope != 0) {
-    float scale = .3989423/Sigma;
-    float t1 = -1.*d*d;
-    float t2 = 2.*Sigma*Sigma;
-    alpha = exp(t1/t2);
-  }
-  if (InvertR == 1) r = ColorR-(ColorR*intensity);
-  else r = ColorR*intensity;
-  if (InvertG == 1) g = ColorG-(ColorG*intensity);
-  else g = ColorG*intensity;
-  if (InvertB == 1) b = ColorB-(ColorB*intensity);
-  else b = ColorB*intensity;
-  fragcolor = vec4 (r, g, b, ColorA*alpha);
+    float TWO_PI = 6.283185307;
+    vec2 uv = texcoord - 0.5;
+    float d = length(uv);
+
+    // 1. Spatial & Temporal Modulation
+    float spatial_t = (Circular == 1) ? d : uv.y;
+    float angle = (spatial_t * NCycles * TWO_PI) + Phase + (time * CyclesPerSec * TWO_PI);
+    
+    // sin() oscillates -1 to 1; we scale to 0 to 1
+    float intensity = (sin(angle) * 0.5 * Contrast) + 0.5;
+    intensity = clamp(intensity, 0.0, 1.0);
+
+    // 2. Gaussian Envelope
+    float alpha = 1.0;
+    if (Envelope != 0) {
+        // Standard: exp( -dist^2 / (2 * sigma^2) )
+        // Using a small epsilon to prevent division by zero
+        float s = max(Sigma, 0.001); 
+        alpha = exp(-(d * d) / (2.0 * s * s));
+    }
+
+    // 3. Color & Inversion Logic
+    float r = ColorR * mix(intensity, 1.0 - intensity, float(InvertR));
+    float g = ColorG * mix(intensity, 1.0 - intensity, float(InvertG));
+    float b = ColorB * mix(intensity, 1.0 - intensity, float(InvertB));
+
+    fragcolor = vec4(r, g, b, ColorA * alpha);
 }
 
 -- Uniforms
