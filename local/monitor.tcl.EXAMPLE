@@ -10,7 +10,7 @@ screen_set ScreenHeightCm 13.6
 screen_set DistanceToMonitor 40.0
 
 # For Display++ Systems
-#screen_set ScreenWidthCm 21.7
-#screen_set ScreenHeightCm 13.6
+#screen_set ScreenWidthCm 68.0
+#screen_set ScreenHeightCm 38.0
 #screen_set DistanceToMonitor 120.0
 
