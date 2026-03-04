@@ -381,7 +381,7 @@ int Metagroup_Init(Tcl_Interp *interp)
   }
   
   
-  if (MetagroupID < 0) MetagroupID = gobjRegisterType();
+  if (MetagroupID < 0) MetagroupID = gobjRegisterType("metagroup");
 
   Tcl_CreateCommand(interp, "metagroup", (Tcl_CmdProc *) metagroupCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);

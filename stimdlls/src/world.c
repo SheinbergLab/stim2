@@ -414,7 +414,7 @@ int World_Init(Tcl_Interp *interp)
 #else
     if (Tcl_PkgRequire(interp, "Tcl", "8.5-", 0) == NULL) return TCL_ERROR;
 #endif
-    if (WorldID < 0) { WorldID = gobjRegisterType(); gladLoadGL(); }
+    if (WorldID < 0) { WorldID = gobjRegisterType("world"); gladLoadGL(); }
 
     Tcl_CreateCommand(interp, "worldCreate", (Tcl_CmdProc*)worldCreateCmd, (ClientData)OBJList, NULL);
     Tcl_CreateCommand(interp, "worldSetGravity", (Tcl_CmdProc*)worldSetGravityCmd, (ClientData)OBJList, NULL);

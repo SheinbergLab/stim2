@@ -1273,7 +1273,7 @@ int Shader_Init(Tcl_Interp *interp)
     return TCL_ERROR;
   }
   
-  if (ShaderObjID < 0) ShaderObjID = gobjRegisterType();
+  if (ShaderObjID < 0) ShaderObjID = gobjRegisterType("shader");
 
   gladLoadGL();
   

@@ -1972,7 +1972,7 @@ int Video_Init(Tcl_Interp *interp)
     }
 
     if (VideoID < 0) {
-        VideoID = gobjRegisterType();
+        VideoID = gobjRegisterType("video");
         
         // Load OpenGL functions
         gladLoadGL();

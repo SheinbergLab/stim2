@@ -1494,7 +1494,7 @@ int Image_Init(Tcl_Interp *interp)
     }
 
     if (ImageID < 0) {
-        ImageID = gobjRegisterType();
+        ImageID = gobjRegisterType("image");
         
         // Ensure OpenGL function pointers are loaded
         gladLoadGL();

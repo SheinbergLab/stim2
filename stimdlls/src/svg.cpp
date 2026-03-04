@@ -755,7 +755,7 @@ extern "C" int Svg_Init(Tcl_Interp *interp)
     }
 
     if (SvgID < 0) {
-        SvgID = gobjRegisterType();
+        SvgID = gobjRegisterType("svg");
         
         gladLoadGL();
         

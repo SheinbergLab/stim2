@@ -965,7 +965,7 @@ int Polygon_Init(Tcl_Interp *interp)
     return TCL_ERROR;
   }
   
-  if (PolygonID < 0) PolygonID = gobjRegisterType();
+  if (PolygonID < 0) PolygonID = gobjRegisterType("polygon");
 
   gladLoadGL();
     

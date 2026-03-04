@@ -1563,7 +1563,7 @@ int Spine_Init(Tcl_Interp * interp)
   }
   
   if (SpineID < 0) {
-    SpineID = gobjRegisterType();
+    SpineID = gobjRegisterType("spine");
   }
   else return TCL_OK;
 

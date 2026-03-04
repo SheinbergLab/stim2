@@ -1636,7 +1636,7 @@ int Mesh_Init(Tcl_Interp *interp)
     return TCL_ERROR;
   }
   
-  if (MeshObjID < 0) MeshObjID = gobjRegisterType();
+  if (MeshObjID < 0) MeshObjID = gobjRegisterType("mesh");
 
 #ifdef STIM_V1
   glewInit();

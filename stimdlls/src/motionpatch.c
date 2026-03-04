@@ -1088,7 +1088,7 @@ int Motionpatch_Init(Tcl_Interp *interp)
     return TCL_ERROR;
   }
   
-  if (MotionpatchID < 0) MotionpatchID = gobjRegisterType();
+  if (MotionpatchID < 0) MotionpatchID = gobjRegisterType("motionpatch");
 
   gladLoadGL();
 

@@ -1546,7 +1546,7 @@ int Text_Init(Tcl_Interp *interp)
     }
     
     if (TextID < 0) {
-        TextID = gobjRegisterType();
+        TextID = gobjRegisterType("text");
         
         gladLoadGL();
         

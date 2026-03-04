@@ -1985,7 +1985,7 @@ int Box_Init(Tcl_Interp *interp)
   if (Box2DID >= 0)		/* Already been here */
     return TCL_OK;
   
-  Box2DID = gobjRegisterType();
+  Box2DID = gobjRegisterType("box2d");
 
   Tcl_CreateCommand(interp, "Box2D", 
 		    (Tcl_CmdProc *) Box2DCmd, 
