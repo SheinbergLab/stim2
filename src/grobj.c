@@ -30,11 +30,6 @@ OBJ_LIST *getOBJList(void)
   return OBJList;
 }
 
-int gobjRegisterType(void)
-{
-  return ntypes++;		/* just keep returning unique id's */
-}
-
 static void gobjAddObjName(char *name, int type)
 {
   if (typenames[type]) free(typenames[type]);
@@ -42,10 +37,33 @@ static void gobjAddObjName(char *name, int type)
   strcpy(typenames[type], name);
 }
 
+int gobjRegisterType(const char *name)
+{
+  int id = ntypes++;
+  if (name) gobjAddObjName((char *)name, id);
+  return id;
+}
+
 char *gobjTypeName(int type)
 {
-  if (type > 255) return NULL;
+  if (type < 0 || type > 255) return NULL;
   return typenames[type];
+}
+
+int gobjFindType(const char *name)
+{
+  int i;
+  if (!name) return -1;
+  for (i = 0; i < ntypes; i++) {
+    if (typenames[i] && strcmp(typenames[i], name) == 0)
+      return i;
+  }
+  return -1;
+}
+
+int gobjNumTypes(void)
+{
+  return ntypes;
 }
 
 /********************************************************************
@@ -246,8 +264,6 @@ int gobjAddObj(OBJ_LIST *list, GR_OBJ *obj)
   
   OL_OBJ(list,i) = obj;
   OL_NOBJS(list)++;
-
-  if (GR_NAME(obj)[0]) gobjAddObjName(GR_NAME(obj), GR_OBJTYPE(obj));
 
   return (i);
 }

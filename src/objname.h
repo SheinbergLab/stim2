@@ -96,6 +96,33 @@ OBJ_LIST *objNameGetOlist(ObjNameInfo *info);
 int resolveObjId(Tcl_Interp *interp, ObjNameInfo *info, const char *arg,
                  int reqtype, const char *tname);
 
+/*
+ * Core type registry (in grobj.c)
+ *
+ * Types are registered automatically when modules call gobjRegisterType("name").
+ * objFind uses these for -type lookups.
+ */
+int gobjRegisterType(const char *name);
+char *gobjTypeName(int type);
+int gobjFindType(const char *name);
+int gobjNumTypes(void);
+
+/*
+ * objFind - Query objects by type and/or name pattern
+ *
+ * Tcl usage:
+ *   objFind                                ;# all objects (ids only)
+ *   objFind -type shader                   ;# all shader objects
+ *   objFind -match "grating_*"             ;# named objects matching glob
+ *   objFind -type shader -match "grating_*" ;# both filters
+ *   objFind -type shader -names            ;# return {name id ...} pairs
+ *
+ * Without -match: iterates full object list (finds unnamed objects too)
+ * With -match: only searches named objects (unnamed have nothing to match)
+ * With -names: returns {name id name id ...} instead of just {id id ...}
+ *              Unnamed objects use "" as their name
+ */
+
 #ifdef __cplusplus
 }
 #endif

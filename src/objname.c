@@ -277,6 +277,19 @@ int resolveObjId(Tcl_Interp *interp, ObjNameInfo *info, const char *arg,
 }
 
 /********************************************************************/
+/*                     TYPE RESOLUTION                              */
+/********************************************************************/
+
+/*
+ * Resolve a type name string to a type id using core grobj registry.
+ * Returns typeId on success, -1 if not found.
+ */
+static int resolveTypeName(const char *name)
+{
+    return gobjFindType(name);
+}
+
+/********************************************************************/
 /*                     TCL COMMANDS                                 */
 /********************************************************************/
 
@@ -397,6 +410,160 @@ static int objNameClearCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
+/*
+ * objFind ?-type typename? ?-match pattern? ?-names?
+ *
+ *   Without -match: iterates full object list (finds unnamed objects too)
+ *   With -match: only searches named objects (unnamed have nothing to match)
+ *   With -names: returns {name id name id ...} instead of {id id ...}
+ */
+static int objFindCmd(ClientData clientData, Tcl_Interp *interp,
+                      int argc, char *argv[])
+{
+    ObjNameInfo *info = (ObjNameInfo *)clientData;
+    OBJ_LIST *olist;
+    int typeFilter = -1;
+    const char *matchPattern = NULL;
+    int returnNames = 0;
+    Tcl_Obj *listObj;
+    int i;
+    
+    if (!info || !info->initialized) {
+        Tcl_SetResult(interp, "object name registry not initialized", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    olist = info->olist;
+    
+    /* Parse arguments */
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-type") == 0) {
+            if (++i >= argc) {
+                Tcl_AppendResult(interp, "-type requires a value", NULL);
+                return TCL_ERROR;
+            }
+            typeFilter = resolveTypeName(argv[i]);
+            if (typeFilter < 0) {
+                /* Try as integer for forward compatibility */
+                if (Tcl_GetInt(NULL, argv[i], &typeFilter) != TCL_OK) {
+                    Tcl_AppendResult(interp, "unknown object type: ", argv[i],
+                                     "\nregistered types:", NULL);
+                    for (int t = 0; t < gobjNumTypes(); t++) {
+                        char *tn = gobjTypeName(t);
+                        if (tn) Tcl_AppendResult(interp, " ", tn, NULL);
+                    }
+                    return TCL_ERROR;
+                }
+            }
+        } else if (strcmp(argv[i], "-match") == 0) {
+            if (++i >= argc) {
+                Tcl_AppendResult(interp, "-match requires a pattern", NULL);
+                return TCL_ERROR;
+            }
+            matchPattern = argv[i];
+        } else if (strcmp(argv[i], "-names") == 0) {
+            returnNames = 1;
+        } else {
+            Tcl_AppendResult(interp, "unknown option: ", argv[i],
+                             "\nusage: objFind ?-type typename? ?-match pattern? ?-names?",
+                             NULL);
+            return TCL_ERROR;
+        }
+    }
+    
+    listObj = Tcl_NewListObj(0, NULL);
+    
+    if (matchPattern) {
+        /*
+         * With -match: iterate named objects only.
+         * Unnamed objects have nothing to match against.
+         */
+        Tcl_HashEntry *entry;
+        Tcl_HashSearch search;
+        
+        entry = Tcl_FirstHashEntry(&info->nameToId, &search);
+        while (entry) {
+            const char *name = Tcl_GetHashKey(&info->nameToId, entry);
+            int id = (int)(intptr_t)Tcl_GetHashValue(entry);
+            
+            /* Check glob match */
+            if (Tcl_StringMatch(name, matchPattern)) {
+                /* Check type filter if specified */
+                if (typeFilter >= 0) {
+                    if (id >= OL_NOBJS(olist)) goto next;
+                    if (GR_OBJTYPE(OL_OBJ(olist, id)) != typeFilter) goto next;
+                }
+                
+                if (returnNames) {
+                    Tcl_ListObjAppendElement(interp, listObj,
+                                             Tcl_NewStringObj(name, -1));
+                }
+                Tcl_ListObjAppendElement(interp, listObj, Tcl_NewIntObj(id));
+            }
+        next:
+            entry = Tcl_NextHashEntry(&search);
+        }
+    } else {
+        /*
+         * Without -match: iterate full object list.
+         * This finds unnamed objects too.
+         */
+        int nobjs = OL_NOBJS(olist);
+        
+        for (i = 0; i < nobjs; i++) {
+            GR_OBJ *obj = OL_OBJ(olist, i);
+            
+            /* Skip inactive/freed objects */
+            if (!obj) continue;
+            
+            /* Check type filter if specified */
+            if (typeFilter >= 0 && GR_OBJTYPE(obj) != typeFilter) continue;
+            
+            if (returnNames) {
+                const char *name = objIdGetName(info, i);
+                Tcl_ListObjAppendElement(interp, listObj,
+                    Tcl_NewStringObj(name ? name : "", -1));
+            }
+            Tcl_ListObjAppendElement(interp, listObj, Tcl_NewIntObj(i));
+        }
+    }
+    
+    Tcl_SetObjResult(interp, listObj);
+    return TCL_OK;
+}
+
+/*
+ * objTypes
+ *   Returns list of registered type names as {name typeid name typeid ...}
+ */
+static int objTypesCmd(ClientData clientData, Tcl_Interp *interp,
+                       int argc, char *argv[])
+{
+    Tcl_Obj *listObj;
+    int i, n;
+    
+    if (argc != 1) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], NULL);
+        return TCL_ERROR;
+    }
+    
+    listObj = Tcl_NewListObj(0, NULL);
+    n = gobjNumTypes();
+    
+    for (i = 0; i < n; i++) {
+        char *name = gobjTypeName(i);
+        if (name) {
+            Tcl_ListObjAppendElement(interp, listObj,
+                Tcl_NewStringObj(name, -1));
+            Tcl_ListObjAppendElement(interp, listObj,
+                Tcl_NewIntObj(i));
+        }
+    }
+    
+    Tcl_SetObjResult(interp, listObj);
+    return TCL_OK;
+}
+
 /********************************************************************/
 /*                     COMMAND REGISTRATION                         */
 /********************************************************************/
@@ -425,6 +592,14 @@ ObjNameInfo *objNameInitCommands(Tcl_Interp *interp, OBJ_LIST *olist)
     
     Tcl_CreateCommand(interp, "objNameClear",
                       (Tcl_CmdProc *)objNameClearCmd,
+                      (ClientData)info, (Tcl_CmdDeleteProc *)NULL);
+    
+    Tcl_CreateCommand(interp, "objFind",
+                      (Tcl_CmdProc *)objFindCmd,
+                      (ClientData)info, (Tcl_CmdDeleteProc *)NULL);
+    
+    Tcl_CreateCommand(interp, "objTypes",
+                      (Tcl_CmdProc *)objTypesCmd,
                       (ClientData)info, (Tcl_CmdDeleteProc *)NULL);
     
     return info;

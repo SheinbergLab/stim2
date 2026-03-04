@@ -764,7 +764,7 @@ static int nullObjCmd(ClientData clientData, Tcl_Interp *interp,
   obj = gobjCreateObj();
   if (!obj) return -1;
 
-  if (NullObjID < 0) NullObjID = gobjRegisterType();
+  if (NullObjID < 0) NullObjID = gobjRegisterType("null");
   
   strcpy(GR_NAME(obj), name);
   GR_OBJTYPE(obj) = NullObjID;

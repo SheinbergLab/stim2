@@ -465,7 +465,7 @@ GR_OBJ *gobjCreateObj(void);
 int gobjDestroyObj(GR_OBJ *);
 int gobjAddObj(OBJ_LIST *olist, GR_OBJ *obj);
 OBJ_LIST *getOBJList(void);
-int gobjRegisterType(void);
+int gobjRegisterType(const char *);
 
 float gobjSetPriority(GR_OBJ *obj, float priority);
 float gobjGetPriority(GR_OBJ *obj);
