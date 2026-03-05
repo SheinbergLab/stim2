@@ -423,6 +423,7 @@ static int objFindCmd(ClientData clientData, Tcl_Interp *interp,
     ObjNameInfo *info = (ObjNameInfo *)clientData;
     OBJ_LIST *olist;
     int typeFilter = -1;
+    int groupFilter = -1;
     const char *matchPattern = NULL;
     int returnNames = 0;
     Tcl_Obj *listObj;
@@ -461,11 +462,23 @@ static int objFindCmd(ClientData clientData, Tcl_Interp *interp,
                 return TCL_ERROR;
             }
             matchPattern = argv[i];
+        } else if (strcmp(argv[i], "-group") == 0) {
+            if (++i >= argc) {
+                Tcl_AppendResult(interp, "-group requires a value", NULL);
+                return TCL_ERROR;
+            }
+            if (Tcl_GetInt(interp, argv[i], &groupFilter) != TCL_OK) {
+                return TCL_ERROR;
+            }
+            if (groupFilter < 0 || groupFilter >= OGL_NGROUPS(GList)) {
+                Tcl_AppendResult(interp, "group out of range: ", argv[i], NULL);
+                return TCL_ERROR;
+            }
         } else if (strcmp(argv[i], "-names") == 0) {
             returnNames = 1;
         } else {
             Tcl_AppendResult(interp, "unknown option: ", argv[i],
-                             "\nusage: objFind ?-type typename? ?-match pattern? ?-names?",
+                             "\nusage: objFind ?-type typename? ?-group num? ?-match pattern? ?-names?",
                              NULL);
             return TCL_ERROR;
         }
@@ -493,6 +506,15 @@ static int objFindCmd(ClientData clientData, Tcl_Interp *interp,
                     if (id >= OL_NOBJS(olist)) goto next;
                     if (GR_OBJTYPE(OL_OBJ(olist, id)) != typeFilter) goto next;
                 }
+                /* Check group filter if specified */
+                if (groupFilter >= 0) {
+                    OBJ_GROUP *g = OGL_GROUP(GList, groupFilter);
+                    int found = 0, gi;
+                    for (gi = 0; gi < OG_NOBJS(g); gi++) {
+                        if (OG_OBJID(g, gi) == id) { found = 1; break; }
+                    }
+                    if (!found) goto next;
+                }
                 
                 if (returnNames) {
                     Tcl_ListObjAppendElement(interp, listObj,
@@ -503,9 +525,33 @@ static int objFindCmd(ClientData clientData, Tcl_Interp *interp,
         next:
             entry = Tcl_NextHashEntry(&search);
         }
+    } else if (groupFilter >= 0) {
+        /*
+         * With -group: iterate only that group's objects.
+         */
+        OBJ_GROUP *g = OGL_GROUP(GList, groupFilter);
+        int nobjs = OG_NOBJS(g);
+        
+        for (i = 0; i < nobjs; i++) {
+            int id = OG_OBJID(g, i);
+            GR_OBJ *obj = OL_OBJ(olist, id);
+            
+            /* Skip inactive/freed objects */
+            if (!obj) continue;
+            
+            /* Check type filter if specified */
+            if (typeFilter >= 0 && GR_OBJTYPE(obj) != typeFilter) continue;
+            
+            if (returnNames) {
+                const char *name = objIdGetName(info, id);
+                Tcl_ListObjAppendElement(interp, listObj,
+                    Tcl_NewStringObj(name ? name : "", -1));
+            }
+            Tcl_ListObjAppendElement(interp, listObj, Tcl_NewIntObj(id));
+        }
     } else {
         /*
-         * Without -match: iterate full object list.
+         * Without -match or -group: iterate full object list.
          * This finds unnamed objects too.
          */
         int nobjs = OL_NOBJS(olist);

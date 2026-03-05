@@ -108,7 +108,7 @@ int gobjFindType(const char *name);
 int gobjNumTypes(void);
 
 /*
- * objFind - Query objects by type and/or name pattern
+ * objFind - Query objects by type, group, and/or name pattern
  *
  * Tcl usage:
  *   objFind                                ;# all objects (ids only)
@@ -116,9 +116,12 @@ int gobjNumTypes(void);
  *   objFind -match "grating_*"             ;# named objects matching glob
  *   objFind -type shader -match "grating_*" ;# both filters
  *   objFind -type shader -names            ;# return {name id ...} pairs
+ *   objFind -group 2 -type box2d           ;# box2d objects in group 2
+ *   objFind -group 3 -match "world_*"      ;# named match scoped to group
  *
- * Without -match: iterates full object list (finds unnamed objects too)
+ * Without -match or -group: iterates full object list (finds unnamed objects too)
  * With -match: only searches named objects (unnamed have nothing to match)
+ * With -group: iterates only that group's objects
  * With -names: returns {name id name id ...} instead of just {id id ...}
  *              Unnamed objects use "" as their name
  */
