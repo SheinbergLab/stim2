@@ -166,6 +166,7 @@ set(STIM2_SOURCES
     src/timer.cpp
     src/glad.c
     src/rawapi.c
+    src/diagnostics.cpp
     src/imgui_console.cpp
     src/WebSocketServer.cpp
     src/TclCompletion.cpp
