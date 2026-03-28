@@ -216,6 +216,7 @@ void addLog(char *, ...);
 int setVerboseLevel(int);
 void logMessage(char *message);
 void doToggleImgui(void);
+int isImguiVisible(void);
   
 int  toggleAnimation(void);
 int  startAnimation(void);

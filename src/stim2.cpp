@@ -46,6 +46,7 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include "diagnostics.h"
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h> 
@@ -1103,6 +1104,29 @@ struct AppLog
         ImGui::EndChild();
         ImGui::End();
     }
+
+    void    DrawEmbedded()
+    {
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+        const char* buf = Buf.begin();
+        const char* buf_end = Buf.end();
+        ImGuiListClipper clipper;
+        clipper.Begin(LineOffsets.Size);
+        while (clipper.Step())
+        {
+            for (int line_no = clipper.DisplayStart; line_no < clipper.DisplayEnd; line_no++)
+            {
+                const char* line_start = buf + LineOffsets[line_no];
+                const char* line_end = (line_no + 1 < LineOffsets.Size) ? (buf + LineOffsets[line_no + 1] - 1) : buf_end;
+                ImGui::TextUnformatted(line_start, line_end);
+            }
+        }
+        clipper.End();
+        ImGui::PopStyleVar();
+
+        if (AutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+            ImGui::SetScrollHereY(1.0f);
+    }
 };
 
 
@@ -1445,18 +1469,13 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
   
   void init_imgui(void)
   {
-    // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO(); (void)io;
-    //io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
-    //io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;    // no .ini persistence
 
-    // Setup Dear ImGui style
     ImGui::StyleColorsDark();
-    //ImGui::StyleColorsClassic();
 
-    // Setup Platform/Renderer backends
     ImGui_ImplGlfw_InitForOpenGL(window, true);
 
 #ifdef STIM2_USE_GLES
@@ -1465,21 +1484,6 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
     const char* glsl_version = "#version 150";
 #endif
     ImGui_ImplOpenGL3_Init(glsl_version);
-
-    // Load Fonts
-    // - If no fonts are loaded, dear imgui will use the default font. You can also load multiple fonts and use ImGui::PushFont()/PopFont() to select them.
-    // - AddFontFromFileTTF() will return the ImFont* so you can store it if you need to select the font among multiple.
-    // - If the file cannot be loaded, the function will return NULL. Please handle those errors in your application (e.g. use an assertion, or display an error and quit).
-    // - The fonts will be rasterized at a given size (w/ oversampling) and stored into a texture when calling ImFontAtlas::Build()/GetTexDataAsXXXX(), which ImGui_ImplXXXX_NewFrame below will call.
-    // - Read 'docs/FONTS.md' for more instructions and details.
-    // - Remember that in C/C++ if you want to include a backslash \ in a string literal you need to write a double backslash \\ !
-    //io.Fonts->AddFontDefault();
-    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Roboto-Medium.ttf", 16.0f);
-    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Cousine-Regular.ttf", 15.0f);
-    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/DroidSans.ttf", 16.0f);
-    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/ProggyTiny.ttf", 10.0f);
-    //ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf", 18.0f, NULL, io.Fonts->GetGlyphRangesJapanese());
-    //IM_ASSERT(font != NULL);
   }
   
   
@@ -2486,6 +2490,7 @@ void Application::toggleImgui(void)
 {
     if (!show_imgui) {
       show_imgui = true;
+      diagResetRefresh();
       glistSetVisible(GList, 1);
       startAnimation();
       OL_DYNAMIC_STORED(OBJList) = 1;
@@ -2503,49 +2508,44 @@ void Application::toggleImgui(void)
 
 }
 void Application::processImgui(void)
-{  
-  // from imgui_console.cpp
+{
   void ShowAppConsole(bool* p_open);
-  
-  // Start the Dear ImGui frame
+
   ImGui_ImplOpenGL3_NewFrame();
   ImGui_ImplGlfw_NewFrame();
   ImGui::NewFrame();
-  
-  // 1. Show the big demo window (Most of the sample code is in ImGui::ShowDemoWindow()! You can browse its code to learn more about Dear ImGui!).
-  if (show_demo_window)
-    ImGui::ShowDemoWindow(&show_demo_window);
-  
-  // 2. Show a simple window that we create ourselves. We use a Begin/End pair to created a named window.
-  {
-    static float f = 0.0f;
-    static int counter = 0;
-    ImVec4 clear_color = ImVec4(BackgroundColor[0], BackgroundColor[1], BackgroundColor[2], BackgroundColor[3]);
-    
-    ImGui::Begin("Stim Info");                          // Create a window called "Hello, world!" and append into it.
-    
-    ImGui::Checkbox("Console", &show_console);              // Edit bools storing our window open/close state
-    ImGui::Checkbox("Show Log", &show_log);                      // Edit bools storing our window open/close state
-    ImGui::SliderInt("Verbosity", &log_level, 0, 4);     
-    
-    ImGui::SliderFloat("float", &f, 0.0f, 1.0f);            // Edit 1 float using a slider from 0.0f to 1.0f
-    ImGui::ColorEdit3("clear color", (float*)&clear_color); // Edit 3 floats representing a color
-    setBackgroundColorVals(clear_color.x, clear_color.y, clear_color.z, clear_color.w);
-    setBackgroundColor();
-    
-    if (ImGui::Button("Button"))                            // Buttons return true when clicked (most widgets return true when edited/activated)
-      counter++;
-    ImGui::SameLine();
-    ImGui::Text("counter = %d", counter);
-    
-    ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
-    ImGui::End();
+
+  ImGuiIO &io = ImGui::GetIO();
+  ImVec2 ds = io.DisplaySize;
+  float margin = 40.0f;
+
+  ImGui::SetNextWindowPos(ImVec2(margin, margin), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(ds.x - margin * 2, ds.y - margin * 2), ImGuiCond_Always);
+  ImGui::SetNextWindowBgAlpha(0.90f);
+
+  ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize |
+                           ImGuiWindowFlags_NoMove |
+                           ImGuiWindowFlags_NoCollapse |
+                           ImGuiWindowFlags_NoSavedSettings;
+
+  if (ImGui::Begin("Stim2 Diagnostics", nullptr, flags)) {
+    diagDrawSections();
+
+    ImGui::Separator();
+    ImGui::Text("%.1f FPS  |  %d frames", io.Framerate, total_frames);
+
+    ImGui::Separator();
+    if (ImGui::CollapsingHeader("Log", ImGuiTreeNodeFlags_DefaultOpen)) {
+      float remaining = ImGui::GetContentRegionAvail().y;
+      if (remaining < 60.0f) remaining = 60.0f;
+      ImGui::BeginChild("logregion", ImVec2(0, remaining), false,
+                         ImGuiWindowFlags_HorizontalScrollbar);
+      log.DrawEmbedded();
+      ImGui::EndChild();
+    }
   }
-  
-  if (show_console) ShowAppConsole(&show_console);
-  if (show_log) showAppLog(&show_log);
-  
-  // Rendering
+  ImGui::End();
+
   ImGui::Render();
 }
 
@@ -2752,6 +2752,11 @@ void add_shutdown_func(SHUTDOWN_FUNC func, void *clientdata)
 void doToggleImgui(void)
 {
   app.toggleImgui();
+}
+
+int isImguiVisible(void)
+{
+  return app.show_imgui ? 1 : 0;
 }
 
 void kill_window(void)
