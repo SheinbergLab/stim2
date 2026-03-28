@@ -26,6 +26,7 @@
 
 #include "stim2.h"
 #include "objname.h"
+#include "diagnostics.h"
 
 /* Global asset search paths - Tcl list stored as string */
 static Tcl_Obj *assetSearchPaths = NULL;
@@ -2552,11 +2553,19 @@ void addTclCommands(Tcl_Interp *interp)
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   
   /* Toggle gui */
-  Tcl_CreateCommand(interp, "toggleImgui", (Tcl_CmdProc *) toggleImguiCmd, 
+  Tcl_CreateCommand(interp, "toggleImgui", (Tcl_CmdProc *) toggleImguiCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
 
   /* Log to imgui */
-  Tcl_CreateCommand(interp, "logMessage", (Tcl_CmdProc *) logMessageCmd, 
+  Tcl_CreateCommand(interp, "logMessage", (Tcl_CmdProc *) logMessageCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+
+  /* Diagnostics panel */
+  Tcl_CreateCommand(interp, "diagSet", (Tcl_CmdProc *) diagSetCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "diagClear", (Tcl_CmdProc *) diagClearCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "diagShow", (Tcl_CmdProc *) diagShowCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   
   /* Show/set cursor */
