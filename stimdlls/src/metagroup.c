@@ -83,7 +83,26 @@ void metagroupTimer(GR_OBJ *o)
   }
 }
 
-void metagroupDraw(GR_OBJ *o) 
+/*
+ * Multiply a 4x4 column-major matrix into the current modelview.
+ * result[i][j] = sum_k current[i][k] * m[k*4+j]
+ */
+static void multMat4(float *current, const float *m)
+{
+  float tmp[16];
+  int i, j, k;
+  for (i = 0; i < 4; i++) {
+    for (j = 0; j < 4; j++) {
+      tmp[j*4+i] = 0.0f;
+      for (k = 0; k < 4; k++) {
+	tmp[j*4+i] += current[k*4+i] * m[j*4+k];
+      }
+    }
+  }
+  memcpy(current, tmp, 16 * sizeof(float));
+}
+
+void metagroupDraw(GR_OBJ *o)
 {
   int i, id;
   METAGROUP *mg = (METAGROUP *) GR_CLIENTDATA(o);
@@ -95,7 +114,7 @@ void metagroupDraw(GR_OBJ *o)
     sort_context = mg;
     qsort(mg->objects, mg->nobjs, sizeof(int), comparePriority);
   }
-  
+
   /* Draw contained objects */
   for (i = 0; i < mg->nobjs; i++) {
     id = mg->objects[i];
@@ -110,8 +129,21 @@ void metagroupDraw(GR_OBJ *o)
 		     GR_PRE_SCRIPT_ACTIVES(g),
 		     GR_N_PRE_SCRIPTS(g));
 
-      stimMultGrObjMatrix(STIM_MODELVIEW_MATRIX, g);
-      
+      if (GR_USEMATRIX(g)) {
+	/* Object has a 4x4 matrix (e.g. set by Box2D_linkObj) -
+	   multiply it into the current modelview */
+	float mv[16];
+	stimGetMatrix(STIM_MODELVIEW_MATRIX, mv);
+	multMat4(mv, GR_MATRIX(g));
+	/* Apply per-object scale */
+	mv[0]  *= GR_SX(g);  mv[1]  *= GR_SX(g);  mv[2]  *= GR_SX(g);
+	mv[4]  *= GR_SY(g);  mv[5]  *= GR_SY(g);  mv[6]  *= GR_SY(g);
+	mv[8]  *= GR_SZ(g);  mv[9]  *= GR_SZ(g);  mv[10] *= GR_SZ(g);
+	stimPutMatrix(STIM_MODELVIEW_MATRIX, mv);
+      } else {
+	stimMultGrObjMatrix(STIM_MODELVIEW_MATRIX, g);
+      }
+
       if (GR_VISIBLE(g)) drawObj(g);
 
       executeScripts(GR_POST_SCRIPTS(g),
