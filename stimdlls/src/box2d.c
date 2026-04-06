@@ -284,16 +284,33 @@ static void Box2DDelete(GR_OBJ *g)
   Tcl_HashEntry *entryPtr;
   Tcl_HashSearch search;
 
-  /* iterate over the table of bodies and free userdata */
+  /* iterate over the table of bodies and free userdata and local id copies */
   for (entryPtr = Tcl_FirstHashEntry(&bw->bodyTable, &search);
        entryPtr != NULL;
        entryPtr = Tcl_NextHashEntry(&search)) {
     body = (b2BodyId *) Tcl_GetHashValue(entryPtr);
-    Box2D_free_userdata(*body);
+    if (body) {
+      Box2D_free_userdata(*body);
+      free(body);
+    }
   }
 
-  /* free hash table */
   Tcl_DeleteHashTable(&bw->bodyTable);
+
+  /* free local joint id copies */
+  {
+    b2JointId *joint;
+    for (entryPtr = Tcl_FirstHashEntry(&bw->jointTable, &search);
+	 entryPtr != NULL;
+	 entryPtr = Tcl_NextHashEntry(&search)) {
+      joint = (b2JointId *) Tcl_GetHashValue(entryPtr);
+      if (joint) {
+	free(joint);
+      }
+    }
+  }
+
+  Tcl_DeleteHashTable(&bw->jointTable);
 
   b2DestroyWorld(bw->worldId);
   free((void *) bw);
