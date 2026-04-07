@@ -1,3 +1,4 @@
 spine_basic	"Basic spine example"
+spine_aim	"IK Aiming Control"
 spine_grid      "Multiple Characters"
 spine_skins     "Skin switching"
