@@ -27,6 +27,7 @@ namespace eval pcatch {
     variable catcher_obj ""
     variable catcher_body ""
     variable world_dg ""
+    variable world_group ""
 
     # Stored trajectory from simulation
     variable traj_t {}
@@ -48,6 +49,9 @@ namespace eval pcatch {
     variable catcher_x 0.0
     variable catcher_width 5.0
     variable ball_start_y 8.0
+
+    # World transform
+    variable world_scale 0.5
 }
 
 # ============================================================
@@ -75,7 +79,7 @@ proc pcatch_create_catcher_dg { tx } {
     set w $pcatch::catcher_width
     set wall_h 2.0
     set floor_h 0.5
-    set y_floor [expr {$catcher_y - ($floor_h + $wall_h/2.0)}]
+    set y_floor [expr {$catcher_y - $wall_h/2.0 + $floor_h/2.0}]
     set half_w [expr {$w / 2.0}]
 
     set g [dg_create]
@@ -332,7 +336,7 @@ proc pcatch_build_catcher { bworld tx } {
     set wall_h 2.0
     set wall_w 0.5
     set floor_h 0.5
-    set y_floor [expr {$catcher_y - ($floor_h + $wall_h/2.0)}]
+    set y_floor [expr {$catcher_y - $wall_h/2.0 + $floor_h/2.0}]
     set half_w [expr {$w / 2.0}]
 
     set color { 0.7 0.7 0.7 }
@@ -342,19 +346,19 @@ proc pcatch_build_catcher { bworld tx } {
     # Floor
     set obj [pcatch_create_visual_box $bworld catcher_b 0 \
                  $tx $y_floor $w $floor_h 0 $color]
-    glistAddObject $obj 0
+    metagroupAdd $pcatch::world_group $obj
     lappend parts $obj
 
     # Right wall
     set obj [pcatch_create_visual_box $bworld catcher_r 0 \
                  [expr {$tx+$half_w}] $catcher_y $wall_w $wall_h 0 $color]
-    glistAddObject $obj 0
+    metagroupAdd $pcatch::world_group $obj
     lappend parts $obj
 
     # Left wall
     set obj [pcatch_create_visual_box $bworld catcher_l 0 \
                  [expr {$tx-$half_w}] $catcher_y $wall_w $wall_h 0 $color]
-    glistAddObject $obj 0
+    metagroupAdd $pcatch::world_group $obj
     lappend parts $obj
 
     return $parts
@@ -386,6 +390,10 @@ proc pcatch_setup { nplanks } {
     set pcatch::bworld $bworld
     glistAddObject $bworld 0
 
+    set grp [metagroup]
+    objName $grp pcatch_group
+    set pcatch::world_group $grp
+
     # Add planks and ball from dg
     set n [dl_length $dg:name]
     for { set i 0 } { $i < $n } { incr i } {
@@ -400,7 +408,7 @@ proc pcatch_setup { nplanks } {
                          $tx $ty $sx $angle { 0 1 1 }]
         }
         Box2D_setRestitution $bworld [setObjProp $obj body] $restitution
-        glistAddObject $obj 0
+        metagroupAdd $grp $obj
 
         if { $name == "ball" } {
             set pcatch::ball $obj
@@ -413,11 +421,16 @@ proc pcatch_setup { nplanks } {
     # Register contact detection
     addPostScript $bworld [list pcatch_check_contacts $bworld]
 
+    glistAddObject $grp 0
+
     glistSetDynamic 0 1
     glistSetCurGroup 0
     glistSetVisible 1
 
     setBackground 128 128 128
+
+    # Apply current scale
+    pcatch_set_scale $pcatch::world_scale
 
     redraw
 }
@@ -432,9 +445,7 @@ proc pcatch_trigger { action } {
             if { $pcatch::ball ne "" && !$pcatch::dropped } {
                 set pcatch::dropped 1
                 set body [setObjProp $pcatch::ball body]
-                Box2D_setBodyType $pcatch::bworld $body 1 ;# kinematic
-                addPreScript $pcatch::ball \
-                    "pcatch_update_position $pcatch::ball $body $::StimTime"
+                Box2D_setBodyType $pcatch::bworld $body 2 ;# dynamic
             }
         }
         reset {
@@ -491,6 +502,20 @@ proc pcatch_get_plank { {target {}} } {
 }
 
 # ============================================================
+# WORLD TRANSFORM
+# ============================================================
+
+proc pcatch_set_scale { scale } {
+    set pcatch::world_scale $scale
+    scaleObj pcatch_group $scale $scale
+    redraw
+}
+
+proc pcatch_get_scale { {target {}} } {
+    dict create scale $pcatch::world_scale
+}
+
+# ============================================================
 # KEYBOARD
 # ============================================================
 
@@ -504,7 +529,7 @@ workspace::reset
 
 workspace::setup pcatch_setup {
     nplanks {int 2 15 1 5 "Number of Planks"}
-} -adjusters {pcatch_actions pcatch_catcher pcatch_physics pcatch_plank} \
+} -adjusters {pcatch_actions pcatch_catcher pcatch_scale pcatch_physics pcatch_plank} \
   -label "Planko Catch (Predict & Catch)"
 
 workspace::adjuster pcatch_actions {
@@ -517,6 +542,11 @@ workspace::adjuster pcatch_catcher {
     catcher_x {float -8.0 8.0 0.25 0.0 "Catcher Position"}
 } -target {} -proc pcatch_set_catcher -getter pcatch_get_catcher \
   -label "Catcher (set before dropping)"
+
+workspace::adjuster pcatch_scale {
+    scale {float 0.1 1.0 0.05 0.5 "World Scale"}
+} -target {} -proc pcatch_set_scale -getter pcatch_get_scale \
+  -label "Scale"
 
 workspace::adjuster pcatch_physics {
     restitution {float 0.0 1.0 0.05 0.3 "Restitution (Bounciness)"}
