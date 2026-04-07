@@ -80,8 +80,11 @@ void _spAtlasPage_createTexture (spAtlasPage* self, const char* path)
 {
   int width, height, components;
   stbi_uc *imageData = stbi_load(path, &width, &height, &components, 4);
-  if (!imageData) return;
-	
+  if (!imageData) {
+    self->rendererObject = 0;
+    return;
+  }
+
   GLuint texture;
 
   glGenTextures(1, &texture);
@@ -111,8 +114,10 @@ void _spAtlasPage_createTexture (spAtlasPage* self, const char* path)
 
 void _spAtlasPage_disposeTexture (spAtlasPage* self) {
   SpineTexture *spine_texture = (SpineTexture *) self->rendererObject;
-  glDeleteTextures(1, &spine_texture->textureID);
-  free(spine_texture);
+  if (spine_texture) {
+    glDeleteTextures(1, &spine_texture->textureID);
+    free(spine_texture);
+  }
 }
 
 char* _spUtil_readFile (const char* path, int* length) {
@@ -356,8 +361,6 @@ void spineDraw(GR_OBJ *gobj)
       indices = quadIndices;
       indicesCount = 6;
 
-      // Might add this?
-#if 0      
       if (spSkeletonClipping_isClipping(s->clipper)) {
 	spSkeletonClipping_clipTriangles(s->clipper, vertices->items,
 					 verticesCount << 1, indices, indicesCount, uvs, 2);
@@ -367,36 +370,41 @@ void spineDraw(GR_OBJ *gobj)
 	indices = s->clipper->clippedTriangles->items;
 	indicesCount = s->clipper->clippedTriangles->size;
       }
-#endif 
-      addVertex(s, vertices->items[0], vertices->items[1],
-                region->uvs[0], region->uvs[1],
-                tintR, tintG, tintB, tintA, &vertexIndex);
-      
-      addVertex(s, vertices->items[4], vertices->items[5],
-                region->uvs[4], region->uvs[5],
-                tintR, tintG, tintB, tintA, &vertexIndex);
-      
-      addVertex(s, vertices->items[2], vertices->items[3],
-                region->uvs[2], region->uvs[3],
-                tintR, tintG, tintB, tintA, &vertexIndex);
-      
-      addVertex(s, vertices->items[4], vertices->items[5],
-                region->uvs[4], region->uvs[5],
-                tintR, tintG, tintB, tintA, &vertexIndex);
 
-      addVertex(s, vertices->items[0], vertices->items[1],
-                region->uvs[0], region->uvs[1],
-                tintR, tintG, tintB, tintA, &vertexIndex);      
+      {
+	int index;
+	for (int i = 0; i < indicesCount; i+=3) {
+	  index = indices[i] << 1;
+	  addVertex(s, vertices->items[index],
+		    vertices->items[index + 1],
+		    uvs[index], uvs[index + 1],
+		    tintR, tintG, tintB, tintA, &vertexIndex);
 
-      addVertex(s, vertices->items[6], vertices->items[7],
-                region->uvs[6], region->uvs[7],
-                tintR, tintG, tintB, tintA, &vertexIndex);
+	  index = indices[i+1] << 1;
+	  addVertex(s, vertices->items[index],
+		    vertices->items[index + 1],
+		    uvs[index], uvs[index + 1],
+		    tintR, tintG, tintB, tintA, &vertexIndex);
+
+	  index = indices[i+2] << 1;
+	  addVertex(s, vertices->items[index],
+		    vertices->items[index + 1],
+		    uvs[index], uvs[index + 1],
+		    tintR, tintG, tintB, tintA, &vertexIndex);
+	}
+      }
       
       //      SpineTexture *spine_texture = (SpineTexture *)
       //	((spAtlasRegion*) region->rendererObject)->page->rendererObject;
-      SpineTexture *spine_texture = (SpineTexture *)
-	((spAtlasRegion * ) region->rendererObject)->page->rendererObject;
+      SpineTexture *spine_texture = NULL;
+      if (region->rendererObject && ((spAtlasRegion *)region->rendererObject)->page)
+	spine_texture = (SpineTexture *)
+	  ((spAtlasRegion *)region->rendererObject)->page->rendererObject;
 
+      if (!spine_texture) {
+	spSkeletonClipping_clipEnd(s->clipper, slot);
+	continue;
+      }
       texture = spine_texture->textureID;
       
     } else if (attachment->type == SP_ATTACHMENT_MESH) {
@@ -423,8 +431,15 @@ void spineDraw(GR_OBJ *gobj)
       // Our engine specific Texture is stored in the spAtlasRegion which was
       // assigned to the attachment on load. It represents the texture atlas
       // page that contains the image the mesh attachment is mapped to
-      SpineTexture *spine_texture = (SpineTexture *)
-	((spAtlasRegion*) mesh->rendererObject)->page->rendererObject;
+      SpineTexture *spine_texture = NULL;
+      if (mesh->rendererObject && ((spAtlasRegion *)mesh->rendererObject)->page)
+	spine_texture = (SpineTexture *)
+	  ((spAtlasRegion *)mesh->rendererObject)->page->rendererObject;
+
+      if (!spine_texture) {
+	spSkeletonClipping_clipEnd(s->clipper, slot);
+	continue;
+      }
       texture = spine_texture->textureID;
       
       if (spSkeletonClipping_isClipping(s->clipper)) {
@@ -439,22 +454,22 @@ void spineDraw(GR_OBJ *gobj)
 
       int index;
       for (int i = 0; i < indicesCount; i+=3) {
-	index = mesh->triangles[i] << 1;
+	index = indices[i] << 1;
 	addVertex(s, vertices->items[index],
 		  vertices->items[index + 1],
-		  uvs[index], uvs[index + 1], 
+		  uvs[index], uvs[index + 1],
 		  tintR, tintG, tintB, tintA, &vertexIndex);
 
-	index = mesh->triangles[i+2] << 1;
+	index = indices[i+1] << 1;
 	addVertex(s, vertices->items[index],
 		  vertices->items[index + 1],
-		  uvs[index], uvs[index + 1], 
+		  uvs[index], uvs[index + 1],
 		  tintR, tintG, tintB, tintA, &vertexIndex);
 
-	index = mesh->triangles[i+1] << 1;
+	index = indices[i+2] << 1;
 	addVertex(s, vertices->items[index],
 		  vertices->items[index + 1],
-		  uvs[index], uvs[index + 1], 
+		  uvs[index], uvs[index + 1],
 		  tintR, tintG, tintB, tintA, &vertexIndex);
       }
 
@@ -661,6 +676,7 @@ int spineCreate(OBJ_LIST *objlist, char *skelfile, char *atlasfile,
 
   if (!skeletonData) {
     fprintf(getConsoleFP(), "%s\n", json->error);
+    spSkeletonJson_dispose(json);
     spAtlas_dispose(atlas);
     return -1;
   }
@@ -1544,6 +1560,120 @@ static int spineassetCmd(ClientData clientData, Tcl_Interp *interp,
     return Tcl_VarEval(interp, "sp::create ", skel_path, " ", atlas_path, NULL);
 }
 
+/*
+ * sp::setBonePosition spine_obj boneName x y
+ *
+ * Set the local x/y position of a named bone.
+ */
+static int spSetBonePositionCmd(ClientData clientData, Tcl_Interp *interp,
+				int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  SpineObject *s;
+  int id;
+  double x, y;
+
+  if (argc < 5) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " spine_obj boneName x y", NULL);
+    return TCL_ERROR;
+  }
+
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 SpineID, "spine")) < 0)
+    return TCL_ERROR;
+
+  s = (SpineObject *) GR_CLIENTDATA(OL_OBJ(olist, id));
+
+  spBone *bone = spSkeleton_findBone(s->skeleton, argv[2]);
+  if (!bone) {
+    Tcl_AppendResult(interp, "bone not found: ", argv[2], NULL);
+    return TCL_ERROR;
+  }
+
+  if (Tcl_GetDouble(interp, argv[3], &x) != TCL_OK) return TCL_ERROR;
+  if (Tcl_GetDouble(interp, argv[4], &y) != TCL_OK) return TCL_ERROR;
+
+  bone->x = (float) x;
+  bone->y = (float) y;
+
+  return TCL_OK;
+}
+
+/*
+ * sp::getBonePosition spine_obj boneName
+ *
+ * Returns the local x y position of a named bone as a list.
+ */
+static int spGetBonePositionCmd(ClientData clientData, Tcl_Interp *interp,
+				int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  SpineObject *s;
+  int id;
+  char buf[128];
+
+  if (argc < 3) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " spine_obj boneName", NULL);
+    return TCL_ERROR;
+  }
+
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 SpineID, "spine")) < 0)
+    return TCL_ERROR;
+
+  s = (SpineObject *) GR_CLIENTDATA(OL_OBJ(olist, id));
+
+  spBone *bone = spSkeleton_findBone(s->skeleton, argv[2]);
+  if (!bone) {
+    Tcl_AppendResult(interp, "bone not found: ", argv[2], NULL);
+    return TCL_ERROR;
+  }
+
+  sprintf(buf, "%g %g", bone->x, bone->y);
+  Tcl_SetResult(interp, buf, TCL_VOLATILE);
+  return TCL_OK;
+}
+
+/*
+ * sp::setIkMix spine_obj constraintName mix
+ *
+ * Set the mix value (0.0-1.0) for a named IK constraint.
+ */
+static int spSetIkMixCmd(ClientData clientData, Tcl_Interp *interp,
+			 int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  SpineObject *s;
+  int id;
+  double mix;
+
+  if (argc < 4) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " spine_obj constraintName mix", NULL);
+    return TCL_ERROR;
+  }
+
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 SpineID, "spine")) < 0)
+    return TCL_ERROR;
+
+  s = (SpineObject *) GR_CLIENTDATA(OL_OBJ(olist, id));
+
+  spIkConstraint *ik = spSkeleton_findIkConstraint(s->skeleton, argv[2]);
+  if (!ik) {
+    Tcl_AppendResult(interp, "IK constraint not found: ", argv[2], NULL);
+    return TCL_ERROR;
+  }
+
+  if (Tcl_GetDouble(interp, argv[3], &mix) != TCL_OK) return TCL_ERROR;
+
+  ik->mix = (float) mix;
+
+  return TCL_OK;
+}
+
 #ifdef _WIN32
 EXPORT(int,Spine_Init) (Tcl_Interp *interp)
 #else
@@ -1635,6 +1765,18 @@ int Spine_Init(Tcl_Interp * interp)
 
   Tcl_CreateCommand(interp, "spineAsset",
 		    (Tcl_CmdProc *)spineassetCmd,
+		    (ClientData)OBJList, (Tcl_CmdDeleteProc *)NULL);
+
+  Tcl_CreateCommand(interp, "sp::setBonePosition",
+		    (Tcl_CmdProc *)spSetBonePositionCmd,
+		    (ClientData)OBJList, (Tcl_CmdDeleteProc *)NULL);
+
+  Tcl_CreateCommand(interp, "sp::getBonePosition",
+		    (Tcl_CmdProc *)spGetBonePositionCmd,
+		    (ClientData)OBJList, (Tcl_CmdDeleteProc *)NULL);
+
+  Tcl_CreateCommand(interp, "sp::setIkMix",
+		    (Tcl_CmdProc *)spSetIkMixCmd,
 		    (ClientData)OBJList, (Tcl_CmdDeleteProc *)NULL);
 
   return TCL_OK;
