@@ -817,6 +817,48 @@ static int Box2DSetTransformCmd(ClientData clientData, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/*
+ * Box2D_updateTransform world body x y [angle]
+ *
+ * Like Box2D_setTransform, but also immediately syncs the linked
+ * polygon's object matrix so the visual matches without waiting for
+ * the next b2World_Step. Use when positioning a kinematic body before
+ * the first visible frame.
+ */
+static int Box2DUpdateTransformCmd(ClientData clientData, Tcl_Interp *interp,
+                                   int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *)clientData;
+  BOX2D_WORLD *bw;
+  b2BodyId body;
+  double x, y;
+  double angle = 0;
+
+  if (argc < 5)
+  {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " world body x y [angle=0]", NULL);
+    return TCL_ERROR;
+  }
+
+  if (!(bw = find_Box2D(interp, olist, argv[1])))
+    return TCL_ERROR;
+  if (find_body(bw, argv[2], &body) != TCL_OK)
+    return TCL_ERROR;
+  if (Tcl_GetDouble(interp, argv[3], &x) != TCL_OK)
+    return TCL_ERROR;
+  if (Tcl_GetDouble(interp, argv[4], &y) != TCL_OK)
+    return TCL_ERROR;
+  if (argc > 5)
+  {
+    if (Tcl_GetDouble(interp, argv[5], &angle) != TCL_OK)
+      return TCL_ERROR;
+  }
+
+  b2Body_SetTransform(body, (b2Vec2){x, y}, b2MakeRot(angle));
+  Box2D_update_link(body, x, y, angle);
+  return TCL_OK;
+}
+
 static int Box2DSetLinearVelocityCmd(ClientData clientData, Tcl_Interp *interp,
                                      int argc, char *argv[])
 {
@@ -2031,6 +2073,9 @@ int Box_Init(Tcl_Interp *interp)
 
   Tcl_CreateCommand(interp, "Box2D_setTransform",
                     (Tcl_CmdProc *)Box2DSetTransformCmd,
+                    (ClientData) OBJList, (Tcl_CmdDeleteProc *)NULL);
+  Tcl_CreateCommand(interp, "Box2D_updateTransform",
+                    (Tcl_CmdProc *)Box2DUpdateTransformCmd,
                     (ClientData) OBJList, (Tcl_CmdDeleteProc *)NULL);
   Tcl_CreateCommand(interp, "Box2D_setLinearVelocity",
                     (Tcl_CmdProc *)Box2DSetLinearVelocityCmd,
