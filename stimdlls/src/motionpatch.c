@@ -100,6 +100,10 @@ typedef struct {
   UNIFORM_INFO *samplerMaskMode;/* 0: ignore, 1: use alpha, 2: use 1-alpha */
   UNIFORM_INFO *maskRotation;   /* rotation angle for mask texture (radians) */
   float mask_rotation;          /* current mask rotation value */
+  UNIFORM_INFO *maskOffset;     /* translation of mask (patch-local, centered) */
+  float mask_offset[2];         /* current mask offset */
+  UNIFORM_INFO *maskScale;      /* scale of mask (1.0 = mask fills patch) */
+  float mask_scale[2];          /* current mask scale */
   
   SHADER_PROG *program;
   Tcl_HashTable uniformTable;	/* local unique version */
@@ -109,6 +113,7 @@ typedef struct {
 
 static int MotionpatchID = -1;	/* unique object id */
 SHADER_PROG *MotionpatchShaderProg = NULL;
+static GLuint MotionpatchDefaultTex = 0; /* 1x1 white, bound when no user tex */
 
 void motionpatchDraw(GR_OBJ *g) 
 {
@@ -157,13 +162,19 @@ void motionpatchDraw(GR_OBJ *g)
     memcpy(s->maskRotation->val, &s->mask_rotation, sizeof(float));
   }
 
-  glUseProgram(sp->program);
-  update_uniforms(&s->uniformTable);
+  if (s->maskOffset) {
+    memcpy(s->maskOffset->val, s->mask_offset, sizeof(float)*2);
+  }
 
+  if (s->maskScale) {
+    memcpy(s->maskScale->val, s->mask_scale, sizeof(float)*2);
+  }
 
-  /* bind associated texture to a shader sampler if associated */
+  /* Bind the texture to unit 0 BEFORE glUseProgram so the Apple GL
+     driver's sampler-binding validation sees a valid texture. If no
+     user sampler has been set, fall back to a 1x1 white default. */
+  glActiveTexture(GL_TEXTURE0);
   if (s->texid[0] >= 0 && s->tex0) {
-    glActiveTexture(GL_TEXTURE0);
     switch(s->tex0->type) {
     case GL_SAMPLER_2D:
       glBindTexture(GL_TEXTURE_2D, s->texid[0]);
@@ -172,9 +183,14 @@ void motionpatchDraw(GR_OBJ *g)
       glBindTexture(GL_TEXTURE_2D_ARRAY, s->texid[0]);
       break;
     }
+  } else if (MotionpatchDefaultTex) {
+    glBindTexture(GL_TEXTURE_2D, MotionpatchDefaultTex);
   }
 
-  
+  glUseProgram(sp->program);
+  update_uniforms(&s->uniformTable);
+
+
   if (s->vao_info->narrays) {
     glBindVertexArray(s->vao_info->vao);
     glDrawArrays(GL_POINTS, 0, s->vao_info->nindices);
@@ -303,6 +319,15 @@ void motionpatchUpdate(GR_OBJ *g)
       vy = (s->dots[i].speed[1])/GR_SY(g);
       s->dots[i].pos[0] += vx;
       s->dots[i].pos[1] += vy;
+      /* Toroidal wrap: keep dots inside [-0.5, 0.5] so the patch
+         remains bounded. Without this, off-patch dots are still
+         drawn at their drifted position, producing a visible halo
+         of dots outside the patch — most obvious at low coherence
+         when dots scatter in every direction. */
+      if (s->dots[i].pos[0] < -0.5f) s->dots[i].pos[0] += 1.0f;
+      else if (s->dots[i].pos[0] >  0.5f) s->dots[i].pos[0] -= 1.0f;
+      if (s->dots[i].pos[1] < -0.5f) s->dots[i].pos[1] += 1.0f;
+      else if (s->dots[i].pos[1] >  0.5f) s->dots[i].pos[1] -= 1.0f;
       s->dots[i].frames++;
     }
     if (s->mask_type == MASK_NONE) {
@@ -435,6 +460,10 @@ int motionpatchCreate(OBJ_LIST *objlist, SHADER_PROG *sp,
   s->color2[0] = s->color2[1] = s->color2[2] = s->color2[3] = 1.;
   s->pointsize = 1.0;
   s->mask_rotation = 0.0;
+  s->mask_offset[0] = 0.0;
+  s->mask_offset[1] = 0.0;
+  s->mask_scale[0] = 1.0;
+  s->mask_scale[1] = 1.0;
   s->samplermaskmode = SMASK_NONE;
   
   s->num_dots = n;
@@ -534,6 +563,16 @@ int motionpatchCreate(OBJ_LIST *objlist, SHADER_PROG *sp,
    if ((entryPtr = Tcl_FindHashEntry(&s->uniformTable, "maskRotation"))) {
      s->maskRotation = Tcl_GetHashValue(entryPtr);
      s->maskRotation->val = calloc(1, sizeof(float));
+   }
+   if ((entryPtr = Tcl_FindHashEntry(&s->uniformTable, "maskOffset"))) {
+     s->maskOffset = Tcl_GetHashValue(entryPtr);
+     s->maskOffset->val = calloc(2, sizeof(float));
+   }
+   if ((entryPtr = Tcl_FindHashEntry(&s->uniformTable, "maskScale"))) {
+     s->maskScale = Tcl_GetHashValue(entryPtr);
+     s->maskScale->val = calloc(2, sizeof(float));
+     ((float *)s->maskScale->val)[0] = 1.0;
+     ((float *)s->maskScale->val)[1] = 1.0;
    }
   s->texid[0] = -1;		/* initialize to no texture sampler */
 
@@ -985,10 +1024,71 @@ static int motionpatchMaskRotationCmd(ClientData clientData, Tcl_Interp *interp,
   
   if (Tcl_GetDouble(interp, argv[2], &rotation) != TCL_OK) return TCL_ERROR;
   s->mask_rotation = rotation;
-  
+
   return(TCL_OK);
 }
 
+static int motionpatchMaskOffsetCmd(ClientData clientData, Tcl_Interp *interp,
+                                    int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id;
+  double ox, oy;
+
+  if (argc < 4) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+                     " motionpatch offset_x offset_y", NULL);
+    return TCL_ERROR;
+  }
+
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+                         MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  if (Tcl_GetDouble(interp, argv[2], &ox) != TCL_OK) return TCL_ERROR;
+  if (Tcl_GetDouble(interp, argv[3], &oy) != TCL_OK) return TCL_ERROR;
+  s->mask_offset[0] = ox;
+  s->mask_offset[1] = oy;
+
+  return(TCL_OK);
+}
+
+static int motionpatchMaskScaleCmd(ClientData clientData, Tcl_Interp *interp,
+                                   int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id;
+  double sx, sy;
+
+  if (argc < 3) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+                     " motionpatch scale ?scale_y?", NULL);
+    return TCL_ERROR;
+  }
+
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+                         MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  if (Tcl_GetDouble(interp, argv[2], &sx) != TCL_OK) return TCL_ERROR;
+  if (argc > 3) {
+    if (Tcl_GetDouble(interp, argv[3], &sy) != TCL_OK) return TCL_ERROR;
+  } else {
+    sy = sx;
+  }
+  if (sx == 0.0 || sy == 0.0) {
+    Tcl_AppendResult(interp, argv[0], ": scale must be non-zero", NULL);
+    return TCL_ERROR;
+  }
+  s->mask_scale[0] = sx;
+  s->mask_scale[1] = sy;
+
+  return(TCL_OK);
+}
 
 int motionpatchShaderCreate(Tcl_Interp *interp)
 {
@@ -1028,17 +1128,26 @@ int motionpatchShaderCreate(Tcl_Interp *interp)
     "uniform sampler2D tex0;"
     "uniform int samplerMaskMode;"
     "uniform float maskRotation;"
+    "uniform vec2 maskOffset;"
+    "uniform vec2 maskScale;"
     "in vec2 texcoord;"
     "uniform vec4 uColor1;"
     "uniform vec4 uColor2;"
     "out vec4 frag_color;"
     "void main () {"
-    " vec2 tc = texcoord - 0.5;"
+    " vec2 tc = (texcoord - 0.5 - maskOffset) / maskScale;"
     " float c = cos(maskRotation);"
     " float s = sin(maskRotation);"
     " vec2 rotated = vec2(c * tc.x - s * tc.y, s * tc.x + c * tc.y) + 0.5;"
-    " vec3 texColor = texture(tex0, vec2(rotated.s, 1.0-rotated.t)).rgb;"
-    " float texAlpha = texture(tex0, vec2(rotated.s, 1.0-rotated.t)).a;"
+    " float texAlpha;"
+    " vec3 texColor;"
+    " if (any(lessThan(rotated, vec2(0.0))) || any(greaterThan(rotated, vec2(1.0)))) {"
+    "   texAlpha = 0.0; texColor = vec3(0.0);"
+    " } else {"
+    "   vec4 samp = texture(tex0, vec2(rotated.s, 1.0-rotated.t));"
+    "   texColor = samp.rgb;"
+    "   texAlpha = samp.a;"
+    " }"
     " float alpha = 1.0;"
     " vec3 color;"
     " if (samplerMaskMode == 0) { alpha = uColor1.a; color = uColor1.rgb; }"
@@ -1065,6 +1174,24 @@ int motionpatchShaderCreate(Tcl_Interp *interp)
   Tcl_InitHashTable(&MotionpatchShaderProg->attribTable, TCL_STRING_KEYS);
   add_attribs_to_table(&MotionpatchShaderProg->attribTable,
 		       MotionpatchShaderProg);
+
+  /* 1x1 white RGBA texture bound when no user sampler is set, so the
+     fragment shader's tex0 sampler is always backed by valid storage.
+     Leave it bound to texture unit 0 so the first draw already finds
+     a valid texture there, silencing Apple's "unit 0 unloadable"
+     log message. */
+  if (!MotionpatchDefaultTex) {
+    unsigned char white[4] = { 255, 255, 255, 255 };
+    glGenTextures(1, &MotionpatchDefaultTex);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, MotionpatchDefaultTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, white);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  }
 
   return TCL_OK;
 }
@@ -1131,8 +1258,14 @@ int Motionpatch_Init(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "motionpatch_samplermaskmode", 
 		    (Tcl_CmdProc *) motionpatchSamplerMaskModeCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateCommand(interp, "motionpatch_maskrotation", 
-		    (Tcl_CmdProc *) motionpatchMaskRotationCmd, 
+  Tcl_CreateCommand(interp, "motionpatch_maskrotation",
+		    (Tcl_CmdProc *) motionpatchMaskRotationCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_maskoffset",
+		    (Tcl_CmdProc *) motionpatchMaskOffsetCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_maskscale",
+		    (Tcl_CmdProc *) motionpatchMaskScaleCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "motionpatch_maskradius", 
 		    (Tcl_CmdProc *) motionpatchMaskRadiusCmd, 
