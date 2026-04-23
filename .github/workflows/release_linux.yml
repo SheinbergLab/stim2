@@ -69,6 +69,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          fetch-depth: 0
 
       - name: Install TCL 9 to the build environment
         run: |
@@ -203,6 +204,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          fetch-depth: 0
 
       - name: Install TCL 9 to the check environment
         run: |
