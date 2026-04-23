@@ -136,6 +136,14 @@ proc mp_tracking_update_offset {} {
             set ox 0
             set oy 0
         }
+    } elseif {$::mp_tracking::path_mode eq "path_frozen"} {
+        # Control condition: mask sits still at its last computed
+        # position so the shape boundary never moves, but the dots
+        # inside (and outside) keep streaming at their set directions.
+        # This proves the internal dot motion is completely independent
+        # of the mask translation.
+        set ox $::mp_tracking::last_ox
+        set oy $::mp_tracking::last_oy
     } else {
         set pt $::mp_tracking::path_t
         set ax $::mp_tracking::amp_x
@@ -146,6 +154,8 @@ proc mp_tracking_update_offset {} {
         set oy [expr {$ay * sin(2.0 * 3.14159265 * $fy * $pt + 1.5708)}]
     }
 
+    set ::mp_tracking::last_ox $ox
+    set ::mp_tracking::last_oy $oy
     motionpatch_maskoffset dots_bg     $ox $oy
     motionpatch_maskoffset dots_target $ox $oy
 }
@@ -171,6 +181,8 @@ proc mp_tracking_setup {nDots shapeSize} {
         variable rand_damping 1.5
         variable rand_sigma   0.6
         variable rand_amp     0.35
+        variable last_ox      0.0
+        variable last_oy      0.0
         # Prebaked simplex path
         variable sp_duration  60.0
         variable sp_dt        0.01667
@@ -288,10 +300,12 @@ proc mp_tracking_get_path {} {
     dict create amp_x 0.35 amp_y 0.25 freq_x 0.17 freq_y 0.23
 }
 
-# Switch path mode. Reset state so each trial starts from a consistent
-# initial condition.
+# Switch path mode. For `path_frozen`, preserve last offset so the
+# target freezes in place; for other modes, start path from t=0 and
+# (for random) reset the OU state.
 proc mp_tracking_set_path_mode {mode} {
     set ::mp_tracking::path_mode $mode
+    if {$mode eq "path_frozen"} { return }
     set ::mp_tracking::path_t 0.0
     if {$mode eq "random"} {
         set ::mp_tracking::rand_x  0.0
@@ -392,7 +406,7 @@ workspace::adjuster track_luminance {
   -label "Luminance"
 
 workspace::adjuster track_mode {
-    mode {choice {lissajous random simplex_prebaked} lissajous "Path Mode"}
+    mode {choice {lissajous random simplex_prebaked path_frozen} lissajous "Path Mode"}
 } -target {} -proc mp_tracking_set_path_mode -getter mp_tracking_get_path_mode \
   -label "Path Mode"
 
