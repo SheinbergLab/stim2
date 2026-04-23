@@ -289,6 +289,50 @@ proc mp_tracking_get_luminance {} {
     dict create bg_lum 0.8 tg_lum 0.8
 }
 
+# Independent dot lifetime (in frames) for background and target. Short
+# lifetimes (< ~5 frames) with low coherence produce mostly-flicker with
+# little integrated motion energy, approximating a pure temporal-noise
+# field. Long lifetimes (> ~30 frames) let each dot's motion integrate
+# into a clear trajectory.
+proc mp_tracking_set_lifetime {bg_life tg_life} {
+    motionpatch_lifetime dots_bg     $bg_life
+    motionpatch_lifetime dots_target $tg_life
+}
+
+proc mp_tracking_get_lifetime {} {
+    dict create bg_life 30 tg_life 30
+}
+
+# Mask edge softness: 0 = hard step, larger = smoother alpha falloff at
+# the shape boundary. Matters for the "frozen = invisible" property -
+# hard edges can be detectable via slight luminance differences even
+# without motion. Values ~0.1-0.3 anti-alias cleanly; >0.5 gives a
+# distinctly soft blob.
+proc mp_tracking_set_softness {softness} {
+    motionpatch_masksoftness dots_bg     $softness
+    motionpatch_masksoftness dots_target $softness
+}
+
+proc mp_tracking_get_softness {} {
+    dict create softness 0.0
+}
+
+# Direction jitter: Gaussian angular std-dev (in degrees) added to each
+# coherent dot's global direction at respawn. Smooths the transition
+# from "fully coherent robotic streams" to "fully incoherent noise".
+# ~10-15 deg looks naturally turbulent; ~45 deg bleeds toward
+# incoherence; 0 is the strict-coherence baseline.
+proc mp_tracking_set_jitter {bg_deg tg_deg} {
+    set bg_rad [expr {$bg_deg * 3.14159265 / 180.0}]
+    set tg_rad [expr {$tg_deg * 3.14159265 / 180.0}]
+    motionpatch_directionjitter dots_bg     $bg_rad
+    motionpatch_directionjitter dots_target $tg_rad
+}
+
+proc mp_tracking_get_jitter {} {
+    dict create bg_deg 0 tg_deg 0
+}
+
 proc mp_tracking_set_path {amp_x amp_y freq_x freq_y} {
     set ::mp_tracking::amp_x  $amp_x
     set ::mp_tracking::amp_y  $amp_y
@@ -352,6 +396,12 @@ proc mp_tracking_set_freeze {frozen speed} {
     if {$frozen} {
         motionpatch_speed dots_bg     0.0
         motionpatch_speed dots_target 0.0
+        # Resample both patches from a fresh uniform distribution so
+        # the frozen snapshot is a clean, statistically identical
+        # density field on both sides of the mask. Without this,
+        # short-lifetime patches show lingering respawn-history bias.
+        motionpatch_refreshPositions dots_bg
+        motionpatch_refreshPositions dots_target
         set ::mp_tracking::playing 0
     } else {
         motionpatch_speed dots_bg     $speed
@@ -372,7 +422,7 @@ workspace::reset
 workspace::setup mp_tracking_setup {
     nDots     {int 200 4000 100 1500 "Number of Dots (per patch)"}
     shapeSize {float 0.05 0.5 0.01 0.2 "Shape Size (fraction of patch)"}
-} -adjusters {track_freeze track_motion track_directions track_shape track_luminance track_mode track_path track_random_path track_simplex track_transform} \
+} -adjusters {track_freeze track_motion track_directions track_jitter track_shape track_softness track_luminance track_lifetime track_mode track_path track_random_path track_simplex track_transform} \
   -label "Motion Tracking"
 
 workspace::adjuster track_freeze {
@@ -399,11 +449,28 @@ workspace::adjuster track_shape {
 } -target {} -proc mp_tracking_set_shape_size -getter mp_tracking_get_shape_size \
   -label "Shape Size"
 
+workspace::adjuster track_softness {
+    softness {float 0.0 1.0 0.02 0.0 "Edge Softness"}
+} -target {} -proc mp_tracking_set_softness -getter mp_tracking_get_softness \
+  -label "Mask Softness"
+
+workspace::adjuster track_jitter {
+    bg_deg {float 0 90 1 0 "Background Jitter (deg)"}
+    tg_deg {float 0 90 1 0 "Target Jitter (deg)"}
+} -target {} -proc mp_tracking_set_jitter -getter mp_tracking_get_jitter \
+  -label "Direction Jitter"
+
 workspace::adjuster track_luminance {
     bg_lum {float 0.0 1.0 0.05 0.8 "Background Luminance"}
     tg_lum {float 0.0 1.0 0.05 0.8 "Target Luminance"}
 } -target {} -proc mp_tracking_set_luminance -getter mp_tracking_get_luminance \
   -label "Luminance"
+
+workspace::adjuster track_lifetime {
+    bg_life {int 1 120 1 30 "Background Lifetime (frames)"}
+    tg_life {int 1 120 1 30 "Target Lifetime (frames)"}
+} -target {} -proc mp_tracking_set_lifetime -getter mp_tracking_get_lifetime \
+  -label "Dot Lifetime"
 
 workspace::adjuster track_mode {
     mode {choice {lissajous random simplex_prebaked path_frozen} lissajous "Path Mode"}

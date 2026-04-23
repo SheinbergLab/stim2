@@ -43,6 +43,7 @@ typedef struct _dot {
   float speed[3];
   int lifetime, frames;
   int coherent;			/* flag as either coherent or not */
+  float dir_offset;		/* angular jitter in radians (coherent only) */
 } DOT;
 
 typedef struct _vao_info {
@@ -104,6 +105,9 @@ typedef struct {
   float mask_offset[2];         /* current mask offset */
   UNIFORM_INFO *maskScale;      /* scale of mask (1.0 = mask fills patch) */
   float mask_scale[2];          /* current mask scale */
+  UNIFORM_INFO *maskSoftness;   /* 0 = hard edge; >0 = smoothstep width */
+  float mask_softness;          /* current softness value */
+  float direction_jitter;       /* per-dot angular std-dev, radians */
   
   SHADER_PROG *program;
   Tcl_HashTable uniformTable;	/* local unique version */
@@ -114,6 +118,8 @@ typedef struct {
 static int MotionpatchID = -1;	/* unique object id */
 SHADER_PROG *MotionpatchShaderProg = NULL;
 static GLuint MotionpatchDefaultTex = 0; /* 1x1 white, bound when no user tex */
+
+static float mp_randn(void);
 
 void motionpatchDraw(GR_OBJ *g) 
 {
@@ -168,6 +174,10 @@ void motionpatchDraw(GR_OBJ *g)
 
   if (s->maskScale) {
     memcpy(s->maskScale->val, s->mask_scale, sizeof(float)*2);
+  }
+
+  if (s->maskSoftness) {
+    memcpy(s->maskSoftness->val, &s->mask_softness, sizeof(float));
   }
 
   /* Bind the texture to unit 0 BEFORE glUseProgram so the Apple GL
@@ -277,12 +287,16 @@ void motionpatchUpdate(GR_OBJ *g)
 	s->direction = atan2(value2, value1);
       }
       
-      /* If this dot is coherent, set motion direction */
+      /* If this dot is coherent, re-sample its angular jitter offset
+         and apply. If incoherent, pick a fresh random direction. */
       if (s->dots[i].coherent) {
-	s->dots[i].speed[0] = cos(s->direction)*s->speed;
-	s->dots[i].speed[1] = sin(s->direction)*s->speed;
+	float angle;
+	s->dots[i].dir_offset =
+	  (s->direction_jitter > 0.0f) ? mp_randn() * s->direction_jitter : 0.0f;
+	angle = s->direction + s->dots[i].dir_offset;
+	s->dots[i].speed[0] = cosf(angle)*s->speed;
+	s->dots[i].speed[1] = sinf(angle)*s->speed;
       }
-      /* If this dot is incoherent, randomize motion direction */
       else {
 	float angle = ((float) rand()/RAND_MAX) *2*PI;
 	s->dots[i].speed[0] = cos(angle)*s->speed;
@@ -300,11 +314,12 @@ void motionpatchUpdate(GR_OBJ *g)
 				     s->dots[i].pos[1] * s->noise_period,
 				     s->noise_z);
 	s->direction = atan2(value2, value1);
-      
-	/* If this dot is coherent, set motion direction */
+
+	/* If this dot is coherent, set motion direction (with jitter) */
 	if (s->dots[i].coherent) {
-	  s->dots[i].speed[0] = cos(s->direction)*s->speed;
-	  s->dots[i].speed[1] = sin(s->direction)*s->speed;
+	  float angle = s->direction + s->dots[i].dir_offset;
+	  s->dots[i].speed[0] = cosf(angle)*s->speed;
+	  s->dots[i].speed[1] = sinf(angle)*s->speed;
 	}
 	/* If this dot is incoherent, randomize motion direction */
 	/**** It's possible to not update this on every frame ****/
@@ -388,21 +403,36 @@ static int setPositions(MOTIONPATCH *s)
   return TCL_OK;
 }
 
+/* Box-Muller standard normal */
+static float mp_randn(void)
+{
+  float u1, u2;
+  do {
+    u1 = (float) rand() / (float) RAND_MAX;
+  } while (u1 < 1e-9f);
+  u2 = (float) rand() / (float) RAND_MAX;
+  return sqrtf(-2.0f * logf(u1)) * cosf(2.0f * (float) PI * u2);
+}
 
-static int setSpeeds(MOTIONPATCH *s, float vx, float vy)
+/* Update every dot's velocity from the global direction + its persistent
+ * per-dot jitter offset (for coherent dots), or a freshly sampled random
+ * angle (for incoherent dots). Called whenever speed or direction change.
+ */
+static int setSpeeds(MOTIONPATCH *s)
 {
   int i;
   float angle;
   for (i = 0; i < s->num_dots; i++) {
     if (s->dots[i].coherent) {
-      s->dots[i].speed[0] = vx;
-      s->dots[i].speed[1] = vy;
+      angle = s->direction + s->dots[i].dir_offset;
+      s->dots[i].speed[0] = cosf(angle) * s->speed;
+      s->dots[i].speed[1] = sinf(angle) * s->speed;
       s->dots[i].speed[2] = 0;
     }
     else {
-      angle = ((float) rand()/RAND_MAX) *2*PI;
-      s->dots[i].speed[0] = cos(angle)*s->speed;
-      s->dots[i].speed[1] = sin(angle)*s->speed;
+      angle = ((float) rand()/RAND_MAX) * 2 * (float) PI;
+      s->dots[i].speed[0] = cosf(angle) * s->speed;
+      s->dots[i].speed[1] = sinf(angle) * s->speed;
     }
   }
   return TCL_OK;
@@ -425,7 +455,15 @@ static int setCoherences(MOTIONPATCH *s, float coherence)
   float angle;
   for (i = 0; i < s->num_dots; i++) {
     s->dots[i].coherent = (((float) rand()/RAND_MAX) < coherence);
-    if (!s->dots[i].coherent) {
+    if (s->dots[i].coherent) {
+      /* Sample a fresh angular jitter offset for this coherent dot. */
+      s->dots[i].dir_offset =
+	(s->direction_jitter > 0.0f) ? mp_randn() * s->direction_jitter : 0.0f;
+      angle = s->direction + s->dots[i].dir_offset;
+      s->dots[i].speed[0] = cosf(angle) * s->speed;
+      s->dots[i].speed[1] = sinf(angle) * s->speed;
+    }
+    else {
       angle = ((float) rand()/RAND_MAX)*2*PI;
       s->dots[i].speed[0] = cos(angle)*s->speed;
       s->dots[i].speed[1] = sin(angle)*s->speed;
@@ -464,6 +502,8 @@ int motionpatchCreate(OBJ_LIST *objlist, SHADER_PROG *sp,
   s->mask_offset[1] = 0.0;
   s->mask_scale[0] = 1.0;
   s->mask_scale[1] = 1.0;
+  s->mask_softness = 0.0;
+  s->direction_jitter = 0.0;
   s->samplermaskmode = SMASK_NONE;
   
   s->num_dots = n;
@@ -473,7 +513,7 @@ int motionpatchCreate(OBJ_LIST *objlist, SHADER_PROG *sp,
   s->lifetime = lifetime;
   s->coherence = 1.0;
   setPositions(s);
-  setSpeeds(s, cos(s->direction)*speed, sin(s->direction)*speed);
+  setSpeeds(s);
   setLifetimes(s, lifetime);
   setCoherences(s, s->coherence);
 
@@ -574,6 +614,10 @@ int motionpatchCreate(OBJ_LIST *objlist, SHADER_PROG *sp,
      ((float *)s->maskScale->val)[0] = 1.0;
      ((float *)s->maskScale->val)[1] = 1.0;
    }
+   if ((entryPtr = Tcl_FindHashEntry(&s->uniformTable, "maskSoftness"))) {
+     s->maskSoftness = Tcl_GetHashValue(entryPtr);
+     s->maskSoftness->val = calloc(1, sizeof(float));
+   }
   s->texid[0] = -1;		/* initialize to no texture sampler */
 
   return(gobjAddObj(objlist, obj));
@@ -669,7 +713,7 @@ static int motionpatchSpeedCmd(ClientData clientData, Tcl_Interp *interp,
 
   if (Tcl_GetDouble(interp, argv[2], &speed) != TCL_OK) return TCL_ERROR;
   s->speed = speed;
-  setSpeeds(s, cos(s->direction)*speed, sin(s->direction)*speed);
+  setSpeeds(s);
 
   return(TCL_OK);
   
@@ -812,7 +856,7 @@ static int motionpatchDirectionCmd(ClientData clientData, Tcl_Interp *interp,
 
   if (Tcl_GetDouble(interp, argv[2], &direction) != TCL_OK) return TCL_ERROR;
   s->direction = direction;
-  setSpeeds(s, cos(s->direction)*(s->speed), sin(s->direction)*(s->speed));
+  setSpeeds(s);
 
   return(TCL_OK);
   
@@ -1028,6 +1072,121 @@ static int motionpatchMaskRotationCmd(ClientData clientData, Tcl_Interp *interp,
   return(TCL_OK);
 }
 
+static int motionpatchRefreshPositionsCmd(ClientData clientData, Tcl_Interp *interp,
+                                          int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id, i;
+
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " motionpatch", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+                         MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  /* Re-sample every dot's position uniformly, and re-stagger the
+     respawn phase so short-lifetime patches don't flicker en masse.
+     Speeds/coherence/direction are left untouched. */
+  setPositions(s);
+  if (s->lifetime > 0) {
+    for (i = 0; i < s->num_dots; i++) {
+      s->dots[i].frames = rand() % s->lifetime;
+    }
+  }
+  return TCL_OK;
+}
+
+static int motionpatchMaskSoftnessCmd(ClientData clientData, Tcl_Interp *interp,
+                                      int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id;
+  double softness;
+
+  if (argc < 3) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+                     " motionpatch softness (0 = hard, up to 1)", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+                         MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  if (Tcl_GetDouble(interp, argv[2], &softness) != TCL_OK) return TCL_ERROR;
+  if (softness < 0.0) softness = 0.0;
+  if (softness > 1.0) softness = 1.0;
+  s->mask_softness = (float) softness;
+  return(TCL_OK);
+}
+
+static int motionpatchDirectionJitterCmd(ClientData clientData, Tcl_Interp *interp,
+                                         int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id, i;
+  double sigma;
+
+  if (argc < 3) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+                     " motionpatch sigma_radians", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+                         MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  if (Tcl_GetDouble(interp, argv[2], &sigma) != TCL_OK) return TCL_ERROR;
+  if (sigma < 0.0) sigma = 0.0;
+  s->direction_jitter = (float) sigma;
+
+  /* Resample per-dot jitter offsets immediately so the change is
+     visible without waiting for respawns. Only coherent dots carry
+     an offset; incoherent dots keep their independent random angle. */
+  for (i = 0; i < s->num_dots; i++) {
+    if (s->dots[i].coherent) {
+      s->dots[i].dir_offset = (sigma > 0.0) ? mp_randn() * (float) sigma : 0.0f;
+    }
+  }
+  setSpeeds(s);
+  return(TCL_OK);
+}
+
+static int motionpatchLifetimeCmd(ClientData clientData, Tcl_Interp *interp,
+                                  int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id;
+  int lifetime;
+
+  if (argc < 3) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+                     " motionpatch lifetime_frames", NULL);
+    return TCL_ERROR;
+  }
+
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+                         MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  if (Tcl_GetInt(interp, argv[2], &lifetime) != TCL_OK) return TCL_ERROR;
+  if (lifetime < 1) lifetime = 1;
+
+  s->lifetime = lifetime;
+  setLifetimes(s, lifetime);
+
+  return(TCL_OK);
+}
+
 static int motionpatchMaskOffsetCmd(ClientData clientData, Tcl_Interp *interp,
                                     int argc, char *argv[])
 {
@@ -1130,6 +1289,7 @@ int motionpatchShaderCreate(Tcl_Interp *interp)
     "uniform float maskRotation;"
     "uniform vec2 maskOffset;"
     "uniform vec2 maskScale;"
+    "uniform float maskSoftness;"
     "in vec2 texcoord;"
     "uniform vec4 uColor1;"
     "uniform vec4 uColor2;"
@@ -1147,6 +1307,10 @@ int motionpatchShaderCreate(Tcl_Interp *interp)
     "   vec4 samp = texture(tex0, vec2(rotated.s, 1.0-rotated.t));"
     "   texColor = samp.rgb;"
     "   texAlpha = samp.a;"
+    " }"
+    " if (maskSoftness > 0.0) {"
+    "   float w = maskSoftness * 0.5;"
+    "   texAlpha = smoothstep(0.5 - w, 0.5 + w, texAlpha);"
     " }"
     " float alpha = 1.0;"
     " vec3 color;"
@@ -1260,6 +1424,18 @@ int Motionpatch_Init(Tcl_Interp *interp)
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "motionpatch_maskrotation",
 		    (Tcl_CmdProc *) motionpatchMaskRotationCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_lifetime",
+		    (Tcl_CmdProc *) motionpatchLifetimeCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_refreshPositions",
+		    (Tcl_CmdProc *) motionpatchRefreshPositionsCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_masksoftness",
+		    (Tcl_CmdProc *) motionpatchMaskSoftnessCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_directionjitter",
+		    (Tcl_CmdProc *) motionpatchDirectionJitterCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "motionpatch_maskoffset",
 		    (Tcl_CmdProc *) motionpatchMaskOffsetCmd,
