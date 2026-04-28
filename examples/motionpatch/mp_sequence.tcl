@@ -132,9 +132,45 @@ proc mp_sequence_update {} {
     } else {
         motionpatch_direction dots_bg $rad
     }
+
+    # Aperture-translation: in `aperture` mode, advance the shared mask
+    # offset along the current direction at ap_speed (offset units per
+    # second). Clamped to ap_bound so the spot stays on-patch; clamping
+    # keeps the seq direction authoritative (vs. bouncing, which would
+    # silently invert the experimenter-specified direction).
+    if {$::mp_sequence::mode eq "aperture" && $dt > 0.0} {
+        set v $::mp_sequence::ap_speed
+        set vx [expr {$v * cos($rad)}]
+        set vy [expr {$v * sin($rad)}]
+        set x [expr {$::mp_sequence::ap_x + $vx * $dt}]
+        set y [expr {$::mp_sequence::ap_y + $vy * $dt}]
+        set b $::mp_sequence::ap_bound
+        if {$x >  $b} { set x  $b }
+        if {$x < -$b} { set x [expr {-$b}] }
+        if {$y >  $b} { set y  $b }
+        if {$y < -$b} { set y [expr {-$b}] }
+        set ::mp_sequence::ap_x $x
+        set ::mp_sequence::ap_y $y
+        motionpatch_maskoffset dots_target $x $y
+        motionpatch_maskoffset dots_bg     $x $y
+    }
 }
 
-# Configure coherence / lifetime / surround-inversion per mode.
+# Apply current ::mp_sequence::lum_offset symmetrically around 0.8:
+# inside gets +offset/2, outside gets -offset/2. Positive = aperture
+# brighter than surround; 0 = motion-only definition (luminance-matched).
+proc mp_sequence_apply_luminance {} {
+    set base 0.8
+    set off  $::mp_sequence::lum_offset
+    set lin  [expr {$base + $off / 2.0}]
+    set lout [expr {$base - $off / 2.0}]
+    motionpatch_color dots_target $lin  $lin  $lin  1.0
+    motionpatch_color dots_bg     $lout $lout $lout 1.0
+}
+
+# Configure coherence / lifetime / surround-inversion per mode. Modes
+# other than `aperture` reset the mask offset to 0 so the spot snaps
+# back to center when switching out of translation.
 proc mp_sequence_apply_mode {mode} {
     set ::mp_sequence::mode $mode
     switch -- $mode {
@@ -159,6 +195,13 @@ proc mp_sequence_apply_mode {mode} {
             motionpatch_lifetime  dots_bg     30
             set ::mp_sequence::bg_invert 1
         }
+        aperture {
+            motionpatch_coherence dots_target 1.0
+            motionpatch_lifetime  dots_target 30
+            motionpatch_coherence dots_bg     0.0
+            motionpatch_lifetime  dots_bg     2
+            set ::mp_sequence::bg_invert 0
+        }
         baseline {
             motionpatch_coherence dots_target 0.0
             motionpatch_lifetime  dots_target 2
@@ -167,6 +210,13 @@ proc mp_sequence_apply_mode {mode} {
             set ::mp_sequence::bg_invert 0
         }
     }
+    if {$mode ne "aperture"} {
+        set ::mp_sequence::ap_x 0.0
+        set ::mp_sequence::ap_y 0.0
+        motionpatch_maskoffset dots_target 0.0 0.0
+        motionpatch_maskoffset dots_bg     0.0 0.0
+    }
+    mp_sequence_apply_luminance
 }
 
 proc mp_sequence_setup {nDots shapeSize} {
@@ -187,6 +237,11 @@ proc mp_sequence_setup {nDots shapeSize} {
         variable playing   1
         variable speed     0.003
         variable bg_invert 0
+        variable ap_x       0.0
+        variable ap_y       0.0
+        variable ap_speed   0.2
+        variable ap_bound   0.35
+        variable lum_offset 0.0
     }
 
     set texSize 256
@@ -280,6 +335,16 @@ proc mp_sequence_set_softness {softness} {
 }
 proc mp_sequence_get_softness {} { dict create softness 0.0 }
 
+proc mp_sequence_set_aperture {ap_speed ap_bound lum_offset} {
+    set ::mp_sequence::ap_speed   $ap_speed
+    set ::mp_sequence::ap_bound   $ap_bound
+    set ::mp_sequence::lum_offset $lum_offset
+    mp_sequence_apply_luminance
+}
+proc mp_sequence_get_aperture {} {
+    dict create ap_speed 0.2 ap_bound 0.35 lum_offset 0.0
+}
+
 proc mp_sequence_set_freeze {frozen speed} {
     if {$frozen} {
         motionpatch_speed dots_target 0.0
@@ -304,20 +369,8 @@ workspace::reset
 workspace::setup mp_sequence_setup {
     nDots     {int 200 4000 100 1500 "Number of Dots (per patch)"}
     shapeSize {float 0.05 0.5 0.01 0.2 "Aperture Size (fraction of patch)"}
-} -adjusters {seq_freeze seq_mode seq_pattern seq_transition seq_motion seq_shape seq_softness seq_transform} \
+} -adjusters {seq_freeze seq_mode seq_pattern seq_transition seq_motion seq_aperture seq_shape seq_softness seq_transform} \
   -label "Motion Sequence"
-
-workspace::variant seq_real {nDots 1500 shapeSize 0.2} \
-  -adjusters {seq_freeze seq_mode seq_pattern seq_transition seq_motion seq_shape seq_softness seq_transform} \
-  -label "Real Motion (coherent center)"
-
-workspace::variant seq_induced {nDots 1500 shapeSize 0.2} \
-  -adjusters {seq_freeze seq_mode seq_pattern seq_transition seq_motion seq_shape seq_softness seq_transform} \
-  -label "Induced Motion (flicker center, inverted surround)"
-
-workspace::variant seq_contrast {nDots 1500 shapeSize 0.2} \
-  -adjusters {seq_freeze seq_mode seq_pattern seq_transition seq_motion seq_shape seq_softness seq_transform} \
-  -label "Motion Contrast (both, surround inverted)"
 
 workspace::adjuster seq_freeze {
     frozen {choice {0 1} 0 "Frozen"}
@@ -326,7 +379,7 @@ workspace::adjuster seq_freeze {
   -label "Freeze / Play"
 
 workspace::adjuster seq_mode {
-    mode {choice {real induced contrast baseline} real "Mode"}
+    mode {choice {real induced contrast aperture baseline} real "Mode"}
 } -target {} -proc mp_sequence_set_mode -getter mp_sequence_get_mode \
   -label "Center / Surround Mode"
 
@@ -347,6 +400,17 @@ workspace::adjuster seq_motion {
     speed {float 0.0 0.01 0.0005 0.003 "Dot Speed"}
 } -target {} -proc mp_sequence_set_motion -getter mp_sequence_get_motion \
   -label "Motion Speed"
+
+# Aperture-mode-specific: ap_speed = mask translation rate (offset units
+# per second). ap_bound = max |offset| in patch-local coords (0.5 fills
+# the patch). lum_offset > 0 makes the aperture brighter than surround,
+# < 0 darker, 0 = motion-only definition.
+workspace::adjuster seq_aperture {
+    ap_speed   {float 0.0 1.0 0.05 0.2 "Aperture Speed (units/sec)"}
+    ap_bound   {float 0.05 0.5 0.05 0.35 "Aperture Extent"}
+    lum_offset {float -0.4 0.4 0.05 0.0 "Luminance Offset (in - out)"}
+} -target {} -proc mp_sequence_set_aperture -getter mp_sequence_get_aperture \
+  -label "Aperture Translation"
 
 workspace::adjuster seq_shape {
     shape_size {float 0.05 0.5 0.01 0.2 "Aperture Size"}
