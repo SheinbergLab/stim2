@@ -66,9 +66,135 @@ proc mp_planko_make_circle_tex {size} {
     dl_local y [dl_add [dl_mult [dl_sin $angles] $half] $half]
 
     set img  [img_create -width $size -height $size -depth $depth]
-    set poly [img_drawPolygon $img $x $y 255 255 255 255]
+    set poly [img_drawPolygonFast $img $x $y 255 255 255 255]
     dl_local pix [img_imgtolist $poly]
     img_delete $img $poly
+    set tex [shaderImageCreate $pix $size $size linear]
+    return $tex
+}
+
+# Test world-map texture: a thick rectangular frame around the edges of
+# the patch plus a small filled square in the center. Used as a stage-1
+# sanity check for the world-map sampler; mp_planko_make_plank_tex
+# replaces it for the experiment-grade demos.
+proc mp_planko_make_testworld_tex {size} {
+    set depth 4
+    set img [img_create -width $size -height $size -depth $depth]
+
+    set border [expr {int($size * 0.08)}]
+    dl_local ox [dl_flist 0 $size $size 0]
+    dl_local oy [dl_flist 0 0 $size $size]
+    set p1 [img_drawPolygonFast $img $ox $oy 255 255 255 255]
+    set xi0 $border
+    set xi1 [expr {$size - $border}]
+    dl_local ix [dl_flist $xi0 $xi1 $xi1 $xi0]
+    dl_local iy [dl_flist $xi0 $xi0 $xi1 $xi1]
+    set p2 [img_drawPolygonFast $p1 $ix $iy 0 0 0 0]
+
+    set cs [expr {int($size * 0.15)}]
+    set cx0 [expr {($size - $cs) / 2}]
+    set cx1 [expr {$cx0 + $cs}]
+    dl_local sx [dl_flist $cx0 $cx1 $cx1 $cx0]
+    dl_local sy [dl_flist $cx0 $cx0 $cx1 $cx1]
+    set p3 [img_drawPolygonFast $p2 $sx $sy 255 255 255 255]
+
+    dl_local pix [img_imgtolist $p3]
+    img_delete $img $p1 $p2 $p3
+    set tex [shaderImageCreate $pix $size $size linear]
+    return $tex
+}
+
+# Rasterize the accepted planks into an alpha texture used as tex1 by
+# both motionpatches. Static per-trial: we generate it once when a
+# board is accepted, then it stays fixed in the patch frame for the
+# whole drop. If/when planks become interactive (pinball paddles
+# moving with subject input, per-frame world updates), this is the
+# place to graduate to a GPU FBO render or Blend2D pipeline. For
+# planko's 10-rectangle worlds, regenerated once per trial, Impro is
+# fast enough.
+#
+# Coordinate mapping: world dva (x, y) -> texture pixel (px, py)
+#   px = (x + patch_size/2) / patch_size * size
+#   py = (patch_size/2 - y) / patch_size * size   (y-flip; CImg's
+#                                                  pixel 0 is top, but
+#                                                  the shader samples
+#                                                  texcoord.t flipped,
+#                                                  so high y_world ends
+#                                                  up at top of patch)
+proc mp_planko_world_to_pixel {x_dva y_dva size} {
+    set ps $::mp_planko::patch_size
+    set px [expr {($x_dva + $ps / 2.0) / $ps * $size}]
+    set py [expr {($ps / 2.0 - $y_dva) / $ps * $size}]
+    return [list $px $py]
+}
+
+proc mp_planko_make_plank_tex {size} {
+    set depth 4
+    set img [img_create -width $size -height $size -depth $depth]
+    set polys [list]
+    set cur $img
+
+    # Each layer is rasterized into its own RGBA channel via
+    # img_drawPolygonChannel, which uses CImg's per-channel shared
+    # views to leave non-target channels untouched. Layer order is
+    # therefore irrelevant -- adding a third or fourth overlapping
+    # layer (e.g. choice zones, paddles) just adds another set of
+    # calls with a different mask, no sequencing care needed.
+    #
+    # Channel assignment for this demo:
+    #   A (mask 8) = planks
+    #   B (mask 4) = frame
+    # R and G are reserved for future layers.
+
+    # Frame: outer rectangle fills B=255 across the whole image, then
+    # the inset rectangle clears the interior B back to 0, leaving a
+    # clean rectangular ring. Both writes target only the B channel.
+    dl_local ox [dl_flist 0 $size $size 0]
+    dl_local oy [dl_flist 0 0 $size $size]
+    set cur [img_drawPolygonChannel $cur $ox $oy 0 0 255 0 4]
+    lappend polys $cur
+
+    set border [expr {int($size * 0.04)}]
+    set xi0 $border
+    set xi1 [expr {$size - $border}]
+    dl_local ix [dl_flist $xi0 $xi1 $xi1 $xi0]
+    dl_local iy [dl_flist $xi0 $xi0 $xi1 $xi1]
+    set cur [img_drawPolygonChannel $cur $ix $iy 0 0 0 0 4]
+    lappend polys $cur
+
+    # Planks: alpha-channel only.
+    set n [llength $::mp_planko::plank_tx]
+    for {set i 0} {$i < $n} {incr i} {
+        set tx  [lindex $::mp_planko::plank_tx    $i]
+        set ty  [lindex $::mp_planko::plank_ty    $i]
+        set sx  [lindex $::mp_planko::plank_sx    $i]
+        set sy  [lindex $::mp_planko::plank_sy    $i]
+        set ang [lindex $::mp_planko::plank_angle $i]
+
+        set hx [expr {$sx / 2.0}]
+        set hy [expr {$sy / 2.0}]
+        set ca [expr {cos($ang)}]
+        set sa [expr {sin($ang)}]
+
+        set xs {}
+        set ys {}
+        foreach pt {-1 1 1 -1} qt {-1 -1 1 1} {
+            set lx [expr {$pt * $hx}]
+            set ly [expr {$qt * $hy}]
+            set wx [expr {$tx + $ca * $lx - $sa * $ly}]
+            set wy [expr {$ty + $sa * $lx + $ca * $ly}]
+            lassign [mp_planko_world_to_pixel $wx $wy $size] px py
+            lappend xs $px
+            lappend ys $py
+        }
+        dl_local pxl [dl_flist {*}$xs]
+        dl_local pyl [dl_flist {*}$ys]
+        set cur [img_drawPolygonChannel $cur $pxl $pyl 0 0 0 255 8]
+        lappend polys $cur
+    }
+
+    dl_local pix [img_imgtolist $cur]
+    img_delete $img {*}$polys
     set tex [shaderImageCreate $pix $size $size linear]
     return $tex
 }
@@ -239,17 +365,42 @@ proc mp_planko_simulate_trajectory {} {
     set max_retries $::mp_planko::max_world_retries
     set min_planks  $::mp_planko::min_planks
     set ts {}; set xs {}; set ys {}; set dt 0.0; set nhit 0
+    set accepted_dg ""
     for {set attempt 0} {$attempt < $max_retries} {incr attempt} {
         box2d::destroy all
+        if {$accepted_dg ne ""} { dg_delete $accepted_dg; set accepted_dg "" }
         set dg [mp_planko_make_world]
         lassign [mp_planko_build_sim $dg] world ball
         lassign [mp_planko_run_sim $world $ball] ts xs ys dt contacts
         set nhit [mp_planko_count_plank_hits $contacts]
         box2d::destroy all
+        if {$nhit >= $min_planks} { set accepted_dg $dg; break }
         dg_delete $dg
-        if {$nhit >= $min_planks} { break }
     }
     set ::mp_planko::traj_nhit $nhit
+
+    # Extract plank geometry from the accepted world for the world-map
+    # rasterizer. Walls and the ball are skipped; only entries whose
+    # name starts with "plank" become world-map geometry.
+    set ::mp_planko::plank_tx    {}
+    set ::mp_planko::plank_ty    {}
+    set ::mp_planko::plank_sx    {}
+    set ::mp_planko::plank_sy    {}
+    set ::mp_planko::plank_angle {}
+    if {$accepted_dg ne ""} {
+        set ndg [dl_length $accepted_dg:name]
+        for {set i 0} {$i < $ndg} {incr i} {
+            set nm [dl_get $accepted_dg:name $i]
+            if {![string match plank* $nm]} continue
+            lappend ::mp_planko::plank_tx    [dl_get $accepted_dg:tx    $i]
+            lappend ::mp_planko::plank_ty    [dl_get $accepted_dg:ty    $i]
+            lappend ::mp_planko::plank_sx    [dl_get $accepted_dg:sx    $i]
+            lappend ::mp_planko::plank_sy    [dl_get $accepted_dg:sy    $i]
+            lappend ::mp_planko::plank_angle [dl_get $accepted_dg:angle $i]
+        }
+        dg_delete $accepted_dg
+    }
+
     lassign [mp_planko_compute_velocities $ts $xs $ys] vxs vys
 
     set ::mp_planko::traj_t  $ts
@@ -430,6 +581,39 @@ proc mp_planko_apply_luminance {} {
 # (2 * ball_radius_dva) / patch_size_dva. The shape_size adjuster is
 # kept as a manual override (e.g. to deliberately enlarge the aperture
 # for context-leakage controls); ↑ reset re-syncs it to the ball.
+# Position the aperture at the trajectory start (zero velocity) so a
+# fresh trial visibly begins with the ball at its launch point rather
+# than wherever the last drop ended. Idempotent and safe before the
+# motionpatches exist (catch absorbs the missing-objname errors).
+proc mp_planko_position_at_start {} {
+    set ps $::mp_planko::patch_size
+    if {$ps <= 0 || $::mp_planko::traj_n == 0} { return }
+    set x0 [lindex $::mp_planko::traj_x 0]
+    set y0 [lindex $::mp_planko::traj_y 0]
+    if {$x0 eq "" || $y0 eq ""} { return }
+    set ox [expr {$x0 / $ps}]
+    set oy [expr {$y0 / $ps}]
+    catch {
+        motionpatch_maskoffset dots_target $ox $oy
+        motionpatch_maskoffset dots_bg     $ox $oy
+        motionpatch_speed      dots_target 0.0
+    }
+}
+
+# Generate a fresh world-map texture from the current plank list and
+# rebind it on both motionpatches. The previous shaderImage texture is
+# orphaned (no shaderImageDelete API) but the leak is small (~1 MB at
+# 512x512 RGBA) and bounded by the number of resets per session.
+proc mp_planko_refresh_world_tex {} {
+    if {[info commands motionpatch_setSampler] eq ""} { return }
+    set tex   [mp_planko_make_plank_tex $::mp_planko::world_tex_size]
+    set texID [shaderImageID $tex]
+    catch {
+        motionpatch_setSampler dots_target $texID 1
+        motionpatch_setSampler dots_bg     $texID 1
+    }
+}
+
 proc mp_planko_match_aperture_to_ball {} {
     set d [expr {2.0 * $::mp_planko::ball_radius}]
     set sz [expr {$d / $::mp_planko::patch_size}]
@@ -477,6 +661,9 @@ proc mp_planko_setup {patch_size_dva dot_density} {
         variable shape_size       0.15
         variable lum_offset       0.0
         variable bg_lifetime      8
+        variable world_mode_bg     0
+        variable world_mode_target 0
+        variable world_dim         0.25
 
         variable traj_t           {}
         variable traj_x           {}
@@ -486,9 +673,22 @@ proc mp_planko_setup {patch_size_dva dot_density} {
         variable traj_dt          0.0
         variable traj_n           0
         variable shuffle_idx      {}
+
+        variable plank_tx         {}
+        variable plank_ty         {}
+        variable plank_sx         {}
+        variable plank_sy         {}
+        variable plank_angle      {}
+        variable world_tex_size   512
+
+        # Saved setup args so reset can re-invoke setup cleanly.
+        variable last_patch_size  13.0
+        variable last_dot_density 24.0
     }
 
-    set ::mp_planko::patch_size $patch_size_dva
+    set ::mp_planko::patch_size       $patch_size_dva
+    set ::mp_planko::last_patch_size  $patch_size_dva
+    set ::mp_planko::last_dot_density $dot_density
 
     # Bind aperture size to ball diameter (overrides the namespace default).
     mp_planko_match_aperture_to_ball
@@ -517,6 +717,9 @@ proc mp_planko_setup {patch_size_dva dot_density} {
     set tex   [mp_planko_make_circle_tex $texSize]
     set texID [shaderImageID $tex]
 
+    set worldTex   [mp_planko_make_plank_tex $::mp_planko::world_tex_size]
+    set worldTexID [shaderImageID $worldTex]
+
     set color  0.8
     set ptSize 3.0
     set initialSpeed [mp_planko_speed_from_deg_sec \
@@ -537,6 +740,17 @@ proc mp_planko_setup {patch_size_dva dot_density} {
     motionpatch_setSampler $mp_bg $texID 0
     motionpatch_samplermaskmode $mp_bg 2
     motionpatch_maskscale $mp_bg $::mp_planko::shape_size
+    motionpatch_setSampler $mp_bg $worldTexID 1
+    # Layer A (alpha) = planks. world_mode_bg drives this via the
+    # backward-compat motionpatch_worldmaskmode command.
+    motionpatch_worldmaskmode $mp_bg $::mp_planko::world_mode_bg
+    motionpatch_worlddim $mp_bg $::mp_planko::world_dim
+    motionpatch_worldcolor $mp_bg 1.0 0.5 0.2 1.0
+    # Layer B (blue channel) = frame. Tinted yellow so it's visually
+    # distinct from the planks. Demonstrates that two channels of the
+    # same world-map texture can be styled independently.
+    motionpatch_layermode  $mp_bg B 2
+    motionpatch_layercolor $mp_bg B 0.95 0.85 0.2 1.0
     metagroupAdd $mg $mp_bg
 
     set mp_tg [motionpatch $nDots $initialSpeed 30]
@@ -551,6 +765,19 @@ proc mp_planko_setup {patch_size_dva dot_density} {
     motionpatch_setSampler $mp_tg $texID 0
     motionpatch_samplermaskmode $mp_tg 1
     motionpatch_maskscale $mp_tg $::mp_planko::shape_size
+    # Target (inside-aperture / "ball") world mode is independent of
+    # surround. Default 0 = ball on top of world; non-zero = ball is
+    # also affected by the world map (e.g., gets occluded behind
+    # planks). Useful for tracking/pursuit-during-occlusion studies.
+    motionpatch_setSampler $mp_tg $worldTexID 1
+    # Target alpha layer (planks) -- on by default 0 so the ball
+    # renders on top. Set world_mode_target non-zero for occlusion.
+    motionpatch_worldmaskmode $mp_tg $::mp_planko::world_mode_target
+    motionpatch_worlddim $mp_tg $::mp_planko::world_dim
+    motionpatch_worldcolor $mp_tg 1.0 0.5 0.2 1.0
+    # Target B layer (frame) is left at mode 0 -- the frame should
+    # only modulate the surround, not the ball, so the ball passes
+    # cleanly across the framed boundary.
     metagroupAdd $mg $mp_tg
 
     addPreScript $mp_bg mp_planko_update
@@ -564,6 +791,7 @@ proc mp_planko_setup {patch_size_dva dot_density} {
     glistSetVisible 1
 
     mp_planko_apply_mode $::mp_planko::mode
+    mp_planko_position_at_start
     redraw
 }
 
@@ -578,7 +806,9 @@ proc mp_planko_trigger {action} {
         reset {
             mp_planko_simulate_trajectory
             mp_planko_match_aperture_to_ball
+            mp_planko_refresh_world_tex
             set ::mp_planko::dropping 0
+            mp_planko_position_at_start
         }
     }
     return
@@ -622,6 +852,26 @@ proc mp_planko_set_bg_lifetime {bg_lifetime} {
 }
 proc mp_planko_get_bg_lifetime {} { dict create bg_lifetime 8 }
 
+# World-map (tex1) modulation. mode_bg controls whether the SURROUND
+# (mp_bg) is modulated by the world map; mode_target controls whether
+# the BALL (mp_tg) is modulated. Ball-on-top:    mode_target = 0
+# Ball-occluded: mode_target = same as mode_bg.
+# Modes per channel: 0 = off, 1 = dim, 2 = tint, 3 = hide.
+proc mp_planko_set_worldmap {mode_bg mode_target dim} {
+    set ::mp_planko::world_mode_bg     $mode_bg
+    set ::mp_planko::world_mode_target $mode_target
+    set ::mp_planko::world_dim         $dim
+    catch {
+        motionpatch_worldmaskmode dots_bg     $mode_bg
+        motionpatch_worldmaskmode dots_target $mode_target
+        motionpatch_worlddim      dots_target $dim
+        motionpatch_worlddim      dots_bg     $dim
+    }
+}
+proc mp_planko_get_worldmap {} {
+    dict create mode_bg 0 mode_target 0 dim 0.25
+}
+
 proc mp_planko_set_shape_size {shape_size} {
     set ::mp_planko::shape_size $shape_size
     motionpatch_maskscale dots_target $shape_size
@@ -659,9 +909,9 @@ proc onUpArrow   {} { mp_planko_trigger reset }
 workspace::reset
 
 workspace::setup mp_planko_setup {
-    patch_size_dva {float 8.0 32.0 1.0 20.0 "Patch Size (dva)"}
-    dot_density    {float 0.5 100.0 0.5 4.0 "Dot Density (dots/dva^2)"}
-} -adjusters {planko_actions planko_mode planko_world planko_speeds planko_luminance planko_lifetime planko_shape planko_softness planko_freeze planko_transform} \
+    patch_size_dva {float 8.0 32.0 1.0 13.0 "Patch Size (dva)"}
+    dot_density    {float 0.5 100.0 0.5 24.0 "Dot Density (dots/dva^2)"}
+} -adjusters {planko_actions planko_mode planko_world planko_speeds planko_luminance planko_lifetime planko_worldmap planko_shape planko_softness planko_freeze planko_transform} \
   -label "Motion Planko"
 
 workspace::adjuster planko_actions {
@@ -698,6 +948,18 @@ workspace::adjuster planko_lifetime {
     bg_lifetime {int 1 30 1 8 "Background Lifetime (frames)"}
 } -target {} -proc mp_planko_set_bg_lifetime -getter mp_planko_get_bg_lifetime \
   -label "Background Lifetime"
+
+# Stage-1 test of the second sampler. Mode 0 leaves the world map
+# inert; mode 1 dims dots that fall over the test pattern (frame +
+# central square); mode 2 tints them with the world color; mode 3
+# hides them. Once this works, the test texture is replaced by a
+# plank rasterization from world_dg.
+workspace::adjuster planko_worldmap {
+    mode_bg     {choice {0 1 2 3} 0 "Surround Mode (0=off 1=dim 2=tint 3=hide)"}
+    mode_target {choice {0 1 2 3} 0 "Ball Mode (0=on top 1=dim 2=tint 3=hide)"}
+    dim         {float 0.0 1.0 0.05 0.25 "Dim Factor (mode 1)"}
+} -target {} -proc mp_planko_set_worldmap -getter mp_planko_get_worldmap \
+  -label "World Map (Test Pattern)"
 
 workspace::adjuster planko_shape {
     shape_size {float 0.05 0.5 0.01 0.15 "Aperture Size (fraction of patch)"}
