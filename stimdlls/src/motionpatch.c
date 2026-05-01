@@ -1,6 +1,162 @@
 /*
  * motionpatch.c
- *  Module to show a flowfield of moving dots
+ *  Module to show a flowfield of moving dots, with optional shape
+ *  masking and world-map modulation via two texture samplers.
+ *
+ * ============================================================
+ * OVERVIEW
+ * ============================================================
+ *
+ * A motionpatch is a fixed-count cloud of dots living in patch-local
+ * coordinates [-0.5, 0.5] x [-0.5, 0.5]. Per frame, each dot is
+ * advanced along its direction at the current speed; when its
+ * lifetime expires (or it leaves the patch), it respawns at a random
+ * position with a freshly sampled direction. A configurable fraction
+ * (`coherence`) of dots stream along a shared global direction; the
+ * rest get random directions, producing a flicker noise field.
+ *
+ * Two RGBA texture samplers can be attached:
+ *
+ *   tex0 ("primary mask"):
+ *     Sampled at a transformed dot texcoord:
+ *         tc = (texcoord - 0.5 - maskOffset) / maskScale
+ *         rotated by maskRotation about (0.5, 0.5)
+ *     `samplermaskmode` selects how its alpha gates dot rendering:
+ *         0 (SMASK_NONE)            : ignore tex0; uColor1 only.
+ *         1 (SMASK_ALPHA)           : alpha *= texAlpha (visible
+ *                                     INSIDE the mask shape).
+ *         2 (SMASK_ONE_MINUS_ALPHA) : alpha *= 1 - texAlpha (visible
+ *                                     OUTSIDE the mask shape).
+ *         3 (SMASK_TWO_COLOR)       : uColor1 INSIDE, uColor2 OUTSIDE.
+ *     `masksoftness` smoothsteps the alpha edge for anti-aliasing.
+ *
+ *   tex1 ("world map", multi-layer):
+ *     Sampled at the dot's RAW patch-local texcoord (no offset/scale/
+ *     rotation), so the world map stays fixed in the patch frame even
+ *     when tex0 translates. Each RGBA channel of tex1 is an INDEPENDENT
+ *     alpha mask treated as one semantic layer; the four layers
+ *     compose at fragment time, each with its own mode/color/dim:
+ *         layerModes[i]:  0=off, 1=dim, 2=tint, 3=hide
+ *         layerDims[i]:   alpha multiplier for mode 1
+ *         layerColors[i]: RGBA tint for mode 2
+ *     Channels compose in order R, G, B, A so layer 3 (alpha) draws
+ *     last and overwrites earlier layers in tint mode. Typical
+ *     assignment for a planko-style task:
+ *         A: planks      (dim mode 1)
+ *         R: left zone   (tint mode 2, e.g. green)
+ *         G: right zone  (tint mode 2, e.g. red)
+ *         B: spare       (off; reserved for walls/paddles/etc)
+ *     The two samplers compose: tex0 picks WHICH dots are visible
+ *     (inside vs. outside a translating shape), tex1 modulates them
+ *     based on a fixed world-frame multi-layer map. Each motionpatch
+ *     can opt in/out of individual layers independently, so a "ball"
+ *     patch and a "surround" patch sharing the same tex1 can render
+ *     the target on top (target layerModes=0,0,0,0) or have it be
+ *     occluded by selected layers (target layerModes[3]=3 only).
+ *
+ *     Backward-compat: motionpatch_worldmaskmode/dim/color operate on
+ *     the alpha channel (layer 3) for code written before the multi-
+ *     layer extension.
+ *
+ * ============================================================
+ * UNITS & COORDINATE CONVENTIONS
+ * ============================================================
+ *
+ *   * Patch-local space: the dot positions live in [-0.5, 0.5]^2.
+ *     A metagroup typically scales the patch so 1.0 patch-unit
+ *     spans a fixed dva (degrees visual angle) extent on screen.
+ *
+ *   * `motionpatch_speed`:  patch-local-units PER FRAME (not per
+ *     second, not in dva). To convert from a desired physical
+ *     speed in dva/sec, use:
+ *         speed = v_dva_per_sec / (patch_size_dva * refresh_rate_hz)
+ *     This convention matches the prf motionpatch protocol
+ *     (systems/ess/prf/motionpatch).
+ *
+ *   * `motionpatch_direction`: radians, 0 = +x, pi/2 = +y. Affects
+ *     only `coherent` dots; incoherent dots get random directions.
+ *
+ *   * `motionpatch_directionjitter`: per-dot Gaussian std-dev
+ *     (radians) added to each coherent dot's direction at respawn.
+ *
+ *   * `motionpatch_lifetime`: integer frames between respawns. Short
+ *     lifetimes (< ~5) approach pure flicker; long lifetimes (> ~30)
+ *     produce coherent streams.
+ *
+ *   * `motionpatch_maskoffset`: patch-local centered coordinates.
+ *     |offset| < 0.5 keeps the mask shape on-patch.
+ *
+ *   * `motionpatch_maskscale`: 1.0 means the mask texture fills the
+ *     patch (mask diameter == patch span). 0.2 -> mask spans 20%.
+ *
+ *   * `motionpatch_pointsize`: GL point size in pixels.
+ *
+ * ============================================================
+ * COMMAND REFERENCE
+ * ============================================================
+ *
+ *   Lifecycle / construction:
+ *     motionpatch n speed lifetime    -- construct; returns objid
+ *     motionpatch_refreshPositions    -- resample all dot positions
+ *
+ *   Appearance:
+ *     motionpatch_color r g b a       -- uColor1 (primary)
+ *     motionpatch_color2 r g b a      -- uColor2 (samplermaskmode 3)
+ *     motionpatch_pointsize px        -- GL point size
+ *
+ *   Motion:
+ *     motionpatch_speed s             -- patch-units / frame
+ *     motionpatch_direction rad       -- coherent direction
+ *     motionpatch_directionjitter rad -- per-dot direction noise
+ *     motionpatch_coherence frac      -- 0..1
+ *     motionpatch_lifetime frames     -- respawn period
+ *
+ *   Direction-by-noise (open-simplex flow field):
+ *     motionpatch_useNoiseDirection use period [rate]
+ *     motionpatch_setSeed seed
+ *     motionpatch_setNoiseZ z
+ *     motionpatch_noiseUpdateZ flag
+ *
+ *   Mask shape (sampler 0):
+ *     motionpatch_setSampler mp tex 0 -- bind primary mask texture
+ *     motionpatch_masktype mt         -- legacy MASK_TYPE enum
+ *     motionpatch_maskradius r        -- legacy circle/hexagon radius
+ *     motionpatch_samplermaskmode m   -- 0/1/2/3 (see overview)
+ *     motionpatch_maskoffset x y      -- centered patch-local
+ *     motionpatch_maskscale sx sy     -- 1.0 = fills patch
+ *     motionpatch_maskrotation rad
+ *     motionpatch_masksoftness s      -- 0 = hard, >0 = soft edge
+ *
+ *   World map (sampler 1, 4 layers):
+ *     motionpatch_setSampler mp tex 1     -- bind world-map texture
+ *     motionpatch_layermode  mp ch m      -- 0/1/2/3 per channel
+ *     motionpatch_layerdim   mp ch d      -- mode-1 multiplier per ch
+ *     motionpatch_layercolor mp ch r g b a -- mode-2 tint per ch
+ *       (ch is 0..3 or one of R/G/B/A)
+ *
+ *   Backward-compat (target alpha channel, layer 3):
+ *     motionpatch_worldmaskmode m
+ *     motionpatch_worlddim factor
+ *     motionpatch_worldcolor r g b a
+ *
+ * ============================================================
+ * COMPOSITION ORDER (fragment shader)
+ * ============================================================
+ *
+ *   1. Transform texcoord by maskOffset/maskScale/maskRotation.
+ *   2. Sample tex0 at the transformed coord -> texAlpha, texColor.
+ *   3. samplermaskmode chooses (color, alpha) from texAlpha and
+ *      uColor1/uColor2.
+ *   4. Sample tex1 at the RAW texcoord -> wsamp (RGBA alpha masks,
+ *      one per layer).
+ *   5. For each channel R/G/B/A in turn, applyLayer modulates
+ *      (color, alpha) by wsamp[channel] using layerModes[channel].
+ *   6. Output (color, alpha) for the dot.
+ *
+ *   Implication: tex1 is "in the world frame"; tex0 is "in the
+ *   shape frame" (translates with maskOffset). This is what makes
+ *   trajectory-aperture demos work -- the ball's mask follows the
+ *   trajectory while the planks stay fixed in the patch.
  */
 
 
@@ -40,10 +196,17 @@
 
 typedef struct _dot {
   float pos[3];
-  float speed[3];
   int lifetime, frames;
   int coherent;			/* flag as either coherent or not */
-  float dir_offset;		/* angular jitter in radians (coherent only) */
+  float theta;			/* per-dot motion angle (radians).
+				 * Coherent dots: angular jitter offset
+				 *   added to s->direction at integration.
+				 * Incoherent dots: absolute angle (the
+				 *   global direction is ignored).
+				 * Avoids caching cos/sin per dot; vx,vy
+				 * are computed on the fly in the update
+				 * loop, so direction/speed changes need
+				 * no per-dot recomputation pass. */
 } DOT;
 
 typedef struct _vao_info {
@@ -66,7 +229,7 @@ typedef enum SAMPLER_MASK_TYPE { SMASK_NONE, SMASK_ALPHA, SMASK_ONE_MINUS_ALPHA,
 
 
 #define MAX_NOISE_CTX 4
-#define NSAMPLERS 1
+#define NSAMPLERS 2
 
 typedef struct {
   DOT *dots;
@@ -91,8 +254,19 @@ typedef struct {
   int set_direction_by_noise;
 
   GLuint       texid[NSAMPLERS]; /* To use as a mask for the dots */
-  UNIFORM_INFO *tex0;		 /* Texture samples to share      */
-  
+  UNIFORM_INFO *tex0;		 /* primary mask sampler               */
+  UNIFORM_INFO *tex1;		 /* world-map sampler (4 layers, RGBA) */
+  /* Per-layer state for the world-map sampler. Each RGBA channel of
+     tex1 is an independent alpha mask for one semantic region (e.g.
+     planks=A, left zone=R, right zone=G, spare=B). All four layers
+     compose at fragment time; each has its own mode/color/dim. */
+  int   layer_mode[4];           /* 0:off 1:dim 2:tint 3:hide          */
+  float layer_dim[4];             /* multiplier when mode == 1          */
+  float layer_color[4][4];       /* RGBA tint when mode == 2           */
+  UNIFORM_INFO *layerModes;      /* ivec4                              */
+  UNIFORM_INFO *layerDims;       /* vec4                               */
+  UNIFORM_INFO *layerColors;     /* mat4 (one column per layer)        */
+
   UNIFORM_INFO *modelviewMat;   /* set if we have "modelviewMat" uniform */
   UNIFORM_INFO *projMat;        /* set if we have "projMat" uniform */
   UNIFORM_INFO *uColor1;        /* set if we have "uColor" uniform */
@@ -180,6 +354,18 @@ void motionpatchDraw(GR_OBJ *g)
     memcpy(s->maskSoftness->val, &s->mask_softness, sizeof(float));
   }
 
+  if (s->layerModes) {
+    memcpy(s->layerModes->val, s->layer_mode, sizeof(int)*4);
+  }
+  if (s->layerDims) {
+    memcpy(s->layerDims->val, s->layer_dim, sizeof(float)*4);
+  }
+  if (s->layerColors) {
+    /* mat4 is column-major: each layer is one column (4 floats).
+       layer_color is already laid out as 4 layers x 4 components. */
+    memcpy(s->layerColors->val, s->layer_color, sizeof(float)*16);
+  }
+
   /* Bind the texture to unit 0 BEFORE glUseProgram so the Apple GL
      driver's sampler-binding validation sees a valid texture. If no
      user sampler has been set, fall back to a 1x1 white default. */
@@ -196,6 +382,23 @@ void motionpatchDraw(GR_OBJ *g)
   } else if (MotionpatchDefaultTex) {
     glBindTexture(GL_TEXTURE_2D, MotionpatchDefaultTex);
   }
+
+  /* Same for unit 1 (the world-map sampler). Falls back to the same
+     1x1 white default so the shader always has a valid binding. */
+  glActiveTexture(GL_TEXTURE1);
+  if (s->texid[1] >= 0 && s->tex1) {
+    switch(s->tex1->type) {
+    case GL_SAMPLER_2D:
+      glBindTexture(GL_TEXTURE_2D, s->texid[1]);
+      break;
+    case GL_SAMPLER_2D_ARRAY:
+      glBindTexture(GL_TEXTURE_2D_ARRAY, s->texid[1]);
+      break;
+    }
+  } else if (MotionpatchDefaultTex) {
+    glBindTexture(GL_TEXTURE_2D, MotionpatchDefaultTex);
+  }
+  glActiveTexture(GL_TEXTURE0);
 
   glUseProgram(sp->program);
   update_uniforms(&s->uniformTable);
@@ -271,6 +474,12 @@ void motionpatchUpdate(GR_OBJ *g)
   for (i = 0; i < s->num_dots; i++) {
     if (s->dots[i].lifetime >= 0 &&
 	s->dots[i].frames >= s->dots[i].lifetime) {
+      /* RESPAWN: pick a new position, reset lifetime, sample a new
+       * per-dot angle. Coherent dots store a small jitter offset;
+       * incoherent dots store an absolute random angle. The actual
+       * (vx,vy) is computed in the integration branch from theta +
+       * the current global direction/speed, so direction or speed
+       * changes propagate automatically without an O(N) pass. */
       s->dots[i].pos[0] = ((float) rand()/RAND_MAX) - 0.5;
       s->dots[i].pos[1] = ((float) rand()/RAND_MAX) - 0.5;
       s->dots[i].frames = 0;
@@ -286,24 +495,20 @@ void motionpatchUpdate(GR_OBJ *g)
 				     s->noise_z);
 	s->direction = atan2(value2, value1);
       }
-      
-      /* If this dot is coherent, re-sample its angular jitter offset
-         and apply. If incoherent, pick a fresh random direction. */
+
       if (s->dots[i].coherent) {
-	float angle;
-	s->dots[i].dir_offset =
+	s->dots[i].theta =
 	  (s->direction_jitter > 0.0f) ? mp_randn() * s->direction_jitter : 0.0f;
-	angle = s->direction + s->dots[i].dir_offset;
-	s->dots[i].speed[0] = cosf(angle)*s->speed;
-	s->dots[i].speed[1] = sinf(angle)*s->speed;
       }
       else {
-	float angle = ((float) rand()/RAND_MAX) *2*PI;
-	s->dots[i].speed[0] = cos(angle)*s->speed;
-	s->dots[i].speed[1] = sin(angle)*s->speed;
+	s->dots[i].theta = ((float) rand()/RAND_MAX) * 2.0f * (float) PI;
       }
     }
     else {
+      /* ALIVE: optionally update global direction from the noise field;
+       * for incoherent dots in noise mode, resample theta so each frame
+       * picks a fresh random angle. Then compute (vx,vy) on the fly
+       * from theta + global state and integrate. */
       if (s->set_direction_by_noise) {
 	value1 = open_simplex_noise3(s->ctx[0],
 				     s->dots[i].pos[0] * s->noise_period,
@@ -314,24 +519,18 @@ void motionpatchUpdate(GR_OBJ *g)
 				     s->dots[i].pos[1] * s->noise_period,
 				     s->noise_z);
 	s->direction = atan2(value2, value1);
-
-	/* If this dot is coherent, set motion direction (with jitter) */
-	if (s->dots[i].coherent) {
-	  float angle = s->direction + s->dots[i].dir_offset;
-	  s->dots[i].speed[0] = cosf(angle)*s->speed;
-	  s->dots[i].speed[1] = sinf(angle)*s->speed;
-	}
-	/* If this dot is incoherent, randomize motion direction */
-	/**** It's possible to not update this on every frame ****/
-	else {
-	  float angle = ((float) rand()/RAND_MAX)*2*PI;
-	  s->dots[i].speed[0] = cos(angle)*s->speed;
-	  s->dots[i].speed[1] = sin(angle)*s->speed;
+	if (!s->dots[i].coherent) {
+	  s->dots[i].theta = ((float) rand()/RAND_MAX) * 2.0f * (float) PI;
 	}
       }
-      /* speed needs to take into account scale */
-      vx = (s->dots[i].speed[0])/GR_SX(g);
-      vy = (s->dots[i].speed[1])/GR_SY(g);
+
+      {
+	float angle = s->dots[i].coherent
+	  ? (s->direction + s->dots[i].theta)
+	  : s->dots[i].theta;
+	vx = cosf(angle) * s->speed / GR_SX(g);
+	vy = sinf(angle) * s->speed / GR_SY(g);
+      }
       s->dots[i].pos[0] += vx;
       s->dots[i].pos[1] += vy;
       /* Toroidal wrap: keep dots inside [-0.5, 0.5] so the patch
@@ -414,31 +613,6 @@ static float mp_randn(void)
   return sqrtf(-2.0f * logf(u1)) * cosf(2.0f * (float) PI * u2);
 }
 
-/* Update every dot's velocity from the global direction + its persistent
- * per-dot jitter offset (for coherent dots), or a freshly sampled random
- * angle (for incoherent dots). Called whenever speed or direction change.
- */
-static int setSpeeds(MOTIONPATCH *s)
-{
-  int i;
-  float angle;
-  for (i = 0; i < s->num_dots; i++) {
-    if (s->dots[i].coherent) {
-      angle = s->direction + s->dots[i].dir_offset;
-      s->dots[i].speed[0] = cosf(angle) * s->speed;
-      s->dots[i].speed[1] = sinf(angle) * s->speed;
-      s->dots[i].speed[2] = 0;
-    }
-    else {
-      angle = ((float) rand()/RAND_MAX) * 2 * (float) PI;
-      s->dots[i].speed[0] = cosf(angle) * s->speed;
-      s->dots[i].speed[1] = sinf(angle) * s->speed;
-    }
-  }
-  return TCL_OK;
-}
-
-
 static int setLifetimes(MOTIONPATCH *s, int lifetime)
 {
   int i;
@@ -449,24 +623,21 @@ static int setLifetimes(MOTIONPATCH *s, int lifetime)
   return TCL_OK;
 }
 
+/* Reflag dots as coherent / incoherent and seed each dot's theta.
+ * No trig or speed-vector caching: the integration loop computes
+ * (vx, vy) from theta + s->direction + s->speed on the fly.
+ */
 static int setCoherences(MOTIONPATCH *s, float coherence)
 {
   int i;
-  float angle;
   for (i = 0; i < s->num_dots; i++) {
     s->dots[i].coherent = (((float) rand()/RAND_MAX) < coherence);
     if (s->dots[i].coherent) {
-      /* Sample a fresh angular jitter offset for this coherent dot. */
-      s->dots[i].dir_offset =
+      s->dots[i].theta =
 	(s->direction_jitter > 0.0f) ? mp_randn() * s->direction_jitter : 0.0f;
-      angle = s->direction + s->dots[i].dir_offset;
-      s->dots[i].speed[0] = cosf(angle) * s->speed;
-      s->dots[i].speed[1] = sinf(angle) * s->speed;
     }
     else {
-      angle = ((float) rand()/RAND_MAX)*2*PI;
-      s->dots[i].speed[0] = cos(angle)*s->speed;
-      s->dots[i].speed[1] = sin(angle)*s->speed;
+      s->dots[i].theta = ((float) rand()/RAND_MAX) * 2.0f * (float) PI;
     }
   }
   return TCL_OK;
@@ -513,9 +684,8 @@ int motionpatchCreate(OBJ_LIST *objlist, SHADER_PROG *sp,
   s->lifetime = lifetime;
   s->coherence = 1.0;
   setPositions(s);
-  setSpeeds(s);
   setLifetimes(s, lifetime);
-  setCoherences(s, s->coherence);
+  setCoherences(s, s->coherence);  /* also seeds each dot's theta */
 
   s->mask_type = MASK_NONE;
   s->mask_radius = 0.5;
@@ -618,7 +788,35 @@ int motionpatchCreate(OBJ_LIST *objlist, SHADER_PROG *sp,
      s->maskSoftness = Tcl_GetHashValue(entryPtr);
      s->maskSoftness->val = calloc(1, sizeof(float));
    }
+   if ((entryPtr = Tcl_FindHashEntry(&s->uniformTable, "tex1"))) {
+     s->tex1 = Tcl_GetHashValue(entryPtr);
+     s->tex1->val = malloc(sizeof(int));
+     *((int *)(s->tex1->val)) = 1;	/* texture unit 1 */
+   }
+   if ((entryPtr = Tcl_FindHashEntry(&s->uniformTable, "layerModes"))) {
+     s->layerModes = Tcl_GetHashValue(entryPtr);
+     s->layerModes->val = calloc(4, sizeof(int));
+   }
+   if ((entryPtr = Tcl_FindHashEntry(&s->uniformTable, "layerDims"))) {
+     s->layerDims = Tcl_GetHashValue(entryPtr);
+     s->layerDims->val = calloc(4, sizeof(float));
+   }
+   if ((entryPtr = Tcl_FindHashEntry(&s->uniformTable, "layerColors"))) {
+     s->layerColors = Tcl_GetHashValue(entryPtr);
+     s->layerColors->val = calloc(16, sizeof(float));
+   }
   s->texid[0] = -1;		/* initialize to no texture sampler */
+  s->texid[1] = -1;		/* world-map sampler unset by default */
+  /* All four layers default to mode=0 (off). When a layer is enabled,
+     dim defaults to 0.25 and color to opaque white. */
+  for (int li = 0; li < 4; li++) {
+    s->layer_mode[li]    = 0;
+    s->layer_dim[li]     = 0.25f;
+    s->layer_color[li][0] = 1.0f;
+    s->layer_color[li][1] = 1.0f;
+    s->layer_color[li][2] = 1.0f;
+    s->layer_color[li][3] = 1.0f;
+  }
 
   return(gobjAddObj(objlist, obj));
 }
@@ -713,10 +911,9 @@ static int motionpatchSpeedCmd(ClientData clientData, Tcl_Interp *interp,
 
   if (Tcl_GetDouble(interp, argv[2], &speed) != TCL_OK) return TCL_ERROR;
   s->speed = speed;
-  setSpeeds(s);
 
   return(TCL_OK);
-  
+
 }
 
 static int motionpatchUseNoiseDirectionCmd(ClientData clientData, Tcl_Interp *interp,
@@ -856,10 +1053,8 @@ static int motionpatchDirectionCmd(ClientData clientData, Tcl_Interp *interp,
 
   if (Tcl_GetDouble(interp, argv[2], &direction) != TCL_OK) return TCL_ERROR;
   s->direction = direction;
-  setSpeeds(s);
 
   return(TCL_OK);
-  
 }
 
 static int motionpatchCoherenceCmd(ClientData clientData, Tcl_Interp *interp,
@@ -973,6 +1168,192 @@ static int motionpatchSamplerMaskModeCmd(ClientData clientData, Tcl_Interp *inte
   }
   s->samplermaskmode = mode;
 
+  return(TCL_OK);
+}
+
+/* Resolve a channel name or index to 0..3. Accepts "R"/"G"/"B"/"A"
+ * (and lowercase) or integers 0..3. */
+static int motionpatchResolveLayer(Tcl_Interp *interp, const char *spec, int *out)
+{
+  if (spec[0] != '\0' && spec[1] == '\0') {
+    switch (spec[0]) {
+    case 'R': case 'r': *out = 0; return TCL_OK;
+    case 'G': case 'g': *out = 1; return TCL_OK;
+    case 'B': case 'b': *out = 2; return TCL_OK;
+    case 'A': case 'a': *out = 3; return TCL_OK;
+    }
+  }
+  /* Integer fallback. */
+  int v;
+  if (Tcl_GetInt(interp, spec, &v) != TCL_OK) return TCL_ERROR;
+  if (v < 0 || v > 3) {
+    Tcl_AppendResult(interp,
+		     "channel must be 0..3 or one of R/G/B/A", NULL);
+    return TCL_ERROR;
+  }
+  *out = v;
+  return TCL_OK;
+}
+
+/* motionpatch_layermode mp channel mode  (channel: 0..3 or R/G/B/A)
+ *   mode: 0=off, 1=dim, 2=tint, 3=hide */
+static int motionpatchLayerModeCmd(ClientData clientData, Tcl_Interp *interp,
+				   int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id, channel, mode;
+
+  if (argc < 4) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch channel mode", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  if (motionpatchResolveLayer(interp, argv[2], &channel) != TCL_OK) return TCL_ERROR;
+  if (Tcl_GetInt(interp, argv[3], &mode) != TCL_OK) return TCL_ERROR;
+  if (mode < 0 || mode > 3) {
+    Tcl_AppendResult(interp, argv[0], ": invalid mode (expected 0..3)", NULL);
+    return TCL_ERROR;
+  }
+  s->layer_mode[channel] = mode;
+  return TCL_OK;
+}
+
+static int motionpatchLayerDimCmd(ClientData clientData, Tcl_Interp *interp,
+				  int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id, channel;
+  double dim;
+
+  if (argc < 4) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch channel dim_factor", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  if (motionpatchResolveLayer(interp, argv[2], &channel) != TCL_OK) return TCL_ERROR;
+  if (Tcl_GetDouble(interp, argv[3], &dim) != TCL_OK) return TCL_ERROR;
+  s->layer_dim[channel] = (float) dim;
+  return TCL_OK;
+}
+
+static int motionpatchLayerColorCmd(ClientData clientData, Tcl_Interp *interp,
+				    int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id, channel;
+  double r, g, b, a;
+
+  if (argc < 7) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch channel r g b a", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  if (motionpatchResolveLayer(interp, argv[2], &channel) != TCL_OK) return TCL_ERROR;
+  if (Tcl_GetDouble(interp, argv[3], &r) != TCL_OK) return TCL_ERROR;
+  if (Tcl_GetDouble(interp, argv[4], &g) != TCL_OK) return TCL_ERROR;
+  if (Tcl_GetDouble(interp, argv[5], &b) != TCL_OK) return TCL_ERROR;
+  if (Tcl_GetDouble(interp, argv[6], &a) != TCL_OK) return TCL_ERROR;
+  s->layer_color[channel][0] = (float) r;
+  s->layer_color[channel][1] = (float) g;
+  s->layer_color[channel][2] = (float) b;
+  s->layer_color[channel][3] = (float) a;
+  return TCL_OK;
+}
+
+/* Backward-compat: motionpatch_worldmaskmode/dim/color operate on the
+ * alpha channel (layer index 3). Existing demos continue to work
+ * unchanged; new code can target other channels via the layer*
+ * commands above. */
+static int motionpatchWorldMaskModeCmd(ClientData clientData, Tcl_Interp *interp,
+				       int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id, mode;
+
+  if (argc < 3) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch mode", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  if (Tcl_GetInt(interp, argv[2], &mode) != TCL_OK) return TCL_ERROR;
+  if (mode < 0 || mode > 3) {
+    Tcl_AppendResult(interp, argv[0], ": invalid worldmaskmode (expected 0..3)", NULL);
+    return TCL_ERROR;
+  }
+  s->layer_mode[3] = mode;
+  return(TCL_OK);
+}
+
+static int motionpatchWorldDimCmd(ClientData clientData, Tcl_Interp *interp,
+				  int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id;
+  double dim;
+
+  if (argc < 3) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch dim_factor", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  if (Tcl_GetDouble(interp, argv[2], &dim) != TCL_OK) return TCL_ERROR;
+  s->layer_dim[3] = (float) dim;
+  return(TCL_OK);
+}
+
+static int motionpatchWorldColorCmd(ClientData clientData, Tcl_Interp *interp,
+				    int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id;
+  double r, g, b, a;
+
+  if (argc < 6) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch r g b a", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  if (Tcl_GetDouble(interp, argv[2], &r) != TCL_OK) return TCL_ERROR;
+  if (Tcl_GetDouble(interp, argv[3], &g) != TCL_OK) return TCL_ERROR;
+  if (Tcl_GetDouble(interp, argv[4], &b) != TCL_OK) return TCL_ERROR;
+  if (Tcl_GetDouble(interp, argv[5], &a) != TCL_OK) return TCL_ERROR;
+  s->layer_color[3][0] = (float) r;
+  s->layer_color[3][1] = (float) g;
+  s->layer_color[3][2] = (float) b;
+  s->layer_color[3][3] = (float) a;
   return(TCL_OK);
 }
 
@@ -1147,15 +1528,15 @@ static int motionpatchDirectionJitterCmd(ClientData clientData, Tcl_Interp *inte
   if (sigma < 0.0) sigma = 0.0;
   s->direction_jitter = (float) sigma;
 
-  /* Resample per-dot jitter offsets immediately so the change is
-     visible without waiting for respawns. Only coherent dots carry
-     an offset; incoherent dots keep their independent random angle. */
+  /* Resample per-dot theta immediately so the change is visible
+     without waiting for respawns. For coherent dots, theta is the
+     small jitter offset around s->direction; incoherent dots keep
+     their existing random absolute angle. */
   for (i = 0; i < s->num_dots; i++) {
     if (s->dots[i].coherent) {
-      s->dots[i].dir_offset = (sigma > 0.0) ? mp_randn() * (float) sigma : 0.0f;
+      s->dots[i].theta = (sigma > 0.0) ? mp_randn() * (float) sigma : 0.0f;
     }
   }
-  setSpeeds(s);
   return(TCL_OK);
 }
 
@@ -1285,6 +1666,7 @@ int motionpatchShaderCreate(Tcl_Interp *interp)
     "#endif\n"
 
     "uniform sampler2D tex0;"
+    "uniform sampler2D tex1;"
     "uniform int samplerMaskMode;"
     "uniform float maskRotation;"
     "uniform vec2 maskOffset;"
@@ -1293,7 +1675,26 @@ int motionpatchShaderCreate(Tcl_Interp *interp)
     "in vec2 texcoord;"
     "uniform vec4 uColor1;"
     "uniform vec4 uColor2;"
+    /* Per-layer state for the world-map sampler (tex1). Each RGBA
+       channel is an independent alpha mask interpreted as a separate
+       semantic region (mode/color/dim per channel).
+       layerModes[i]: 0=off, 1=dim, 2=tint, 3=hide (per channel i)
+       layerDims[i]:  alpha multiplier for mode 1
+       layerColors[i]: tint for mode 2 (one column per layer) */
+    "uniform ivec4 layerModes;"
+    "uniform vec4  layerDims;"
+    "uniform mat4  layerColors;"
     "out vec4 frag_color;"
+
+    "void applyLayer(in int mode, in float ch, in float dim, in vec4 col,"
+    "                inout vec3 color, inout float alpha) {"
+    "  if (mode == 1) { alpha *= mix(1.0, dim, ch); }"
+    "  else if (mode == 2) {"
+    "    color = mix(color, col.rgb, ch);"
+    "    alpha *= mix(1.0, col.a, ch);"
+    "  }"
+    "  else if (mode == 3) { alpha *= (1.0 - ch); }"
+    "}"
     "void main () {"
     " vec2 tc = (texcoord - 0.5 - maskOffset) / maskScale;"
     " float c = cos(maskRotation);"
@@ -1319,6 +1720,18 @@ int motionpatchShaderCreate(Tcl_Interp *interp)
     " else if (samplerMaskMode == 2) { alpha = (1.0-texAlpha) * uColor1.a; color = uColor1.rgb; }"
     " else if (samplerMaskMode == 3) { if (texAlpha < 0.5) { alpha = uColor1.a; color = uColor1.rgb; }"
     "                                  else { alpha = uColor2.a; color = uColor2.rgb;} }"
+    /* World-map (tex1) modulation. tex1 is sampled at the dot's raw
+       patch-local texcoord (no offset/scale/rotation), so the world
+       map stays fixed in the patch frame even when the primary mask
+       translates. Each RGBA channel is an independent alpha mask;
+       applyLayer composes one channel into (color, alpha) per call.
+       Layers compose in channel order R, G, B, A -- later layers
+       overwrite earlier ones in tint mode. */
+    " vec4 wsamp = texture(tex1, vec2(texcoord.s, 1.0-texcoord.t));"
+    " applyLayer(layerModes.r, wsamp.r, layerDims.r, layerColors[0], color, alpha);"
+    " applyLayer(layerModes.g, wsamp.g, layerDims.g, layerColors[1], color, alpha);"
+    " applyLayer(layerModes.b, wsamp.b, layerDims.b, layerColors[2], color, alpha);"
+    " applyLayer(layerModes.a, wsamp.a, layerDims.a, layerColors[3], color, alpha);"
     " frag_color = vec4 (color, alpha);"
     "}";
   
@@ -1419,8 +1832,26 @@ int Motionpatch_Init(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "motionpatch_masktype", 
 		    (Tcl_CmdProc *) motionpatchMaskTypeCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateCommand(interp, "motionpatch_samplermaskmode", 
-		    (Tcl_CmdProc *) motionpatchSamplerMaskModeCmd, 
+  Tcl_CreateCommand(interp, "motionpatch_samplermaskmode",
+		    (Tcl_CmdProc *) motionpatchSamplerMaskModeCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_worldmaskmode",
+		    (Tcl_CmdProc *) motionpatchWorldMaskModeCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_worlddim",
+		    (Tcl_CmdProc *) motionpatchWorldDimCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_worldcolor",
+		    (Tcl_CmdProc *) motionpatchWorldColorCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_layermode",
+		    (Tcl_CmdProc *) motionpatchLayerModeCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_layerdim",
+		    (Tcl_CmdProc *) motionpatchLayerDimCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_layercolor",
+		    (Tcl_CmdProc *) motionpatchLayerColorCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "motionpatch_maskrotation",
 		    (Tcl_CmdProc *) motionpatchMaskRotationCmd,
