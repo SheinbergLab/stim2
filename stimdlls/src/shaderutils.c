@@ -658,12 +658,24 @@ int update_uniforms(Tcl_HashTable *utable)
         uinfo = Tcl_GetHashValue(entryPtr);
         if (uinfo->val) {
             switch (uinfo->type) {
-            case GL_BOOL: 
+            case GL_BOOL:
             case GL_INT:
             case GL_SAMPLER_2D:
             case GL_SAMPLER_2D_ARRAY:
             case GL_SAMPLER_3D:
                 glUniform1iv(uinfo->location, uinfo->size, uinfo->val);
+                break;
+            case GL_BOOL_VEC2:
+            case GL_INT_VEC2:
+                glUniform2iv(uinfo->location, uinfo->size, uinfo->val);
+                break;
+            case GL_BOOL_VEC3:
+            case GL_INT_VEC3:
+                glUniform3iv(uinfo->location, uinfo->size, uinfo->val);
+                break;
+            case GL_BOOL_VEC4:
+            case GL_INT_VEC4:
+                glUniform4iv(uinfo->location, uinfo->size, uinfo->val);
                 break;
             case GL_FLOAT:
                 glUniform1fv(uinfo->location, uinfo->size, uinfo->val);
