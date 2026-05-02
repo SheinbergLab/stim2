@@ -538,16 +538,27 @@ proc mp_planko_update {} {
 proc mp_planko_apply_mode {mode} {
     set ::mp_planko::mode $mode
     set bg_life $::mp_planko::bg_lifetime
+    set bg_coh  $::mp_planko::bg_coherence
+    set bg_rad  [expr {$::mp_planko::bg_direction_deg * 3.14159265 / 180.0}]
+    set bg_sp   [mp_planko_speed_from_deg_sec $::mp_planko::bg_speed_deg_sec]
+
     if {$mode eq "aperture_flicker"} {
         # Match surround stats so segmentation depends on lum_offset.
-        motionpatch_coherence dots_target 0.0
+        # Target inherits bg coherence/direction/speed so the inside-
+        # vs-outside boundary stays statistically invisible without
+        # luminance offset.
+        motionpatch_coherence dots_target $bg_coh
         motionpatch_lifetime  dots_target $bg_life
+        motionpatch_direction dots_target $bg_rad
+        motionpatch_speed     dots_target $bg_sp
     } else {
         motionpatch_coherence dots_target 1.0
         motionpatch_lifetime  dots_target 30
     }
-    motionpatch_coherence dots_bg     0.0
+    motionpatch_coherence dots_bg     $bg_coh
     motionpatch_lifetime  dots_bg     $bg_life
+    motionpatch_direction dots_bg     $bg_rad
+    motionpatch_speed     dots_bg     $bg_sp
 
     if {$mode ne "trajectory_aperture" && $mode ne "aperture_flicker"} {
         motionpatch_maskoffset dots_target 0.0 0.0
@@ -661,6 +672,9 @@ proc mp_planko_setup {patch_size_dva dot_density} {
         variable shape_size       0.15
         variable lum_offset       0.0
         variable bg_lifetime      8
+        variable bg_speed_deg_sec 5.0
+        variable bg_coherence     0.0
+        variable bg_direction_deg 90.0
         variable world_mode_bg     0
         variable world_mode_target 0
         variable world_dim         0.25
@@ -852,6 +866,23 @@ proc mp_planko_set_bg_lifetime {bg_lifetime} {
 }
 proc mp_planko_get_bg_lifetime {} { dict create bg_lifetime 8 }
 
+# Surround motion controls. With coherence=0 (default) the surround is
+# pure flicker noise; raising coherence makes the surround stream in
+# bg_direction_deg at bg_speed_deg_sec, which can substantially
+# improve ball visibility because the ball's instantaneous velocity
+# stands out against a coherent baseline (relative-motion contrast).
+# E.g. coherence=1.0 + direction=90 (upward) makes a falling ball
+# pop visually because |v_ball - v_bg| is larger than |v_ball|.
+proc mp_planko_set_bg_motion {speed coherence direction} {
+    set ::mp_planko::bg_speed_deg_sec $speed
+    set ::mp_planko::bg_coherence     $coherence
+    set ::mp_planko::bg_direction_deg $direction
+    mp_planko_apply_mode $::mp_planko::mode
+}
+proc mp_planko_get_bg_motion {} {
+    dict create speed 5.0 coherence 0.0 direction 90.0
+}
+
 # World-map (tex1) modulation. mode_bg controls whether the SURROUND
 # (mp_bg) is modulated by the world map; mode_target controls whether
 # the BALL (mp_tg) is modulated. Ball-on-top:    mode_target = 0
@@ -911,7 +942,7 @@ workspace::reset
 workspace::setup mp_planko_setup {
     patch_size_dva {float 8.0 32.0 1.0 13.0 "Patch Size (dva)"}
     dot_density    {float 0.5 100.0 0.5 24.0 "Dot Density (dots/dva^2)"}
-} -adjusters {planko_actions planko_mode planko_world planko_speeds planko_luminance planko_lifetime planko_worldmap planko_shape planko_softness planko_freeze planko_transform} \
+} -adjusters {planko_actions planko_mode planko_world planko_speeds planko_luminance planko_lifetime planko_bg_motion planko_worldmap planko_shape planko_softness planko_freeze planko_transform} \
   -label "Motion Planko"
 
 workspace::adjuster planko_actions {
@@ -948,6 +979,18 @@ workspace::adjuster planko_lifetime {
     bg_lifetime {int 1 30 1 8 "Background Lifetime (frames)"}
 } -target {} -proc mp_planko_set_bg_lifetime -getter mp_planko_get_bg_lifetime \
   -label "Background Lifetime"
+
+# Surround motion. coherence 0 = pure flicker noise (default; matches
+# previous demo behavior). coherence > 0 makes the surround stream in
+# direction at speed (dva/sec); the ball is then visible by relative-
+# motion contrast against this baseline. Direction 90 = upward,
+# 270 = downward, 0 = rightward, 180 = leftward.
+workspace::adjuster planko_bg_motion {
+    speed     {float 0.0 30.0 0.5 5.0 "Surround Speed (dva/sec)"}
+    coherence {float 0.0 1.0 0.05 0.0 "Surround Coherence"}
+    direction {float 0.0 360.0 15.0 90.0 "Surround Direction (deg)"}
+} -target {} -proc mp_planko_set_bg_motion -getter mp_planko_get_bg_motion \
+  -label "Surround Motion"
 
 # Stage-1 test of the second sampler. Mode 0 leaves the world map
 # inert; mode 1 dims dots that fall over the test pattern (frame +
