@@ -623,14 +623,78 @@ static int setLifetimes(MOTIONPATCH *s, int lifetime)
   return TCL_OK;
 }
 
-/* Reflag dots as coherent / incoherent and seed each dot's theta.
- * No trig or speed-vector caching: the integration loop computes
- * (vx, vy) from theta + s->direction + s->speed on the fly.
+/* Reflag dots as coherent / incoherent so that the coherent-fraction
+ * matches the requested ratio, with STABLE MEMBERSHIP across calls:
+ * dots already in the correct group keep their flag and their theta
+ * (no per-call reshuffle, no per-call jitter resample). Only the
+ * minimum number of dots needed to reach the target ratio get
+ * flipped, and only those flipped dots get a fresh theta.
+ *
+ * This makes per-frame coherence modulation (e.g. envelope-pulsing
+ * for tiled-snapshot stimuli) clean: same coherence value -> zero
+ * dot updates and zero perceptual change. Smoothly varying coherence
+ * -> smoothly varying membership with no extra flicker on top.
+ *
+ * For applications that DO want a fresh random shuffle (e.g. trial
+ * onset), call motionpatch_resampleCoherence which forces a full
+ * re-roll regardless of current state.
  */
 static int setCoherences(MOTIONPATCH *s, float coherence)
 {
-  int i;
-  for (i = 0; i < s->num_dots; i++) {
+  int N = s->num_dots;
+  int target = (int) (coherence * N + 0.5f);
+  if (target < 0) target = 0;
+  if (target > N) target = N;
+
+  /* Count currently coherent dots. */
+  int curr = 0;
+  for (int i = 0; i < N; i++) {
+    if (s->dots[i].coherent) curr++;
+  }
+
+  if (target > curr) {
+    /* Need to flip (target - curr) incoherent dots to coherent.
+     * Walk from a random start so we don't always pick the same
+     * indices when ratios change in small steps. */
+    int need = target - curr;
+    int start = (N > 0) ? (rand() % N) : 0;
+    for (int k = 0; k < N && need > 0; k++) {
+      int i = (start + k) % N;
+      if (!s->dots[i].coherent) {
+	s->dots[i].coherent = 1;
+	s->dots[i].theta =
+	  (s->direction_jitter > 0.0f) ? mp_randn() * s->direction_jitter : 0.0f;
+	need--;
+      }
+    }
+  }
+  else if (target < curr) {
+    /* Need to flip (curr - target) coherent dots to incoherent. */
+    int need = curr - target;
+    int start = (N > 0) ? (rand() % N) : 0;
+    for (int k = 0; k < N && need > 0; k++) {
+      int i = (start + k) % N;
+      if (s->dots[i].coherent) {
+	s->dots[i].coherent = 0;
+	s->dots[i].theta = ((float) rand()/RAND_MAX) * 2.0f * (float) PI;
+	need--;
+      }
+    }
+  }
+  /* target == curr: no flips, no theta resamples. */
+
+  return TCL_OK;
+}
+
+/* Force a fresh random shuffle of coherent/incoherent membership.
+ * Useful at trial onset when you want a new random sample, even if
+ * the coherence ratio is unchanged. Differs from setCoherences only
+ * in that it always touches every dot. */
+static int resampleCoherences(MOTIONPATCH *s)
+{
+  int N = s->num_dots;
+  float coherence = s->coherence;
+  for (int i = 0; i < N; i++) {
     s->dots[i].coherent = (((float) rand()/RAND_MAX) < coherence);
     if (s->dots[i].coherent) {
       s->dots[i].theta =
@@ -1084,6 +1148,30 @@ static int motionpatchCoherenceCmd(ClientData clientData, Tcl_Interp *interp,
   s->coherence = coherence;
   setCoherences(s, coherence);
   return(TCL_OK);
+}
+
+/* Force a full re-roll of which dots are coherent and re-seed every
+ * dot's theta. Use at trial onset to get a fresh random sample;
+ * setCoherences (motionpatch_coherence) is stable-membership and
+ * preserves existing assignments where possible. */
+static int motionpatchResampleCoherenceCmd(ClientData clientData, Tcl_Interp *interp,
+					   int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id;
+
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " motionpatch", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  resampleCoherences(s);
+  return TCL_OK;
 }
 
 
@@ -1822,6 +1910,9 @@ int Motionpatch_Init(Tcl_Interp *interp)
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "motionpatch_noiseUpdateZ",
 		    (Tcl_CmdProc *) motionpatchNoiseUpdateZCmd, 
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_resampleCoherence",
+		    (Tcl_CmdProc *) motionpatchResampleCoherenceCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "motionpatch_coherence",
 		    (Tcl_CmdProc *) motionpatchCoherenceCmd, 
