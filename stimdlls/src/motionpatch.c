@@ -82,11 +82,14 @@
  *   * `motionpatch_directionjitter`: per-dot Gaussian std-dev
  *     (radians) added to each coherent dot's direction at respawn.
  *
- *   * `motionpatch_lifetime`: SECONDS between respawns (float).
- *     A value <= 0 means "no respawn" (dots live forever). Short
- *     lifetimes (< ~80 ms) approach pure flicker; long lifetimes
- *     (> ~500 ms) produce coherent streams. Real-time, so display
- *     rate doesn't change the perceptual lifetime.
+ *   * `motionpatch_lifetime`: mean SECONDS between respawns (float).
+ *     A value <= 0 means "no respawn" (dots live forever). Each
+ *     dot has independent Poisson respawn with rate 1/lifetime_s,
+ *     so dot ages are exponentially distributed and there is no
+ *     deterministic respawn comb that could alias against the
+ *     framerate. Short lifetimes (< ~80 ms) approach pure flicker;
+ *     long lifetimes (> ~500 ms) produce coherent streams. Real-
+ *     time, so display rate doesn't change the perceptual lifetime.
  *
  *   * `motionpatch_maskoffset`: patch-local centered coordinates.
  *     |offset| < 0.5 keeps the mask shape on-patch.
@@ -201,8 +204,7 @@
 
 typedef struct _dot {
   float pos[3];
-  float lifetime_s;		/* respawn period in SECONDS (negative = no respawn) */
-  float elapsed_s;		/* seconds since last respawn */
+  float lifetime_s;		/* mean respawn period in SECONDS (negative = no respawn) */
   int coherent;			/* flag as either coherent or not */
   float theta;			/* per-dot motion angle (radians).
 				 * Coherent dots: angular jitter offset
@@ -295,6 +297,47 @@ typedef struct {
   SHADER_PROG *program;
   Tcl_HashTable uniformTable;	/* local unique version */
   Tcl_HashTable attribTable;	/* local unique version */
+
+  /* Per-frame logging buffer.
+   *
+   * Captures the EXACT state of every dot at the end of each
+   * motionpatchUpdate so off-line analysis can verify what was on
+   * screen rather than relying on a parallel reimplementation of
+   * the dot dynamics. Hard invariant: the live dot integration loop
+   * must be byte-identical whether logging is on or off, so that
+   * "production" trials and "logged" trials are statistically the
+   * same stimulus. The capture below the dot loop is a passive read
+   * of completed state -- no RNG calls, no state mutation, no
+   * timing-relevant branches in the hot path.
+   *
+   * Storage is allocated lazily by motionpatch_logBegin and freed by
+   * motionpatch_logClear (or at object delete). When log_count
+   * reaches log_capacity, log_enabled flips to 0 and further frames
+   * are silently dropped -- the user can poll log_frames to see
+   * when capture stopped. */
+  int     log_enabled;
+  int     log_capacity;        /* max frames in the allocated buffer */
+  int     log_count;           /* frames captured so far */
+  int     log_dots_at_alloc;   /* num_dots when buffer was sized;
+                                  defends against dot-count change */
+  /* Frame-level metadata (length log_capacity each). */
+  int    *log_t_ms;
+  float  *log_dt;
+  float  *log_direction;
+  float  *log_speed;
+  float  *log_coherence;
+  float  *log_lifetime_s;     /* per-frame: drivers may modulate */
+  float  *log_mask_offset_x;
+  float  *log_mask_offset_y;
+  float  *log_mask_scale_x;
+  float  *log_mask_scale_y;
+  float  *log_mask_rotation;
+  /* Per-dot per-frame data (length log_capacity * log_dots_at_alloc,
+   * frame-major: dot j of frame f at index [f * num_dots + j]). */
+  float  *log_dot_x;
+  float  *log_dot_y;
+  float  *log_dot_theta;
+  int    *log_dot_coherent;
 
 } MOTIONPATCH;
 
@@ -434,7 +477,34 @@ static void delete_vao_info(VAO_INFO *vinfo)
 }
 
 
-void motionpatchDelete(GR_OBJ *g) 
+/* Free any per-frame log buffers and reset capture state. Safe to
+ * call when nothing is allocated. Used by motionpatch_logClear, by a
+ * fresh motionpatch_logBegin (so capacity changes are honored), and
+ * by motionpatchDelete during teardown. */
+static void freeLogBuffers(MOTIONPATCH *s)
+{
+  if (s->log_t_ms)          { free(s->log_t_ms);          s->log_t_ms = NULL; }
+  if (s->log_dt)            { free(s->log_dt);            s->log_dt = NULL; }
+  if (s->log_direction)     { free(s->log_direction);     s->log_direction = NULL; }
+  if (s->log_speed)         { free(s->log_speed);         s->log_speed = NULL; }
+  if (s->log_coherence)     { free(s->log_coherence);     s->log_coherence = NULL; }
+  if (s->log_lifetime_s)    { free(s->log_lifetime_s);    s->log_lifetime_s = NULL; }
+  if (s->log_mask_offset_x) { free(s->log_mask_offset_x); s->log_mask_offset_x = NULL; }
+  if (s->log_mask_offset_y) { free(s->log_mask_offset_y); s->log_mask_offset_y = NULL; }
+  if (s->log_mask_scale_x)  { free(s->log_mask_scale_x);  s->log_mask_scale_x = NULL; }
+  if (s->log_mask_scale_y)  { free(s->log_mask_scale_y);  s->log_mask_scale_y = NULL; }
+  if (s->log_mask_rotation) { free(s->log_mask_rotation); s->log_mask_rotation = NULL; }
+  if (s->log_dot_x)         { free(s->log_dot_x);         s->log_dot_x = NULL; }
+  if (s->log_dot_y)         { free(s->log_dot_y);         s->log_dot_y = NULL; }
+  if (s->log_dot_theta)     { free(s->log_dot_theta);     s->log_dot_theta = NULL; }
+  if (s->log_dot_coherent)  { free(s->log_dot_coherent);  s->log_dot_coherent = NULL; }
+  s->log_capacity     = 0;
+  s->log_count        = 0;
+  s->log_enabled      = 0;
+  s->log_dots_at_alloc = 0;
+}
+
+void motionpatchDelete(GR_OBJ *g)
 {
   int i;
   MOTIONPATCH *s = (MOTIONPATCH *) GR_CLIENTDATA(g);
@@ -442,6 +512,7 @@ void motionpatchDelete(GR_OBJ *g)
   for (i = 0; i < MAX_NOISE_CTX; i++) {
     if (s->ctx[i]) open_simplex_noise_free(s->ctx[i]);
   }
+  freeLogBuffers(s);
   delete_vao_info(s->vao_info);
   free((void *) s);
 }
@@ -479,12 +550,15 @@ void motionpatchUpdate(GR_OBJ *g)
 
   /* Compute dt (real seconds) since last update for frame-rate-
    * independent integration. First frame falls back to ~16.67 ms
-   * (one nominal 60 Hz frame); abnormally large gaps (>0.5 s,
-   * e.g. paused stim) also reset to nominal so dots don't lurch
-   * after a long pause. */
+   * (one nominal 60 Hz frame). StimTime can be reset between glist
+   * transitions (resetStimTime() at e.g. objgroup boundaries),
+   * making now_ms jump backward; treat that as a sentinel and
+   * re-anchor to a nominal frame so dots don't lurch on the post-
+   * reset frame. Abnormally large gaps (>0.5 s, e.g. paused stim)
+   * likewise fall back to nominal. */
   double now_ms = getStimTime();
   float dt;
-  if (s->last_stim_time_ms < 0.0) {
+  if (s->last_stim_time_ms < 0.0 || now_ms < s->last_stim_time_ms) {
     dt = 1.0f / 60.0f;
   } else {
     dt = (float) ((now_ms - s->last_stim_time_ms) / 1000.0);
@@ -495,18 +569,28 @@ void motionpatchUpdate(GR_OBJ *g)
   if (s->noise_update_z)
     s->noise_z = (float) (now_ms / 1000.0 * s->noise_update_rate);
 
+  /* Poisson respawn: each dot independently has probability
+   * (dt / lifetime_s) of respawning this frame. Mean turnover rate
+   * is 1/lifetime_s regardless of dt, dot ages are exponentially
+   * distributed, and there is no deterministic respawn comb to
+   * alias against the framerate or to be collapsed into a cohort
+   * by a one-off timing glitch. lifetime_s <= 0 disables respawn.
+   * The probability is hoisted out of the loop and clamped to 1.0
+   * so very large dt (e.g. post-pause) doesn't try to respawn each
+   * dot more than once per frame. */
+  float p_respawn = (s->lifetime_s > 0.0f) ? (dt / s->lifetime_s) : 0.0f;
+  if (p_respawn > 1.0f) p_respawn = 1.0f;
+
   for (i = 0; i < s->num_dots; i++) {
-    if (s->dots[i].lifetime_s >= 0.0f &&
-	s->dots[i].elapsed_s >= s->dots[i].lifetime_s) {
-      /* RESPAWN: pick a new position, reset elapsed time, sample
-       * a new per-dot angle. Coherent dots store a small jitter
-       * offset; incoherent dots store an absolute random angle.
-       * (vx,vy) is computed in the integration branch from theta
-       * + s->direction + s->speed, so direction/speed changes
-       * propagate without an O(N) pass. */
+    if (p_respawn > 0.0f &&
+	((float) rand() / (float) RAND_MAX) < p_respawn) {
+      /* RESPAWN: pick a new position, sample a new per-dot angle.
+       * Coherent dots store a small jitter offset; incoherent dots
+       * store an absolute random angle. (vx,vy) is computed in the
+       * integration branch from theta + s->direction + s->speed,
+       * so direction/speed changes propagate without an O(N) pass. */
       s->dots[i].pos[0] = ((float) rand()/RAND_MAX) - 0.5f;
       s->dots[i].pos[1] = ((float) rand()/RAND_MAX) - 0.5f;
-      s->dots[i].elapsed_s = 0.0f;
 
       if (s->set_direction_by_noise) {
 	value1 = open_simplex_noise3(s->ctx[0],
@@ -570,7 +654,6 @@ void motionpatchUpdate(GR_OBJ *g)
       else if (s->dots[i].pos[0] >  0.5f) s->dots[i].pos[0] -= 1.0f;
       if (s->dots[i].pos[1] < -0.5f) s->dots[i].pos[1] += 1.0f;
       else if (s->dots[i].pos[1] >  0.5f) s->dots[i].pos[1] -= 1.0f;
-      s->dots[i].elapsed_s += dt;
     }
     if (s->mask_type == MASK_NONE) {
       *points++ = s->dots[i].pos[0];
@@ -617,6 +700,47 @@ void motionpatchUpdate(GR_OBJ *g)
   glBindBuffer(GL_ARRAY_BUFFER, s->vao_info->texcoords_vbo);
   glBufferData(GL_ARRAY_BUFFER, ntexcoords*sizeof(GLfloat),
 	       s->vao_info->texcoords, GL_STATIC_DRAW);
+
+  /* Per-frame logging capture. Strictly passive: we only READ the
+   * dot state that was just computed by the loop above, so toggling
+   * the log on or off cannot perturb the displayed stimulus. The
+   * num_dots check defends against the (currently unsupported)
+   * possibility of dot-count change between begin and capture; if
+   * that ever happens we silently disable rather than overrun. */
+  if (s->log_enabled &&
+      s->log_count < s->log_capacity &&
+      s->num_dots == s->log_dots_at_alloc) {
+    int f = s->log_count;
+    int n = s->num_dots;
+    s->log_t_ms[f]          = (int) now_ms;
+    s->log_dt[f]            = dt;
+    s->log_direction[f]     = s->direction;
+    s->log_speed[f]         = s->speed;
+    s->log_coherence[f]     = s->coherence;
+    s->log_lifetime_s[f]    = s->lifetime_s;
+    s->log_mask_offset_x[f] = s->mask_offset[0];
+    s->log_mask_offset_y[f] = s->mask_offset[1];
+    s->log_mask_scale_x[f]  = s->mask_scale[0];
+    s->log_mask_scale_y[f]  = s->mask_scale[1];
+    s->log_mask_rotation[f] = s->mask_rotation;
+    {
+      float *xp = &s->log_dot_x[f * n];
+      float *yp = &s->log_dot_y[f * n];
+      float *tp = &s->log_dot_theta[f * n];
+      int   *cp = &s->log_dot_coherent[f * n];
+      int j;
+      for (j = 0; j < n; j++) {
+	xp[j] = s->dots[j].pos[0];
+	yp[j] = s->dots[j].pos[1];
+	tp[j] = s->dots[j].theta;
+	cp[j] = s->dots[j].coherent;
+      }
+    }
+    s->log_count++;
+    /* Auto-stop at capacity so the user can poll and find the run
+     * complete without having to call _logEnd explicitly. */
+    if (s->log_count >= s->log_capacity) s->log_enabled = 0;
+  }
 }
 
 static int setPositions(MOTIONPATCH *s)
@@ -644,17 +768,11 @@ static float mp_randn(void)
 static int setLifetimes(MOTIONPATCH *s, float lifetime_s)
 {
   int i;
+  /* Poisson respawn (see motionpatchUpdate): no per-dot phase state
+   * to seed -- each dot independently coin-flips (dt / lifetime_s)
+   * each frame. Just mirror the patch-level lifetime onto each dot. */
   for (i = 0; i < s->num_dots; i++) {
     s->dots[i].lifetime_s = lifetime_s;
-    /* Birth-time randomization: each dot gets a fresh elapsed value
-     * uniformly within [0, lifetime_s) so respawns aren't synchronized
-     * across the population. With lifetime_s <= 0 (no respawn) we
-     * still set elapsed_s to 0. */
-    if (lifetime_s > 0.0f) {
-      s->dots[i].elapsed_s = ((float) rand() / (float) RAND_MAX) * lifetime_s;
-    } else {
-      s->dots[i].elapsed_s = 0.0f;
-    }
   }
   return TCL_OK;
 }
@@ -1583,7 +1701,7 @@ static int motionpatchRefreshPositionsCmd(ClientData clientData, Tcl_Interp *int
 {
   OBJ_LIST *olist = (OBJ_LIST *) clientData;
   MOTIONPATCH *s;
-  int id, i;
+  int id;
 
   if (argc < 2) {
     Tcl_AppendResult(interp, "usage: ", argv[0], " motionpatch", NULL);
@@ -1594,16 +1712,10 @@ static int motionpatchRefreshPositionsCmd(ClientData clientData, Tcl_Interp *int
     return TCL_ERROR;
   s = GR_CLIENTDATA(OL_OBJ(olist,id));
 
-  /* Re-sample every dot's position uniformly, and re-stagger the
-     respawn phase so short-lifetime patches don't flicker en masse.
-     Speeds/coherence/direction are left untouched. */
+  /* Re-sample every dot's position uniformly. With Poisson respawn
+     there is no phase state to stagger -- the coin-flip per frame is
+     stateless. Speeds/coherence/direction are left untouched. */
   setPositions(s);
-  if (s->lifetime_s > 0.0f) {
-    for (i = 0; i < s->num_dots; i++) {
-      s->dots[i].elapsed_s =
-	((float) rand() / (float) RAND_MAX) * s->lifetime_s;
-    }
-  }
   return TCL_OK;
 }
 
@@ -1756,6 +1868,329 @@ static int motionpatchMaskScaleCmd(ClientData clientData, Tcl_Interp *interp,
   s->mask_scale[1] = sy;
 
   return(TCL_OK);
+}
+
+/* ============================================================
+ * Per-frame logging
+ * ============================================================
+ *
+ * Records the exact dot state at the end of each motionpatchUpdate
+ * into an in-RAM buffer that can later be exported to a dynamic
+ * group for off-line verification of "what was on the display".
+ *
+ * Memory: per dot per frame ~16 bytes; per frame metadata ~40 bytes.
+ * 4000 dots x 600 frames ~ 38 MB per patch. Allocated lazily by
+ * motionpatch_logBegin and freed by motionpatch_logClear.
+ *
+ * Invariant guarded by motionpatchUpdate's capture path: the live
+ * dot dynamics must be byte-identical with logging on or off, so
+ * "production" trials and "logged" trials produce the same stimulus.
+ *
+ * Tcl API:
+ *   motionpatch_logBegin <patch> [max_frames=600]
+ *       allocate buffers (or resize if max_frames changed) and start
+ *       capturing on the next frame.
+ *   motionpatch_logEnd <patch>
+ *       stop capturing; data stays in the buffer for export. Capture
+ *       also auto-stops when max_frames is reached.
+ *   motionpatch_logFrames <patch>
+ *       returns frames_captured, useful as a "is the run done?" poll.
+ *   motionpatch_logCapacity <patch>
+ *       returns max_frames the buffer was sized for.
+ *   motionpatch_logExport <patch> <gname>
+ *       build a DYN_GROUP named <gname> from the captured frames.
+ *       Replaces any existing group of that name. Per-frame columns:
+ *         stim_time_ms, dt, direction, speed, coherence, lifetime_s,
+ *         mask_offset_x, mask_offset_y, mask_scale_x, mask_scale_y,
+ *         mask_rotation
+ *       Per-dot list-of-lists columns (each frame is one sub-list of
+ *       length num_dots):
+ *         dot_x, dot_y, dot_theta, dot_coherent
+ *       Group-level scalar columns:
+ *         num_dots
+ *   motionpatch_logClear <patch>
+ *       free buffers, reset state. Equivalent to logEnd + dispose.
+ */
+
+static int motionpatchLogBeginCmd(ClientData clientData, Tcl_Interp *interp,
+				  int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id;
+  int max_frames = 600;
+
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch [max_frames]", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  if (argc >= 3) {
+    if (Tcl_GetInt(interp, argv[2], &max_frames) != TCL_OK) return TCL_ERROR;
+    if (max_frames <= 0) {
+      Tcl_AppendResult(interp, argv[0],
+		       ": max_frames must be > 0", NULL);
+      return TCL_ERROR;
+    }
+  }
+
+  /* If a buffer of the right size is already in place, reuse it
+   * (just reset count and re-enable). Otherwise rebuild. The
+   * dot-count check ensures we don't re-use a buffer sized for a
+   * patch that has since been recreated with a different N -- the
+   * Tcl API doesn't expose dot-count change today, but the guard
+   * is essentially free. */
+  if (s->log_capacity != max_frames ||
+      s->log_dots_at_alloc != s->num_dots ||
+      !s->log_t_ms) {
+    freeLogBuffers(s);
+    int F = max_frames;
+    int N = s->num_dots;
+    s->log_t_ms          = (int *)   calloc(F, sizeof(int));
+    s->log_dt            = (float *) calloc(F, sizeof(float));
+    s->log_direction     = (float *) calloc(F, sizeof(float));
+    s->log_speed         = (float *) calloc(F, sizeof(float));
+    s->log_coherence     = (float *) calloc(F, sizeof(float));
+    s->log_lifetime_s    = (float *) calloc(F, sizeof(float));
+    s->log_mask_offset_x = (float *) calloc(F, sizeof(float));
+    s->log_mask_offset_y = (float *) calloc(F, sizeof(float));
+    s->log_mask_scale_x  = (float *) calloc(F, sizeof(float));
+    s->log_mask_scale_y  = (float *) calloc(F, sizeof(float));
+    s->log_mask_rotation = (float *) calloc(F, sizeof(float));
+    s->log_dot_x         = (float *) calloc((size_t) F * N, sizeof(float));
+    s->log_dot_y         = (float *) calloc((size_t) F * N, sizeof(float));
+    s->log_dot_theta     = (float *) calloc((size_t) F * N, sizeof(float));
+    s->log_dot_coherent  = (int *)   calloc((size_t) F * N, sizeof(int));
+    if (!s->log_t_ms || !s->log_dt || !s->log_direction ||
+	!s->log_speed || !s->log_coherence || !s->log_lifetime_s ||
+	!s->log_mask_offset_x || !s->log_mask_offset_y ||
+	!s->log_mask_scale_x || !s->log_mask_scale_y ||
+	!s->log_mask_rotation ||
+	!s->log_dot_x || !s->log_dot_y || !s->log_dot_theta ||
+	!s->log_dot_coherent) {
+      freeLogBuffers(s);
+      Tcl_AppendResult(interp, argv[0],
+		       ": failed to allocate log buffers", NULL);
+      return TCL_ERROR;
+    }
+    s->log_capacity      = F;
+    s->log_dots_at_alloc = N;
+  }
+  s->log_count   = 0;
+  s->log_enabled = 1;
+
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(s->log_capacity));
+  return TCL_OK;
+}
+
+static int motionpatchLogEndCmd(ClientData clientData, Tcl_Interp *interp,
+				int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id;
+
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " motionpatch", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+  s->log_enabled = 0;
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(s->log_count));
+  return TCL_OK;
+}
+
+static int motionpatchLogFramesCmd(ClientData clientData, Tcl_Interp *interp,
+				   int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id;
+
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " motionpatch", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(s->log_count));
+  return TCL_OK;
+}
+
+static int motionpatchLogCapacityCmd(ClientData clientData, Tcl_Interp *interp,
+				     int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id;
+
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " motionpatch", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(s->log_capacity));
+  return TCL_OK;
+}
+
+static int motionpatchLogClearCmd(ClientData clientData, Tcl_Interp *interp,
+				  int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id;
+
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " motionpatch", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+  freeLogBuffers(s);
+  return TCL_OK;
+}
+
+/* dfuCreateDynListWithVals stores the caller's pointer directly and the
+ * resulting dl assumes ownership: when the dg containing it is later
+ * deleted via dfuFreeDynList, free() is called on that pointer. So
+ * every dl we register with the dg needs its own freshly-malloc'd
+ * buffer rather than a slice into our long-lived log arrays --
+ * otherwise dg_delete will double-free or free-into-the-middle of
+ * those arrays and crash. These helpers do the copy. */
+static DYN_LIST *makeDLFromFloats(int n, const float *src)
+{
+  if (n <= 0) return dfuCreateDynList(DF_FLOAT, 1);
+  float *p = (float *) malloc((size_t) n * sizeof(float));
+  if (!p) return NULL;
+  memcpy(p, src, (size_t) n * sizeof(float));
+  return dfuCreateDynListWithVals(DF_FLOAT, n, p);
+}
+
+static DYN_LIST *makeDLFromInts(int n, const int *src)
+{
+  if (n <= 0) return dfuCreateDynList(DF_LONG, 1);
+  int *p = (int *) malloc((size_t) n * sizeof(int));
+  if (!p) return NULL;
+  memcpy(p, src, (size_t) n * sizeof(int));
+  return dfuCreateDynListWithVals(DF_LONG, n, p);
+}
+
+static int motionpatchLogExportCmd(ClientData clientData, Tcl_Interp *interp,
+				   int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  MOTIONPATCH *s;
+  int id;
+  const char *gname;
+
+  if (argc < 3) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " motionpatch dgname", NULL);
+    return TCL_ERROR;
+  }
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1],
+			 MotionpatchID, "motionpatch")) < 0)
+    return TCL_ERROR;
+  s = GR_CLIENTDATA(OL_OBJ(olist,id));
+  gname = argv[2];
+
+  if (s->log_count <= 0) {
+    Tcl_AppendResult(interp, argv[0],
+		     ": no frames captured (start with motionpatch_logBegin)",
+		     NULL);
+    return TCL_ERROR;
+  }
+
+  /* Drop any pre-existing group of this name so re-export is
+   * idempotent. Ignore the result -- "no such group" is fine. */
+  Tcl_VarEval(interp, "dg_delete ", gname, (char *) NULL);
+  Tcl_ResetResult(interp);
+
+  int F = s->log_count;
+  int N = s->log_dots_at_alloc;
+
+  DYN_GROUP *dg = dfuCreateDynGroup(20);
+  if (!dg) {
+    Tcl_AppendResult(interp, argv[0], ": failed to create dyngroup", NULL);
+    return TCL_ERROR;
+  }
+  /* Setting the name explicitly so tclPutGroup uses the caller's
+   * choice rather than auto-generating "groupN". */
+  strncpy(DYN_GROUP_NAME(dg), gname, DYN_GROUP_NAME_SIZE - 1);
+  DYN_GROUP_NAME(dg)[DYN_GROUP_NAME_SIZE - 1] = '\0';
+
+  /* Frame-level scalar columns (length F). All dl values are
+   * malloc-copied so the dg owns the memory; the original log
+   * buffers remain valid for further capture or reuse. */
+  dfuAddDynGroupExistingList(dg, "stim_time_ms",
+    makeDLFromInts  (F, s->log_t_ms));
+  dfuAddDynGroupExistingList(dg, "dt",
+    makeDLFromFloats(F, s->log_dt));
+  dfuAddDynGroupExistingList(dg, "direction",
+    makeDLFromFloats(F, s->log_direction));
+  dfuAddDynGroupExistingList(dg, "speed",
+    makeDLFromFloats(F, s->log_speed));
+  dfuAddDynGroupExistingList(dg, "coherence",
+    makeDLFromFloats(F, s->log_coherence));
+  dfuAddDynGroupExistingList(dg, "lifetime_s",
+    makeDLFromFloats(F, s->log_lifetime_s));
+  dfuAddDynGroupExistingList(dg, "mask_offset_x",
+    makeDLFromFloats(F, s->log_mask_offset_x));
+  dfuAddDynGroupExistingList(dg, "mask_offset_y",
+    makeDLFromFloats(F, s->log_mask_offset_y));
+  dfuAddDynGroupExistingList(dg, "mask_scale_x",
+    makeDLFromFloats(F, s->log_mask_scale_x));
+  dfuAddDynGroupExistingList(dg, "mask_scale_y",
+    makeDLFromFloats(F, s->log_mask_scale_y));
+  dfuAddDynGroupExistingList(dg, "mask_rotation",
+    makeDLFromFloats(F, s->log_mask_rotation));
+
+  /* Per-dot per-frame: list-of-lists, length F outer, length N inner.
+   * Each inner sublist is a copy of the per-frame slice -- again
+   * malloc-owned so the dg can be freely deleted later. */
+  DYN_LIST *dxL = dfuCreateDynList(DF_LIST, F);
+  DYN_LIST *dyL = dfuCreateDynList(DF_LIST, F);
+  DYN_LIST *dtL = dfuCreateDynList(DF_LIST, F);
+  DYN_LIST *dcL = dfuCreateDynList(DF_LIST, F);
+  for (int f = 0; f < F; f++) {
+    dfuMoveDynListList(dxL,
+      makeDLFromFloats(N, &s->log_dot_x[(size_t) f * N]));
+    dfuMoveDynListList(dyL,
+      makeDLFromFloats(N, &s->log_dot_y[(size_t) f * N]));
+    dfuMoveDynListList(dtL,
+      makeDLFromFloats(N, &s->log_dot_theta[(size_t) f * N]));
+    dfuMoveDynListList(dcL,
+      makeDLFromInts  (N, &s->log_dot_coherent[(size_t) f * N]));
+  }
+  dfuAddDynGroupExistingList(dg, "dot_x",        dxL);
+  dfuAddDynGroupExistingList(dg, "dot_y",        dyL);
+  dfuAddDynGroupExistingList(dg, "dot_theta",    dtL);
+  dfuAddDynGroupExistingList(dg, "dot_coherent", dcL);
+
+  /* Group-level scalars as 1-element columns. lifetime_s is captured
+   * per-frame above (the driver may modulate it), so only num_dots
+   * needs a scalar entry here. */
+  {
+    int nd = N;
+    dfuAddDynGroupExistingList(dg, "num_dots", makeDLFromInts(1, &nd));
+  }
+
+  return tclPutGroup(interp, dg);
 }
 
 int motionpatchShaderCreate(Tcl_Interp *interp)
@@ -2020,8 +2455,26 @@ int Motionpatch_Init(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "motionpatch_color", 
 		    (Tcl_CmdProc *) motionpatchColorCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateCommand(interp, "motionpatch_color2", 
-		    (Tcl_CmdProc *) motionpatchColorCmd, 
+  Tcl_CreateCommand(interp, "motionpatch_color2",
+		    (Tcl_CmdProc *) motionpatchColorCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_logBegin",
+		    (Tcl_CmdProc *) motionpatchLogBeginCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_logEnd",
+		    (Tcl_CmdProc *) motionpatchLogEndCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_logFrames",
+		    (Tcl_CmdProc *) motionpatchLogFramesCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_logCapacity",
+		    (Tcl_CmdProc *) motionpatchLogCapacityCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_logClear",
+		    (Tcl_CmdProc *) motionpatchLogClearCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "motionpatch_logExport",
+		    (Tcl_CmdProc *) motionpatchLogExportCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   return TCL_OK;
 }
