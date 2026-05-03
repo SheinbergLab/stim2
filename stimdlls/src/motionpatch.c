@@ -66,12 +66,15 @@
  *     A metagroup typically scales the patch so 1.0 patch-unit
  *     spans a fixed dva (degrees visual angle) extent on screen.
  *
- *   * `motionpatch_speed`:  patch-local-units PER FRAME (not per
- *     second, not in dva). To convert from a desired physical
- *     speed in dva/sec, use:
- *         speed = v_dva_per_sec / (patch_size_dva * refresh_rate_hz)
- *     This convention matches the prf motionpatch protocol
- *     (systems/ess/prf/motionpatch).
+ *   * `motionpatch_speed`:  patch-local-units PER SECOND. The C-side
+ *     integration loop multiplies by real `dt` from getStimTime(),
+ *     so dot velocity is frame-rate-independent (60 Hz, 120 Hz,
+ *     variable-rate displays all produce the same screen-coord
+ *     motion). To convert from a desired physical speed in dva/sec:
+ *         speed = v_dva_per_sec / patch_size_dva
+ *     (no refresh-rate term -- the conversion just maps from dva
+ *     to patch-local units, since dot positions span [-0.5, 0.5]
+ *     while the metagroup scales by patch_size_dva.)
  *
  *   * `motionpatch_direction`: radians, 0 = +x, pi/2 = +y. Affects
  *     only `coherent` dots; incoherent dots get random directions.
@@ -79,9 +82,11 @@
  *   * `motionpatch_directionjitter`: per-dot Gaussian std-dev
  *     (radians) added to each coherent dot's direction at respawn.
  *
- *   * `motionpatch_lifetime`: integer frames between respawns. Short
- *     lifetimes (< ~5) approach pure flicker; long lifetimes (> ~30)
- *     produce coherent streams.
+ *   * `motionpatch_lifetime`: SECONDS between respawns (float).
+ *     A value <= 0 means "no respawn" (dots live forever). Short
+ *     lifetimes (< ~80 ms) approach pure flicker; long lifetimes
+ *     (> ~500 ms) produce coherent streams. Real-time, so display
+ *     rate doesn't change the perceptual lifetime.
  *
  *   * `motionpatch_maskoffset`: patch-local centered coordinates.
  *     |offset| < 0.5 keeps the mask shape on-patch.
@@ -196,7 +201,8 @@
 
 typedef struct _dot {
   float pos[3];
-  int lifetime, frames;
+  float lifetime_s;		/* respawn period in SECONDS (negative = no respawn) */
+  float elapsed_s;		/* seconds since last respawn */
   int coherent;			/* flag as either coherent or not */
   float theta;			/* per-dot motion angle (radians).
 				 * Coherent dots: angular jitter offset
@@ -240,10 +246,13 @@ typedef struct {
   float color1[4];
   float color2[4];
   float pointsize;
-  float speed;
+  float speed;			/* patch-local-units PER SECOND */
   float direction;
   int   samplermaskmode;
-  int lifetime;
+  float lifetime_s;		/* dot respawn period in SECONDS */
+  double last_stim_time_ms;	/* StimTime at last update, for dt-based
+				 * frame-rate-independent integration. -1
+				 * sentinel = first frame (use nominal dt). */
   VAO_INFO *vao_info;		/* to track vertex attributes */
   int64_t noise_seed[MAX_NOISE_CTX];	/* for noise generation       */
   struct osn_context *ctx[MAX_NOISE_CTX];   /* context for noise funcs    */
@@ -466,23 +475,38 @@ void motionpatchUpdate(GR_OBJ *g)
   
   
   if (s->mask_type == MASK_CIRCLE)
-    r2 = s->mask_radius*s->mask_radius; 
-    
+    r2 = s->mask_radius*s->mask_radius;
+
+  /* Compute dt (real seconds) since last update for frame-rate-
+   * independent integration. First frame falls back to ~16.67 ms
+   * (one nominal 60 Hz frame); abnormally large gaps (>0.5 s,
+   * e.g. paused stim) also reset to nominal so dots don't lurch
+   * after a long pause. */
+  double now_ms = getStimTime();
+  float dt;
+  if (s->last_stim_time_ms < 0.0) {
+    dt = 1.0f / 60.0f;
+  } else {
+    dt = (float) ((now_ms - s->last_stim_time_ms) / 1000.0);
+    if (dt <= 0.0f || dt > 0.5f) dt = 1.0f / 60.0f;
+  }
+  s->last_stim_time_ms = now_ms;
+
   if (s->noise_update_z)
-    s->noise_z = getStimTime()/1000. * s->noise_update_rate;
+    s->noise_z = (float) (now_ms / 1000.0 * s->noise_update_rate);
 
   for (i = 0; i < s->num_dots; i++) {
-    if (s->dots[i].lifetime >= 0 &&
-	s->dots[i].frames >= s->dots[i].lifetime) {
-      /* RESPAWN: pick a new position, reset lifetime, sample a new
-       * per-dot angle. Coherent dots store a small jitter offset;
-       * incoherent dots store an absolute random angle. The actual
-       * (vx,vy) is computed in the integration branch from theta +
-       * the current global direction/speed, so direction or speed
-       * changes propagate automatically without an O(N) pass. */
-      s->dots[i].pos[0] = ((float) rand()/RAND_MAX) - 0.5;
-      s->dots[i].pos[1] = ((float) rand()/RAND_MAX) - 0.5;
-      s->dots[i].frames = 0;
+    if (s->dots[i].lifetime_s >= 0.0f &&
+	s->dots[i].elapsed_s >= s->dots[i].lifetime_s) {
+      /* RESPAWN: pick a new position, reset elapsed time, sample
+       * a new per-dot angle. Coherent dots store a small jitter
+       * offset; incoherent dots store an absolute random angle.
+       * (vx,vy) is computed in the integration branch from theta
+       * + s->direction + s->speed, so direction/speed changes
+       * propagate without an O(N) pass. */
+      s->dots[i].pos[0] = ((float) rand()/RAND_MAX) - 0.5f;
+      s->dots[i].pos[1] = ((float) rand()/RAND_MAX) - 0.5f;
+      s->dots[i].elapsed_s = 0.0f;
 
       if (s->set_direction_by_noise) {
 	value1 = open_simplex_noise3(s->ctx[0],
@@ -528,8 +552,12 @@ void motionpatchUpdate(GR_OBJ *g)
 	float angle = s->dots[i].coherent
 	  ? (s->direction + s->dots[i].theta)
 	  : s->dots[i].theta;
-	vx = cosf(angle) * s->speed / GR_SX(g);
-	vy = sinf(angle) * s->speed / GR_SY(g);
+	/* s->speed is in patch-local-units PER SECOND. Multiply by
+	   real-time dt to get the per-frame increment, independent
+	   of actual display refresh rate. GR_SX/GR_SY handle any
+	   non-unity metagroup scaling. */
+	vx = cosf(angle) * s->speed * dt / GR_SX(g);
+	vy = sinf(angle) * s->speed * dt / GR_SY(g);
       }
       s->dots[i].pos[0] += vx;
       s->dots[i].pos[1] += vy;
@@ -542,7 +570,7 @@ void motionpatchUpdate(GR_OBJ *g)
       else if (s->dots[i].pos[0] >  0.5f) s->dots[i].pos[0] -= 1.0f;
       if (s->dots[i].pos[1] < -0.5f) s->dots[i].pos[1] += 1.0f;
       else if (s->dots[i].pos[1] >  0.5f) s->dots[i].pos[1] -= 1.0f;
-      s->dots[i].frames++;
+      s->dots[i].elapsed_s += dt;
     }
     if (s->mask_type == MASK_NONE) {
       *points++ = s->dots[i].pos[0];
@@ -613,12 +641,20 @@ static float mp_randn(void)
   return sqrtf(-2.0f * logf(u1)) * cosf(2.0f * (float) PI * u2);
 }
 
-static int setLifetimes(MOTIONPATCH *s, int lifetime)
+static int setLifetimes(MOTIONPATCH *s, float lifetime_s)
 {
   int i;
   for (i = 0; i < s->num_dots; i++) {
-    s->dots[i].lifetime = lifetime;
-    s->dots[i].frames = rand()%lifetime;
+    s->dots[i].lifetime_s = lifetime_s;
+    /* Birth-time randomization: each dot gets a fresh elapsed value
+     * uniformly within [0, lifetime_s) so respawns aren't synchronized
+     * across the population. With lifetime_s <= 0 (no respawn) we
+     * still set elapsed_s to 0. */
+    if (lifetime_s > 0.0f) {
+      s->dots[i].elapsed_s = ((float) rand() / (float) RAND_MAX) * lifetime_s;
+    } else {
+      s->dots[i].elapsed_s = 0.0f;
+    }
   }
   return TCL_OK;
 }
@@ -708,7 +744,7 @@ static int resampleCoherences(MOTIONPATCH *s)
 }
 
 int motionpatchCreate(OBJ_LIST *objlist, SHADER_PROG *sp,
-		      int n, float speed, int lifetime)
+		      int n, float speed, float lifetime_s)
 {
   const char *name = "Motionpatch";
   GR_OBJ *obj;
@@ -745,10 +781,11 @@ int motionpatchCreate(OBJ_LIST *objlist, SHADER_PROG *sp,
   s->dots = (DOT *) calloc(n, sizeof(DOT));
   s->speed = speed;
   s->direction = 0.0;
-  s->lifetime = lifetime;
+  s->lifetime_s = lifetime_s;
   s->coherence = 1.0;
+  s->last_stim_time_ms = -1.0;	/* sentinel: first update sees no prior frame */
   setPositions(s);
-  setLifetimes(s, lifetime);
+  setLifetimes(s, lifetime_s);
   setCoherences(s, s->coherence);  /* also seeds each dot's theta */
 
   s->mask_type = MASK_NONE;
@@ -890,23 +927,23 @@ static int motionpatchCmd(ClientData clientData, Tcl_Interp *interp,
 			int argc, char *argv[])
 {
   OBJ_LIST *olist = (OBJ_LIST *) clientData;
-  int id, n, lifetime;
-  double speed;
+  int id, n;
+  double speed, lifetime_s;
   char *handle;
 
-  int verbose = 1;
-  
-  if (argc < 3) {
-    Tcl_AppendResult(interp, "usage: ", argv[0], " n speed lifetime", NULL);
+  if (argc < 4) {
+    Tcl_AppendResult(interp, "usage: ", argv[0],
+		     " n speed_per_sec lifetime_seconds", NULL);
     return TCL_ERROR;
   }
-  else handle = argv[1];
+  handle = argv[1];
   if (Tcl_GetInt(interp, argv[1], &n) != TCL_OK) return TCL_ERROR;
   if (Tcl_GetDouble(interp, argv[2], &speed) != TCL_OK) return TCL_ERROR;
-  if (Tcl_GetInt(interp, argv[3], &lifetime) != TCL_OK) return TCL_ERROR;
+  if (Tcl_GetDouble(interp, argv[3], &lifetime_s) != TCL_OK) return TCL_ERROR;
+  if (lifetime_s <= 0.0 && lifetime_s != -1.0) lifetime_s = -1.0;
 
   if ((id = motionpatchCreate(olist, MotionpatchShaderProg,
-			      n, speed, lifetime)) < 0) {
+			      n, (float) speed, (float) lifetime_s)) < 0) {
     Tcl_SetResult(interp, "error creating motionpatch", TCL_STATIC);
     return(TCL_ERROR);
   }
@@ -1561,9 +1598,10 @@ static int motionpatchRefreshPositionsCmd(ClientData clientData, Tcl_Interp *int
      respawn phase so short-lifetime patches don't flicker en masse.
      Speeds/coherence/direction are left untouched. */
   setPositions(s);
-  if (s->lifetime > 0) {
+  if (s->lifetime_s > 0.0f) {
     for (i = 0; i < s->num_dots; i++) {
-      s->dots[i].frames = rand() % s->lifetime;
+      s->dots[i].elapsed_s =
+	((float) rand() / (float) RAND_MAX) * s->lifetime_s;
     }
   }
   return TCL_OK;
@@ -1634,11 +1672,11 @@ static int motionpatchLifetimeCmd(ClientData clientData, Tcl_Interp *interp,
   OBJ_LIST *olist = (OBJ_LIST *) clientData;
   MOTIONPATCH *s;
   int id;
-  int lifetime;
+  double lifetime_s;
 
   if (argc < 3) {
     Tcl_AppendResult(interp, "usage: ", argv[0],
-                     " motionpatch lifetime_frames", NULL);
+                     " motionpatch lifetime_seconds", NULL);
     return TCL_ERROR;
   }
 
@@ -1647,11 +1685,13 @@ static int motionpatchLifetimeCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   s = GR_CLIENTDATA(OL_OBJ(olist,id));
 
-  if (Tcl_GetInt(interp, argv[2], &lifetime) != TCL_OK) return TCL_ERROR;
-  if (lifetime < 1) lifetime = 1;
+  if (Tcl_GetDouble(interp, argv[2], &lifetime_s) != TCL_OK) return TCL_ERROR;
+  /* Negative = no respawn (dots live forever). Caller can use -1 or
+   * 0 for that; we accept any non-positive value as "no respawn". */
+  if (lifetime_s <= 0.0 && lifetime_s != -1.0) lifetime_s = -1.0;
 
-  s->lifetime = lifetime;
-  setLifetimes(s, lifetime);
+  s->lifetime_s = (float) lifetime_s;
+  setLifetimes(s, (float) lifetime_s);
 
   return(TCL_OK);
 }
@@ -1840,11 +1880,15 @@ int motionpatchShaderCreate(Tcl_Interp *interp)
   add_attribs_to_table(&MotionpatchShaderProg->attribTable,
 		       MotionpatchShaderProg);
 
-  /* 1x1 white RGBA texture bound when no user sampler is set, so the
-     fragment shader's tex0 sampler is always backed by valid storage.
-     Leave it bound to texture unit 0 so the first draw already finds
-     a valid texture there, silencing Apple's "unit 0 unloadable"
-     log message. */
+  /* 1x1 white RGBA texture bound when no user sampler is set, so
+     the fragment shader's tex0 / tex1 samplers are always backed by
+     valid storage. Bind to BOTH texture unit 0 AND unit 1 at create
+     time so the first draw -- and any link-time validation -- finds
+     valid textures on every sampler unit the shader references.
+     Without binding to unit 1, Apple's GL driver logs an "unit 1
+     unloadable, using zero texture" warning the first time the
+     shader program is used, before motionpatchDraw has a chance to
+     run its per-frame bind. */
   if (!MotionpatchDefaultTex) {
     unsigned char white[4] = { 255, 255, 255, 255 };
     glGenTextures(1, &MotionpatchDefaultTex);
@@ -1856,6 +1900,11 @@ int motionpatchShaderCreate(Tcl_Interp *interp)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    /* Pre-bind to unit 1 as well so it isn't in an unloadable state
+       before the first per-frame bind. */
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, MotionpatchDefaultTex);
+    glActiveTexture(GL_TEXTURE0);
   }
 
   return TCL_OK;
