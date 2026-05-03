@@ -202,13 +202,13 @@ proc mp_tracking_setup {nDots shapeSize} {
 
     set color 0.8
     set ptSize 3.0
-    set speed 0.003
+    set speed 0.18  ;# patch-units/sec (was 0.003 per-frame@60Hz)
 
     set mg [metagroup]
     objName $mg patch
 
     # Background dots (OUTSIDE mask shape): moving leftward
-    set mp_bg [motionpatch $nDots 0.01 30]
+    set mp_bg [motionpatch $nDots 0.6 0.5]
     objName $mp_bg dots_bg
     motionpatch_pointsize $mp_bg $ptSize
     motionpatch_color $mp_bg $color $color $color 1.0
@@ -222,7 +222,7 @@ proc mp_tracking_setup {nDots shapeSize} {
     metagroupAdd $mg $mp_bg
 
     # Target dots (INSIDE mask shape): moving rightward
-    set mp_tg [motionpatch $nDots 0.01 30]
+    set mp_tg [motionpatch $nDots 0.6 0.5]
     objName $mp_tg dots_target
     motionpatch_pointsize $mp_tg $ptSize
     motionpatch_color $mp_tg $color $color $color 1.0
@@ -257,7 +257,7 @@ proc mp_tracking_set_motion {bg_coh tg_coh speed} {
 }
 
 proc mp_tracking_get_motion {} {
-    dict create bg_coh 1.0 tg_coh 1.0 speed 0.003
+    dict create bg_coh 1.0 tg_coh 1.0 speed 0.18
 }
 
 proc mp_tracking_set_directions {bg_dir tg_dir} {
@@ -289,18 +289,17 @@ proc mp_tracking_get_luminance {} {
     dict create bg_lum 0.8 tg_lum 0.8
 }
 
-# Independent dot lifetime (in frames) for background and target. Short
-# lifetimes (< ~5 frames) with low coherence produce mostly-flicker with
-# little integrated motion energy, approximating a pure temporal-noise
-# field. Long lifetimes (> ~30 frames) let each dot's motion integrate
-# into a clear trajectory.
+# Independent dot lifetime (in seconds) for background and target.
+# Short lifetimes (< ~80 ms) with low coherence produce mostly-flicker
+# with little integrated motion energy. Long lifetimes (> ~500 ms)
+# let each dot's motion integrate into a clear trajectory.
 proc mp_tracking_set_lifetime {bg_life tg_life} {
     motionpatch_lifetime dots_bg     $bg_life
     motionpatch_lifetime dots_target $tg_life
 }
 
 proc mp_tracking_get_lifetime {} {
-    dict create bg_life 30 tg_life 30
+    dict create bg_life 0.5 tg_life 0.5
 }
 
 # Mask edge softness: 0 = hard step, larger = smoother alpha falloff at
@@ -411,7 +410,7 @@ proc mp_tracking_set_freeze {frozen speed} {
 }
 
 proc mp_tracking_get_freeze {} {
-    dict create frozen 0 speed 0.003
+    dict create frozen 0 speed 0.18
 }
 
 # ============================================================
@@ -427,14 +426,14 @@ workspace::setup mp_tracking_setup {
 
 workspace::adjuster track_freeze {
     frozen {choice {0 1} 0 "Frozen (1=invisible)"}
-    speed  {float 0.0 0.01 0.0005 0.003 "Speed when playing"}
+    speed  {float 0.0 0.6 0.03 0.18 "Speed when playing (patch-units/sec)"}
 } -target {} -proc mp_tracking_set_freeze -getter mp_tracking_get_freeze \
   -label "Freeze / Play"
 
 workspace::adjuster track_motion {
     bg_coh {float 0.0 1.0 0.05 1.0 "Background Coherence"}
     tg_coh {float 0.0 1.0 0.05 1.0 "Target Coherence"}
-    speed  {float 0.0 0.01 0.0005 0.003 "Dot Speed"}
+    speed  {float 0.0 0.6 0.03 0.18 "Dot Speed (patch-units/sec)"}
 } -target {} -proc mp_tracking_set_motion -getter mp_tracking_get_motion \
   -label "Dot Motion"
 
@@ -467,8 +466,8 @@ workspace::adjuster track_luminance {
   -label "Luminance"
 
 workspace::adjuster track_lifetime {
-    bg_life {int 1 120 1 30 "Background Lifetime (frames)"}
-    tg_life {int 1 120 1 30 "Target Lifetime (frames)"}
+    bg_life {float 0.01 2.0 0.05 0.5 "Background Lifetime (seconds)"}
+    tg_life {float 0.01 2.0 0.05 0.5 "Target Lifetime (seconds)"}
 } -target {} -proc mp_tracking_set_lifetime -getter mp_tracking_get_lifetime \
   -label "Dot Lifetime"
 

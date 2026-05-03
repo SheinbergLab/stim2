@@ -108,27 +108,27 @@ proc mp_shape_setup {shape lumdiff} {
     objName $mg patch
     
     # Patch 1: dots INSIDE shape (samplermaskmode 1 = use alpha)
-    set mp1 [motionpatch $nDots 0.01 20]
+    set mp1 [motionpatch $nDots 0.6 0.333]
     objName $mp1 dots_inside
     motionpatch_pointsize $mp1 4.0
     motionpatch_color $mp1 $c1 $c1 $c1 1.0
     motionpatch_masktype $mp1 1
     motionpatch_coherence $mp1 1.0
     motionpatch_direction $mp1 0.0
-    motionpatch_speed $mp1 0.002
+    motionpatch_speed $mp1 0.12
     motionpatch_setSampler $mp1 $texID 0
     motionpatch_samplermaskmode $mp1 1
     metagroupAdd $mg $mp1
     
     # Patch 2: dots OUTSIDE shape (samplermaskmode 2 = use 1-alpha)
-    set mp2 [motionpatch $nDots 0.01 20]
+    set mp2 [motionpatch $nDots 0.6 0.333]
     objName $mp2 dots_outside
     motionpatch_pointsize $mp2 4.0
     motionpatch_color $mp2 $c2 $c2 $c2 1.0
     motionpatch_masktype $mp2 1
     motionpatch_coherence $mp2 1.0
     motionpatch_direction $mp2 3.14159265
-    motionpatch_speed $mp2 0.002
+    motionpatch_speed $mp2 0.12
     motionpatch_setSampler $mp2 $texID 0
     motionpatch_samplermaskmode $mp2 2
     metagroupAdd $mg $mp2
@@ -207,14 +207,14 @@ workspace::adjuster shape_mask_rotation {
 workspace::adjuster shape_motion_inside {
     coherence {float 0.0 1.0 0.05 1.0 "Coherence"}
     direction {float 0 360 15 0 "Direction (deg)"}
-    speed     {float 0.0 0.01 0.0005 0.002 "Speed"}
+    speed     {float 0.0 0.6 0.03 0.12 "Speed (patch-units/sec)"}
 } -target dots_inside -proc mp_shape_set_motion_inside -getter mp_shape_get_motion_inside \
   -label "Inside Motion"
 
 workspace::adjuster shape_motion_outside {
     coherence {float 0.0 1.0 0.05 1.0 "Coherence"}
     direction {float 0 360 15 180 "Direction (deg)"}
-    speed     {float 0.0 0.01 0.0005 0.002 "Speed"}
+    speed     {float 0.0 0.6 0.03 0.12 "Speed (patch-units/sec)"}
 } -target dots_outside -proc mp_shape_set_motion_outside -getter mp_shape_get_motion_outside \
   -label "Outside Motion"
 

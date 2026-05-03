@@ -14,18 +14,18 @@ proc mp_coherence_setup {nDots masktype} {
     glistInit 1
     resetObjList
     
-    # Create motionpatch: n dots, speed, lifetime
+    # Create motionpatch: n dots, speed (patch-units/sec), lifetime (sec)
     # Use conservative defaults - adjusters will set actual values
-    set mp [motionpatch $nDots 0.01 30]
+    set mp [motionpatch $nDots 0.6 0.5]
     objName $mp dots
-    
+
     # Set initial appearance
     motionpatch_pointsize $mp 4.0
     motionpatch_color $mp 0.9 0.9 0.9 1.0
     motionpatch_masktype $mp $masktype
     motionpatch_coherence $mp 0.5
     motionpatch_direction $mp 0.0
-    motionpatch_speed $mp 0.005
+    motionpatch_speed $mp 0.3
     
     # Wrap in metagroup for positioning/scaling
     set mg [metagroup]
@@ -88,7 +88,7 @@ workspace::setup mp_coherence_setup {
 workspace::adjuster motion_params {
     coherence {float 0.0 1.0 0.05 0.5 "Coherence"}
     direction {float 0 360 15 0 "Direction (deg)"}
-    speed     {float 0.0 0.01 0.0005 0.005 "Speed"}
+    speed     {float 0.0 0.6 0.03 0.3 "Speed (patch-units/sec)"}
 } -target dots -proc mp_set_motion -getter mp_get_motion \
   -label "Motion Parameters"
 

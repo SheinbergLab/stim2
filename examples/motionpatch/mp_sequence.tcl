@@ -176,37 +176,37 @@ proc mp_sequence_apply_mode {mode} {
     switch -- $mode {
         real {
             motionpatch_coherence dots_target 1.0
-            motionpatch_lifetime  dots_target 30
+            motionpatch_lifetime  dots_target 0.5
             motionpatch_coherence dots_bg     0.0
-            motionpatch_lifetime  dots_bg     2
+            motionpatch_lifetime  dots_bg     0.033
             set ::mp_sequence::bg_invert 0
         }
         induced {
             motionpatch_coherence dots_target 0.0
-            motionpatch_lifetime  dots_target 2
+            motionpatch_lifetime  dots_target 0.033
             motionpatch_coherence dots_bg     1.0
-            motionpatch_lifetime  dots_bg     30
+            motionpatch_lifetime  dots_bg     0.5
             set ::mp_sequence::bg_invert 1
         }
         contrast {
             motionpatch_coherence dots_target 1.0
-            motionpatch_lifetime  dots_target 30
+            motionpatch_lifetime  dots_target 0.5
             motionpatch_coherence dots_bg     1.0
-            motionpatch_lifetime  dots_bg     30
+            motionpatch_lifetime  dots_bg     0.5
             set ::mp_sequence::bg_invert 1
         }
         aperture {
             motionpatch_coherence dots_target 1.0
-            motionpatch_lifetime  dots_target 30
+            motionpatch_lifetime  dots_target 0.5
             motionpatch_coherence dots_bg     0.0
-            motionpatch_lifetime  dots_bg     2
+            motionpatch_lifetime  dots_bg     0.033
             set ::mp_sequence::bg_invert 0
         }
         baseline {
             motionpatch_coherence dots_target 0.0
-            motionpatch_lifetime  dots_target 2
+            motionpatch_lifetime  dots_target 0.033
             motionpatch_coherence dots_bg     0.0
-            motionpatch_lifetime  dots_bg     2
+            motionpatch_lifetime  dots_bg     0.033
             set ::mp_sequence::bg_invert 0
         }
     }
@@ -235,7 +235,7 @@ proc mp_sequence_setup {nDots shapeSize} {
         variable cur_dir   0.0
         variable trans_ms  0
         variable playing   1
-        variable speed     0.003
+        variable speed     0.18  ;# patch-units/sec (was 0.003 per-frame@60Hz)
         variable bg_invert 0
         variable ap_x       0.0
         variable ap_y       0.0
@@ -256,7 +256,7 @@ proc mp_sequence_setup {nDots shapeSize} {
     objName $mg patch
 
     # Surround dots (OUTSIDE aperture).
-    set mp_bg [motionpatch $nDots 0.01 30]
+    set mp_bg [motionpatch $nDots 0.6 0.5]
     objName $mp_bg dots_bg
     motionpatch_pointsize $mp_bg $ptSize
     motionpatch_color $mp_bg $color $color $color 1.0
@@ -264,14 +264,14 @@ proc mp_sequence_setup {nDots shapeSize} {
     motionpatch_coherence $mp_bg 0.0
     motionpatch_direction $mp_bg 3.14159265
     motionpatch_speed $mp_bg $baseSpeed
-    motionpatch_lifetime $mp_bg 2
+    motionpatch_lifetime $mp_bg 0.033
     motionpatch_setSampler $mp_bg $texID 0
     motionpatch_samplermaskmode $mp_bg 2
     motionpatch_maskscale $mp_bg $shapeSize
     metagroupAdd $mg $mp_bg
 
     # Target dots (INSIDE aperture).
-    set mp_tg [motionpatch $nDots 0.01 30]
+    set mp_tg [motionpatch $nDots 0.6 0.5]
     objName $mp_tg dots_target
     motionpatch_pointsize $mp_tg $ptSize
     motionpatch_color $mp_tg $color $color $color 1.0
@@ -279,7 +279,7 @@ proc mp_sequence_setup {nDots shapeSize} {
     motionpatch_coherence $mp_tg 1.0
     motionpatch_direction $mp_tg 0.0
     motionpatch_speed $mp_tg $baseSpeed
-    motionpatch_lifetime $mp_tg 30
+    motionpatch_lifetime $mp_tg 0.5
     motionpatch_setSampler $mp_tg $texID 0
     motionpatch_samplermaskmode $mp_tg 1
     motionpatch_maskscale $mp_tg $shapeSize
@@ -316,7 +316,7 @@ proc mp_sequence_set_motion {speed} {
     motionpatch_speed dots_bg     $speed
     set ::mp_sequence::speed $speed
 }
-proc mp_sequence_get_motion {} { dict create speed 0.003 }
+proc mp_sequence_get_motion {} { dict create speed 0.18 }
 
 proc mp_sequence_set_transition {trans_ms} {
     set ::mp_sequence::trans_ms $trans_ms
@@ -359,7 +359,7 @@ proc mp_sequence_set_freeze {frozen speed} {
         set ::mp_sequence::playing 1
     }
 }
-proc mp_sequence_get_freeze {} { dict create frozen 0 speed 0.003 }
+proc mp_sequence_get_freeze {} { dict create frozen 0 speed 0.18 }
 
 # ============================================================
 # WORKSPACE DEMO INTERFACE
@@ -374,7 +374,7 @@ workspace::setup mp_sequence_setup {
 
 workspace::adjuster seq_freeze {
     frozen {choice {0 1} 0 "Frozen"}
-    speed  {float 0.0 0.01 0.0005 0.003 "Speed when playing"}
+    speed  {float 0.0 0.6 0.03 0.18 "Speed when playing (patch-units/sec)"}
 } -target {} -proc mp_sequence_set_freeze -getter mp_sequence_get_freeze \
   -label "Freeze / Play"
 
@@ -397,7 +397,7 @@ workspace::adjuster seq_transition {
   -label "Direction Transitions"
 
 workspace::adjuster seq_motion {
-    speed {float 0.0 0.01 0.0005 0.003 "Dot Speed"}
+    speed {float 0.0 0.6 0.03 0.18 "Dot Speed (patch-units/sec)"}
 } -target {} -proc mp_sequence_set_motion -getter mp_sequence_get_motion \
   -label "Motion Speed"
 

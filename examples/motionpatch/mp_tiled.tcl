@@ -23,12 +23,12 @@ proc mp_tiled_square_setup {gridSize patchScale spacing nDots} {
     # Create grid from -gridSize to +gridSize
     for {set i [expr {-$gridSize}]} {$i <= $gridSize} {incr i} {
         for {set j [expr {-$gridSize}]} {$j <= $gridSize} {incr j} {
-            set d [motionpatch $nDots 0.01 20]
+            set d [motionpatch $nDots 0.6 0.333]
             motionpatch_pointsize $d 3.0
             motionpatch_color $d 0.8 0.8 0.8 1.0
             motionpatch_masktype $d 0
             motionpatch_coherence $d 1.0
-            motionpatch_speed $d 0.005
+            motionpatch_speed $d 0.3
             # Alternate direction based on checkerboard position
             motionpatch_direction $d [expr {(($i + $j) % 2) * 3.14159265}]
             scaleObj $d $patchScale $patchScale
@@ -61,12 +61,12 @@ proc mp_tiled_hex_setup {gridRadius patchScale nDots} {
     
     set idx 0
     foreach x [dl_tcllist $xs] y [dl_tcllist $ys] {
-        set d [motionpatch $nDots 0.01 20]
+        set d [motionpatch $nDots 0.6 0.333]
         motionpatch_pointsize $d 3.0
         motionpatch_color $d 0.8 0.8 0.8 1.0
         motionpatch_masktype $d 2
         motionpatch_coherence $d 1.0
-        motionpatch_speed $d 0.005
+        motionpatch_speed $d 0.3
         # Alternate direction
         motionpatch_direction $d [expr {($idx % 2) * 3.14159265}]
         scaleObj $d [expr {$patchScale * 2.0}]

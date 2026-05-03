@@ -41,8 +41,9 @@
 #   metagroup is scaled by patch_size_dva, so dots in [-0.5, 0.5] span
 #       exactly patch_size_dva on screen
 #   maskoffset (patch-local) = pos_dva / patch_size_dva
-#   motionpatch_speed (patch-local/frame) =
-#       v_dva_per_sec / (patch_size_dva * refresh_rate_hz)
+#   motionpatch_speed (patch-local-units PER SECOND, real-time) =
+#       v_dva_per_sec / patch_size_dva
+#   motionpatch_lifetime is in SECONDS (frame-rate-independent)
 #   ndots = dot_density_per_dva2 * patch_size_dva^2
 #
 # Controls:
@@ -436,14 +437,15 @@ proc mp_planko_index_for_time {tsec} {
     return $idx
 }
 
-# Convert dva/sec -> motionpatch_speed (patch-local units / frame),
-# matching the prf motionpatch protocol convention:
-#   speed = v_deg_sec / (patch_size_dva * refresh_rate_hz)
+# Convert dva/sec -> motionpatch_speed (patch-local-units per second).
+# motionpatch.c's update loop multiplies by real-time dt, so this is
+# frame-rate-independent. The refresh_rate term that used to live in
+# this formula is gone -- the conversion is purely the dva-to-patch-
+# local mapping (dot positions span [-0.5, 0.5] across patch_size_dva).
 proc mp_planko_speed_from_deg_sec {v_deg_sec} {
     set ps $::mp_planko::patch_size
-    set rr $::mp_planko::refresh_rate
-    if {$ps <= 0 || $rr <= 0} { return 0.0 }
-    return [expr {$v_deg_sec / ($ps * $rr)}]
+    if {$ps <= 0} { return 0.0 }
+    return [expr {$v_deg_sec / $ps}]
 }
 
 proc mp_planko_update {} {
@@ -553,7 +555,7 @@ proc mp_planko_apply_mode {mode} {
         motionpatch_speed     dots_target $bg_sp
     } else {
         motionpatch_coherence dots_target 1.0
-        motionpatch_lifetime  dots_target 30
+        motionpatch_lifetime  dots_target 0.5  ;# coherent target ~500 ms
     }
     motionpatch_coherence dots_bg     $bg_coh
     motionpatch_lifetime  dots_bg     $bg_life
@@ -666,12 +668,11 @@ proc mp_planko_setup {patch_size_dva dot_density} {
         variable traj_nhit          0
 
         variable patch_size       20.0
-        variable refresh_rate     60.0
         variable max_speed_deg_sec   30.0
         variable const_speed_deg_sec 5.0
         variable shape_size       0.15
         variable lum_offset       0.0
-        variable bg_lifetime      8
+        variable bg_lifetime      0.05   ;# seconds; ~3 frames at 60Hz
         variable bg_speed_deg_sec 5.0
         variable bg_coherence     0.0
         variable bg_direction_deg 90.0
@@ -707,15 +708,6 @@ proc mp_planko_setup {patch_size_dva dot_density} {
     # Bind aperture size to ball diameter (overrides the namespace default).
     mp_planko_match_aperture_to_ball
 
-    # Refresh rate from screen settings (Hz). Falls back to 60 if
-    # FrameDuration is unavailable / zero.
-    set fd [screen_set FrameDuration]
-    if {$fd > 0} {
-        set ::mp_planko::refresh_rate [expr {1000.0 / $fd}]
-    } else {
-        set ::mp_planko::refresh_rate 60.0
-    }
-
     # The mask is an alpha filter applied at the fragment shader stage,
     # so dots are distributed across the entire patch and clipped at
     # render time. Both patches therefore use the same total ndots =
@@ -742,13 +734,13 @@ proc mp_planko_setup {patch_size_dva dot_density} {
     set mg [metagroup]
     objName $mg patch
 
-    set mp_bg [motionpatch $nDots $initialSpeed 30]
+    set mp_bg [motionpatch $nDots $initialSpeed 0.5]
     objName $mp_bg dots_bg
     motionpatch_pointsize $mp_bg $ptSize
     motionpatch_color $mp_bg $color $color $color 1.0
     motionpatch_masktype $mp_bg 0
     motionpatch_coherence $mp_bg 0.0
-    motionpatch_lifetime $mp_bg 2
+    motionpatch_lifetime $mp_bg 0.033  ;# ~2 frames at 60Hz, real-time
     motionpatch_direction $mp_bg 0.0
     motionpatch_speed $mp_bg $initialSpeed
     motionpatch_setSampler $mp_bg $texID 0
@@ -767,13 +759,13 @@ proc mp_planko_setup {patch_size_dva dot_density} {
     motionpatch_layercolor $mp_bg B 0.95 0.85 0.2 1.0
     metagroupAdd $mg $mp_bg
 
-    set mp_tg [motionpatch $nDots $initialSpeed 30]
+    set mp_tg [motionpatch $nDots $initialSpeed 0.5]
     objName $mp_tg dots_target
     motionpatch_pointsize $mp_tg $ptSize
     motionpatch_color $mp_tg $color $color $color 1.0
     motionpatch_masktype $mp_tg 0
     motionpatch_coherence $mp_tg 1.0
-    motionpatch_lifetime $mp_tg 30
+    motionpatch_lifetime $mp_tg 0.5  ;# ~30 frames at 60Hz, real-time
     motionpatch_direction $mp_tg 0.0
     motionpatch_speed $mp_tg $initialSpeed
     motionpatch_setSampler $mp_tg $texID 0
@@ -864,7 +856,7 @@ proc mp_planko_set_bg_lifetime {bg_lifetime} {
     set ::mp_planko::bg_lifetime $bg_lifetime
     mp_planko_apply_mode $::mp_planko::mode
 }
-proc mp_planko_get_bg_lifetime {} { dict create bg_lifetime 8 }
+proc mp_planko_get_bg_lifetime {} { dict create bg_lifetime 0.05 }
 
 # Surround motion controls. With coherence=0 (default) the surround is
 # pure flicker noise; raising coherence makes the surround stream in
@@ -976,7 +968,7 @@ workspace::adjuster planko_luminance {
   -label "Luminance Offset"
 
 workspace::adjuster planko_lifetime {
-    bg_lifetime {int 1 30 1 8 "Background Lifetime (frames)"}
+    bg_lifetime {float 0.01 0.5 0.01 0.05 "Background Lifetime (seconds)"}
 } -target {} -proc mp_planko_set_bg_lifetime -getter mp_planko_get_bg_lifetime \
   -label "Background Lifetime"
 

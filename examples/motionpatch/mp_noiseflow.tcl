@@ -15,14 +15,14 @@ proc mp_noiseflow_setup {nDots period rate seed} {
     glistInit 1
     resetObjList
     
-    set mp [motionpatch $nDots 0.01 30]
+    set mp [motionpatch $nDots 0.6 0.5]
     objName $mp dots
-    
+
     motionpatch_pointsize $mp 4.0
     motionpatch_color $mp 0.8 0.8 0.8 1.0
     motionpatch_masktype $mp 1
     motionpatch_coherence $mp 1.0
-    motionpatch_speed $mp 0.003
+    motionpatch_speed $mp 0.18
     
     # Noise direction setup
     motionpatch_setNoiseZ $mp 0.0
@@ -77,7 +77,7 @@ workspace::setup mp_noiseflow_setup {
   -label "Noise Flow"
 
 workspace::adjuster noiseflow_speed {
-    speed {float 0.0 0.01 0.0005 0.003 "Speed"}
+    speed {float 0.0 0.6 0.03 0.18 "Speed (patch-units/sec)"}
 } -target dots -proc mp_noiseflow_set_speed -getter mp_noiseflow_get_speed \
   -label "Speed"
 
