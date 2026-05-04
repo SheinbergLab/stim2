@@ -1079,7 +1079,15 @@ proc mp_pulsed_trigger {action} {
             # After write, the in-memory dgs carry the timestamped
             # names; a fresh Record creates new dgs with the base
             # names again, so old recordings are preserved alongside.
-            set ts [clock format [clock seconds] -format %Y%m%d_%H%M%S]
+            # Prefer human-readable timestamp; fall back to the
+            # raw Unix-epoch integer if `clock format` fails (it
+            # requires msgcat, which may be missing from minimal
+            # Tcl builds). The integer fallback is still uniquely
+            # timestamped and sorts correctly by filename.
+            if {[catch {clock format [clock seconds] \
+                            -format %Y%m%d_%H%M%S} ts]} {
+                set ts [clock seconds]
+            }
             set written {}
             foreach base [list \
                     $::mp_pulsed::record_design_name \
