@@ -305,6 +305,15 @@ elseif(APPLE)
             DESTINATION ${APP_BUNDLE}/Contents/lib/tcl9.0
             COMPONENT stim2
         )
+	# Tcl 9 splits the stdlib: traditional packages live in tcl9.0/
+        # but Tcl Modules (msgcat, http, etc.) live in tcl9/. Bundle both
+        # so the app has full stdlib coverage in the self-contained .app.
+        install(
+            DIRECTORY ${LIBTCL_DIR}/tcl9/
+            DESTINATION ${APP_BUNDLE}/Contents/lib/tcl9
+            COMPONENT stim2
+	    OPTIONAL
+        )	
     endif()
     
     # Add stimdlls
