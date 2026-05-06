@@ -375,10 +375,16 @@ proc mp_pulsed_envelope {tplay} {
 # Convert dva/sec -> motionpatch_speed (patch-local-units per second).
 # motionpatch.c does dt-scaled integration, so this is frame-rate-
 # independent. The conversion is purely the dva-to-patch-local mapping.
+#
+# double($v) / double($ps) forces float arithmetic. The stim2 slider
+# normalizes integer-valued positions like 4.0 to "4" (Tcl integer
+# rep), and Tcl's expr does integer division on int/int -- which
+# silently returns 0 for any 0 < v < ps. Forcing both operands to
+# double avoids that classic Tcl gotcha.
 proc mp_pulsed_speed_from_deg_sec {v} {
     set ps $::mp_pulsed::patch_size
     if {$ps <= 0} { return 0.0 }
-    return [expr {$v / $ps}]
+    return [expr {double($v) / double($ps)}]
 }
 
 # ---------- per-frame driver ----------
@@ -443,8 +449,10 @@ proc mp_pulsed_update {} {
     set vy [lindex $::mp_pulsed::traj_vy $i]
 
     set ps $::mp_pulsed::patch_size
-    set ox [expr {$x / $ps}]
-    set oy [expr {$y / $ps}]
+    # double() forces float arithmetic; see comment in
+    # mp_pulsed_speed_from_deg_sec for why.
+    set ox [expr {double($x) / double($ps)}]
+    set oy [expr {double($y) / double($ps)}]
     set vmag [expr {hypot($vx, $vy)}]
     if {$vmag < 1e-6} {
         set dir 0.0

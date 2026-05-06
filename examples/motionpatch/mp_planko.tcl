@@ -445,7 +445,11 @@ proc mp_planko_index_for_time {tsec} {
 proc mp_planko_speed_from_deg_sec {v_deg_sec} {
     set ps $::mp_planko::patch_size
     if {$ps <= 0} { return 0.0 }
-    return [expr {$v_deg_sec / $ps}]
+    # double() forces float arithmetic. Slider values that land on
+    # exact integers (4, 8, ...) get serialized as Tcl ints, and
+    # int/int division silently returns 0 for any 0 < v < ps. Forcing
+    # both operands to double avoids that gotcha.
+    return [expr {double($v_deg_sec) / double($ps)}]
 }
 
 proc mp_planko_update {} {
@@ -478,8 +482,9 @@ proc mp_planko_update {} {
     }
 
     set ps $::mp_planko::patch_size
-    set ox [expr {$x / $ps}]
-    set oy [expr {$y / $ps}]
+    # double() forces float arithmetic; see mp_planko_speed_from_deg_sec.
+    set ox [expr {double($x) / double($ps)}]
+    set oy [expr {double($y) / double($ps)}]
 
     set vmag [expr {hypot($vx, $vy)}]
     if {$vmag < 1e-6} {
@@ -629,7 +634,7 @@ proc mp_planko_refresh_world_tex {} {
 
 proc mp_planko_match_aperture_to_ball {} {
     set d [expr {2.0 * $::mp_planko::ball_radius}]
-    set sz [expr {$d / $::mp_planko::patch_size}]
+    set sz [expr {double($d) / double($::mp_planko::patch_size)}]
     set ::mp_planko::shape_size $sz
     if {[info commands motionpatch_maskscale] ne ""} {
         catch {
