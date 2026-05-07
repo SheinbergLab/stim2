@@ -1168,24 +1168,42 @@ static int tcl_puts_cmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
     
-    // If writing to a file handle, delegate to original puts
-    if (channelId != NULL && 
-        strcmp(channelId, "stdout") != 0 && 
+    // If writing to a file handle, write directly to the channel
+    // rather than building a string command and Tcl_Eval'ing it.
+    // The string-eval approach was brace-wrapping the message
+    // ("_puts ... {<message>}") which broke whenever the message
+    // contained a 0x7D ('}') byte -- e.g. binary payloads from
+    // qpcs::dsSocketSendBinary -- producing the parser error
+    // "extra characters after close-brace". Tcl_WriteObj is binary-
+    // safe and respects the channel's translation/encoding settings
+    // (so a channel configured -translation binary writes bytes
+    // verbatim, while text channels still get newline translation).
+    if (channelId != NULL &&
+        strcmp(channelId, "stdout") != 0 &&
         strcmp(channelId, "stderr") != 0) {
-        // Call original puts for file operations
-        Tcl_DString cmd;
-        Tcl_DStringInit(&cmd);
-        Tcl_DStringAppend(&cmd, "_puts", -1);
-        if (nonewline) Tcl_DStringAppend(&cmd, " -nonewline", -1);
-        Tcl_DStringAppend(&cmd, " ", -1);
-        Tcl_DStringAppend(&cmd, channelId, -1);
-        Tcl_DStringAppend(&cmd, " {", -1);
-        Tcl_DStringAppend(&cmd, message, -1);
-        Tcl_DStringAppend(&cmd, "}", -1);
-        
-        int result = Tcl_Eval(interp, Tcl_DStringValue(&cmd));
-        Tcl_DStringFree(&cmd);
-        return result;
+        Tcl_Channel chan = Tcl_GetChannel(interp, channelId, NULL);
+        if (chan == NULL) {
+            return TCL_ERROR;  // Tcl_GetChannel sets the error message
+        }
+        // Use the original Tcl_Obj so binary content is preserved.
+        // objv[argIdx] still points at the message arg.
+        if (Tcl_WriteObj(chan, objv[argIdx]) < 0) {
+            Tcl_SetObjResult(interp,
+                Tcl_NewStringObj("puts: write failed", -1));
+            return TCL_ERROR;
+        }
+        if (!nonewline) {
+            Tcl_Obj *nl = Tcl_NewStringObj("\n", 1);
+            Tcl_IncrRefCount(nl);
+            int rc = Tcl_WriteObj(chan, nl);
+            Tcl_DecrRefCount(nl);
+            if (rc < 0) {
+                Tcl_SetObjResult(interp,
+                    Tcl_NewStringObj("puts: newline write failed", -1));
+                return TCL_ERROR;
+            }
+        }
+        return TCL_OK;
     }
     
     // Determine log level
