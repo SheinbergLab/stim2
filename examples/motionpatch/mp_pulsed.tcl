@@ -459,6 +459,13 @@ proc mp_pulsed_update {} {
     } else {
         set dir [expr {atan2($vy, $vx)}]
     }
+    # Apply the local-vs-global rotation perturbation. Speed (vmag)
+    # is unchanged -- pure direction rotation, so the perturbation
+    # doesn't confound speed with direction.
+    if {$::mp_pulsed::internal_rotation_deg != 0.0} {
+        set dir [expr {$dir + $::mp_pulsed::internal_rotation_deg \
+                              * 3.14159265358979 / 180.0}]
+    }
     set v_clamped $vmag
     if {$v_clamped > $::mp_pulsed::max_speed_deg_sec} {
         set v_clamped $::mp_pulsed::max_speed_deg_sec
@@ -584,6 +591,17 @@ proc mp_pulsed_setup {patch_size_dva dot_density} {
         # full-field condition.
         variable ball_lum         0.8
         variable surround_lum     0.8
+
+        # Internal-dot direction rotation (degrees) relative to the
+        # patch velocity. 0 = veridical (local motion aligned with
+        # path); nonzero biases the inside flow off-axis without
+        # changing the patch trajectory itself, so the hidden
+        # extrapolation target stays on the true path while the local
+        # cue points elsewhere. Probes whether observers are pushed
+        # off by a misaligned local-motion cue and whether they adapt
+        # across trials. Applied in mp_pulsed_update so it covers
+        # sweep/arc/freefall and the post-bounce branch uniformly.
+        variable internal_rotation_deg 0.0
 
         # Pulsed-trajectory parameters
         variable n_snapshots      7
@@ -1031,7 +1049,8 @@ proc mp_pulsed_design_dg {{n_samples 600} {gname mp_pulsed_design}} {
             bounce_angle_deg     [expr {$::mp_pulsed::bounce_angle_deg * $::mp_pulsed::bounce_sign}] \
             bounce_restitution   $::mp_pulsed::bounce_restitution    \
             bounce_random_sign   $::mp_pulsed::bounce_random_sign    \
-            bounce_sign          $::mp_pulsed::bounce_sign] {
+            bounce_sign          $::mp_pulsed::bounce_sign           \
+            internal_rotation_deg $::mp_pulsed::internal_rotation_deg] {
         dl_set $g:$col [dl_flist $val]
     }
     dl_set $g:preset             [dl_slist $::mp_pulsed::preset]
@@ -1339,6 +1358,16 @@ proc mp_pulsed_get_luminance {} {
     dict create ball_lum 0.8 surround_lum 0.8
 }
 
+# Internal-dot direction rotation (deg). Live-tunable; takes effect on
+# the next frame via mp_pulsed_update. No trajectory rebuild needed --
+# the patch path is unchanged, only the local-flow direction tilts.
+proc mp_pulsed_set_internal_rotation {internal_rotation_deg} {
+    set ::mp_pulsed::internal_rotation_deg $internal_rotation_deg
+}
+proc mp_pulsed_get_internal_rotation {} {
+    dict create internal_rotation_deg 0.0
+}
+
 # ============================================================
 # WORKSPACE INTERFACE
 # ============================================================
@@ -1347,7 +1376,7 @@ workspace::reset
 workspace::setup mp_pulsed_setup {
     patch_size_dva {float 8.0 32.0 1.0 13.0 "Patch Size (dva)"}
     dot_density    {float 0.5 100.0 0.5 24.0 "Dot Density (dots/dva^2)"}
-} -adjusters {pulsed_actions pulsed_mode pulsed_preset pulsed_density pulsed_pulse pulsed_arc pulsed_sweep pulsed_freefall pulsed_duration pulsed_bounce pulsed_shape pulsed_lifetimes pulsed_surround pulsed_luminance pulsed_transform} \
+} -adjusters {pulsed_actions pulsed_mode pulsed_preset pulsed_density pulsed_pulse pulsed_arc pulsed_sweep pulsed_freefall pulsed_duration pulsed_bounce pulsed_shape pulsed_lifetimes pulsed_surround pulsed_luminance pulsed_internal_rotation pulsed_transform} \
   -label "Motion Pulsed"
 
 workspace::adjuster pulsed_actions {
@@ -1459,6 +1488,16 @@ workspace::adjuster pulsed_luminance {
     surround_lum {float 0.0 1.0 0.05 0.8 "Surround Luminance"}
 } -target {} -proc mp_pulsed_set_luminance -getter mp_pulsed_get_luminance \
   -label "Per-Region Luminance"
+
+# Local-vs-global motion perturbation. 0 = veridical; positive rotates
+# the inside-dot flow CCW relative to the patch's path (right-hand
+# rule with +y up). Range ±45 deg covers gentle (subliminal-ish)
+# through obvious mismatches; widen if you need bigger perturbations.
+workspace::adjuster pulsed_internal_rotation {
+    internal_rotation_deg {float -45.0 45.0 1.0 0.0 "Internal Rotation (deg)"}
+} -target {} -proc mp_pulsed_set_internal_rotation \
+  -getter mp_pulsed_get_internal_rotation \
+  -label "Internal Motion Rotation"
 
 workspace::adjuster pulsed_transform -template scale -target patch \
   -label "Scene Size"
