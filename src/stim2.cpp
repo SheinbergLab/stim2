@@ -163,6 +163,12 @@ glm::mat4 StimProjMatrix;
 
 Tcl_Interp *OurInterp = NULL;
 
+/* Tcl command: maps the live cursor position to world coordinates.
+ * Defined after the Application instance; forward-declared here so it
+ * can be registered in Tcl_StimAppInit. */
+static int getMouseWorldCmd(ClientData clientData, Tcl_Interp *interp,
+                            int argc, char *argv[]);
+
 
 const std::string WHITESPACE = " \n\r\t\f\v";
  
@@ -1652,6 +1658,10 @@ public:
 
     addTclCommands(interp);
 
+    Tcl_CreateCommand(interp, "getMouseWorld",
+                      (Tcl_CmdProc *) getMouseWorldCmd,
+                      (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+
     Tcl_VarEval(interp, 
         "proc load_local_packages {} {\n"
         " global auto_path\n"
@@ -2875,20 +2885,32 @@ void mouse_button_callback(GLFWwindow *window, int button, int action, int mods)
 }
 
 /*
- * cursor_position_callback
+ * getMouseWorld
  *
- * Keeps MouseXPos / MouseYPos live as the cursor moves (these Tcl-linked
- * vars were previously only updated on press/release). Tcl code can poll
- * them every frame to track a drag. If an "onMouseMove" proc is defined,
- * it is also invoked -- but the poll path is preferred for drag tracking
- * since it avoids one Tcl command dispatch per motion event.
+ * Tcl command. Returns the current cursor position mapped to world
+ * coordinates (degrees of visual angle) as "wx wy". Uses
+ * glfwGetWindowSize rather than the framebuffer size so the mapping is
+ * correct under framebuffer/window scaling (e.g. Retina): glfwGetCursorPos
+ * and glfwGetWindowSize share the same coordinate space, while winWidth/
+ * winHeight track the framebuffer and would be 2x off on a Retina display.
  */
-void cursor_position_callback(GLFWwindow *window, double x, double y)
+static int getMouseWorldCmd(ClientData clientData, Tcl_Interp *interp,
+                            int argc, char *argv[])
 {
-  MouseXPos = x;  MouseYPos = y;
-  const char *proc = "onMouseMove";
-  if (!Tcl_FindCommand(OurInterp, proc, NULL, 0)) return;
-  sendTclCommand((char *) proc);
+  double cx, cy;
+  int ww, wh;
+  glfwGetCursorPos(app.window, &cx, &cy);
+  glfwGetWindowSize(app.window, &ww, &wh);
+  if (ww <= 0 || wh <= 0) {
+    Tcl_SetResult(interp, (char *) "0.0 0.0", TCL_STATIC);
+    return TCL_OK;
+  }
+  double wx =  (cx / (double) ww - 0.5) * 2.0 * HALF_SCREEN_DEG_X;
+  double wy = -(cy / (double) wh - 0.5) * 2.0 * HALF_SCREEN_DEG_Y;
+  char buf[64];
+  snprintf(buf, sizeof(buf), "%f %f", wx, wy);
+  Tcl_SetResult(interp, buf, TCL_VOLATILE);
+  return TCL_OK;
 }
 
 void toggleFullscreen(GLFWwindow *window)
@@ -3183,7 +3205,6 @@ main(int argc, char *argv[]) {
   glfwSetWindowRefreshCallback(app.window, window_refresh_callback);
   glfwSetKeyCallback(app.window, key_callback);
   glfwSetMouseButtonCallback(app.window, mouse_button_callback);
-  glfwSetCursorPosCallback(app.window, cursor_position_callback);
   glfwSetWindowPosCallback(app.window, window_pos_callback);
 
   app.verbose = verbose;
