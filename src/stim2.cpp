@@ -2851,7 +2851,7 @@ void mouse_button_callback(GLFWwindow *window, int button, int action, int mods)
   static double x, y;
   if (button == GLFW_MOUSE_BUTTON_MIDDLE && action == GLFW_PRESS)
     glfwSetWindowShouldClose (window, 1);
-  
+
   if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS)
     app.toggleImgui();
 
@@ -2872,6 +2872,23 @@ void mouse_button_callback(GLFWwindow *window, int button, int action, int mods)
     }
   }
 
+}
+
+/*
+ * cursor_position_callback
+ *
+ * Keeps MouseXPos / MouseYPos live as the cursor moves (these Tcl-linked
+ * vars were previously only updated on press/release). Tcl code can poll
+ * them every frame to track a drag. If an "onMouseMove" proc is defined,
+ * it is also invoked -- but the poll path is preferred for drag tracking
+ * since it avoids one Tcl command dispatch per motion event.
+ */
+void cursor_position_callback(GLFWwindow *window, double x, double y)
+{
+  MouseXPos = x;  MouseYPos = y;
+  const char *proc = "onMouseMove";
+  if (!Tcl_FindCommand(OurInterp, proc, NULL, 0)) return;
+  sendTclCommand((char *) proc);
 }
 
 void toggleFullscreen(GLFWwindow *window)
@@ -3164,8 +3181,9 @@ main(int argc, char *argv[]) {
 
   glfwSetWindowSizeCallback(app.window, window_size_callback);
   glfwSetWindowRefreshCallback(app.window, window_refresh_callback);
-  glfwSetKeyCallback(app.window, key_callback);  
+  glfwSetKeyCallback(app.window, key_callback);
   glfwSetMouseButtonCallback(app.window, mouse_button_callback);
+  glfwSetCursorPosCallback(app.window, cursor_position_callback);
   glfwSetWindowPosCallback(app.window, window_pos_callback);
 
   app.verbose = verbose;
