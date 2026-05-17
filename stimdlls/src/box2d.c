@@ -2106,7 +2106,7 @@ int Box_Init(Tcl_Interp *interp)
   Tcl_CreateObjCommand(interp, "Box2D_setRestitution", 
 		       (Tcl_ObjCmdProc *) Box2DSetRestitutionCmd,
 		       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateObjCommand(interp, "Box2D_setFrictionn", 
+  Tcl_CreateObjCommand(interp, "Box2D_setFriction",
 		       (Tcl_ObjCmdProc *) Box2DSetFrictionCmd,
 		       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   
