@@ -46,7 +46,17 @@ static METAGROUP *sort_context;
 /*
  * Compare two object IDs by their priority.
  * Lower priority draws first (behind), higher priority draws last (in front).
- * For equal priorities, preserve original array order (stable sort).
+ * For equal priorities, tiebreak on the object id so the ordering is a
+ * consistent total order.
+ *
+ * NOTE: the tiebreak must NOT compare the element addresses (a, b).
+ * qsort permutes the array as it works, so a/b reflect transient memory
+ * positions rather than any stable property -- comparing them yields an
+ * inconsistent comparator (undefined behavior for qsort), which made the
+ * draw order of equal-priority objects vary frame to frame (visible as
+ * flicker between overlapping objects). Object ids are stable values and
+ * are assigned in creation order, so tiebreaking on id is both well-
+ * defined and approximately preserves insertion order.
  */
 static int comparePriority(const void *a, const void *b)
 {
@@ -64,8 +74,8 @@ static int comparePriority(const void *a, const void *b)
   diff = GR_PRIORITY(objA) - GR_PRIORITY(objB);
   if (diff != 0.0f) return (diff > 0.0f) - (diff < 0.0f);
 
-  /* Stable sort: preserve original order for equal priorities */
-  return (a > b) - (a < b);
+  /* Equal priority: stable, frame-to-frame consistent tiebreak on id. */
+  return (idA > idB) - (idA < idB);
 }
 
 void metagroupTimer(GR_OBJ *o)
