@@ -13,6 +13,51 @@ else
     STIM2_SVC=stim2-x11.service
 fi
 
+# Detect first install vs upgrade (postinst is called as `postinst configure <old-version>`)
+FIRST_INSTALL=0
+if [ "$1" = "configure" ] && [ -z "$2" ]; then
+    FIRST_INSTALL=1
+fi
+
+# On first install of an X11-based system, create the stim user and configure
+# Xwrapper.config so xinit can launch the X server from a systemd unit.
+if [ "$FIRST_INSTALL" = "1" ] && [ "$STIM2_SVC" = "stim2-x11.service" ]; then
+    # Create a system user 'stim' to run the X session under
+    if ! getent passwd stim >/dev/null; then
+        adduser --system --group --home /var/lib/stim \
+            --shell /usr/sbin/nologin --gecos "stim2 stimulus presentation" stim
+        echo "Created system user 'stim'"
+    fi
+
+    # Add stim to groups it needs to drive the display, input devices, and audio
+    for grp in tty video input audio render; do
+        if getent group "$grp" >/dev/null; then
+            adduser stim "$grp" >/dev/null 2>&1 || true
+        fi
+    done
+
+    # Ensure HOME exists with the right ownership (xinit writes .Xauthority here)
+    mkdir -p /var/lib/stim
+    chown stim:stim /var/lib/stim
+
+    # Configure Xwrapper so the non-console 'stim' user can start the X server.
+    # Trixie ships allowed_users=console which blocks systemd-launched xinit.
+    XWRAPPER=/etc/X11/Xwrapper.config
+    mkdir -p /etc/X11
+    if [ -f "$XWRAPPER" ] && [ ! -f "$XWRAPPER.stim2-bak" ]; then
+        cp "$XWRAPPER" "$XWRAPPER.stim2-bak"
+        echo "Backed up existing $XWRAPPER to $XWRAPPER.stim2-bak"
+    fi
+    cat > "$XWRAPPER" <<'EOF'
+# Written by stim2 postinst on first install. Original (if any) saved as
+# Xwrapper.config.stim2-bak. Edit freely; this file will not be overwritten
+# on upgrades.
+allowed_users=anybody
+needs_root_rights=yes
+EOF
+    echo "Configured $XWRAPPER for systemd-launched X"
+fi
+
 # Install stim2 service on first install only (never clobber existing config)
 if [ ! -f /etc/systemd/system/stim2.service ] && [ ! -f /etc/systemd/system/stim2-x11.service ]; then
     cp /usr/local/stim2/systemd/$STIM2_SVC /etc/systemd/system/

@@ -1,17 +1,21 @@
 [Unit]
 Description=Stim2 Stimulus Presentation (X11)
-After=systemd-user-sessions.service
+Conflicts=getty@tty1.service
+After=getty@tty1.service systemd-user-sessions.service
 
 [Service]
 Type=simple
+User=stim
 ExecStart=/usr/bin/xinit /usr/local/stim2/start-stim2.sh -- :0 vt1 -keeptty -noreset -s 0 -dpms
 Restart=always
 RestartSec=5
 CPUSchedulingPolicy=fifo
 CPUSchedulingPriority=50
+StandardOutput=journal
+StandardError=journal
 TTYPath=/dev/tty1
-StandardInput=tty
-StandardOutput=tty
+TTYReset=yes
+TTYVHangup=yes
 
 [Install]
 WantedBy=multi-user.target
