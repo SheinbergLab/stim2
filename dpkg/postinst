@@ -140,14 +140,18 @@ if [ ! -f /usr/local/dlsh/dlsh.zip ]; then
     fi
 fi
 
+# Map dpkg arch to the asset arch slug used in SheinbergLab/dserv releases.
+case "$ARCH" in
+    amd64) AGENT_ARCH="amd64" ;;
+    arm64) AGENT_ARCH="arm64" ;;
+    *) AGENT_ARCH="" ;;
+esac
+
 # Bootstrap dserv-agent only on standalone stim2 systems (no dserv)
-if ! dpkg -s dserv >/dev/null 2>&1 && ! command -v dserv-agent >/dev/null 2>&1; then
+if [ -n "$AGENT_ARCH" ] \
+   && ! dpkg -s dserv >/dev/null 2>&1 \
+   && ! command -v dserv-agent >/dev/null 2>&1; then
     echo "dserv-agent not found (standalone stim2), installing..."
-    case "$ARCH" in
-        amd64) AGENT_ARCH="amd64" ;;
-        arm64) AGENT_ARCH="arm64" ;;
-        *) echo "Unsupported architecture: $ARCH"; exit 0 ;;
-    esac
 
     AGENT_URL=$(curl -s https://api.github.com/repos/SheinbergLab/dserv/releases/latest \
         | grep "browser_download_url.*dserv-agent_linux_${AGENT_ARCH}" \
@@ -169,4 +173,38 @@ if ! dpkg -s dserv >/dev/null 2>&1 && ! command -v dserv-agent >/dev/null 2>&1; 
     else
         echo "Warning: could not determine dserv-agent download URL"
     fi
+fi
+
+# Bootstrap dservctl CLI from the same release. stim2-agent speaks the same
+# HTTP/WS API as dserv-agent, so dservctl works against either; the stimctl
+# shim below just points it at port 2580.
+if [ -n "$AGENT_ARCH" ] && ! command -v dservctl >/dev/null 2>&1; then
+    echo "dservctl not found, installing..."
+    DCTL_URL=$(curl -s https://api.github.com/repos/SheinbergLab/dserv/releases/latest \
+        | grep "browser_download_url.*dservctl_linux_${AGENT_ARCH}" \
+        | head -1 | cut -d'"' -f4)
+    if [ -n "$DCTL_URL" ]; then
+        curl -fSL "$DCTL_URL" -o /usr/local/bin/dservctl
+        chmod +x /usr/local/bin/dservctl
+        echo "Installed dservctl to /usr/local/bin/dservctl"
+    else
+        echo "Warning: could not determine dservctl download URL"
+    fi
+fi
+
+# Convenience wrapper: dservctl pointed at the local stim2-agent (:2580) and
+# auto-loading the agent's bearer token when the caller has permission to
+# read /etc/stim2-agent/env (typically only root).
+if [ -x /usr/local/bin/dservctl ] && [ ! -e /usr/local/bin/stimctl ]; then
+    cat > /usr/local/bin/stimctl <<'EOF'
+#!/bin/sh
+# stimctl: dservctl pointed at the local stim2-agent on port 2580.
+if [ -z "$DSERV_AGENT_TOKEN" ] && [ -r /etc/stim2-agent/env ]; then
+    DSERV_AGENT_TOKEN=$(grep -m1 '^DSERV_AGENT_TOKEN=' /etc/stim2-agent/env | cut -d= -f2-)
+    export DSERV_AGENT_TOKEN
+fi
+exec /usr/local/bin/dservctl --agent-port 2580 "$@"
+EOF
+    chmod +x /usr/local/bin/stimctl
+    echo "Installed stimctl wrapper to /usr/local/bin/stimctl"
 fi
