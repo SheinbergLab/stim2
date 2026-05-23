@@ -723,9 +723,14 @@ static int Box2DCreateBoxCmd(ClientData clientData, Tcl_Interp *interp,
 
   shapeDef.enableContactEvents = enableContact;
   shapeDef.enableHitEvents = enableHits;
+  /* Always enable sensor events: in Box2D 3.x, sensor overlap requires
+     enableSensorEvents=true on BOTH the sensor and the visitor shape
+     (see sensor.c:66). Defaulting to true on all shapes means any shape
+     can be a sensor visitor without explicit opt-in -- zero cost when
+     no sensors exist in the world. */
+  shapeDef.enableSensorEvents = true;
   if (isSensor) {
     shapeDef.isSensor = true;
-    shapeDef.enableSensorEvents = true;
   }
 
   b2CreatePolygonShape(bodyId, &shapeDef, &box);
@@ -816,9 +821,10 @@ static int Box2DCreateCircleCmd(ClientData clientData, Tcl_Interp *interp,
 
   shapeDef.enableContactEvents = enableContact;
   shapeDef.enableHitEvents = enableHits;
+  /* See createBox: enableSensorEvents must be true on visitor side too. */
+  shapeDef.enableSensorEvents = true;
   if (isSensor) {
     shapeDef.isSensor = true;
-    shapeDef.enableSensorEvents = true;
   }
 
   b2CreateCircleShape(bodyId, &shapeDef, &circle);
