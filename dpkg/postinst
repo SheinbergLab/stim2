@@ -9,8 +9,10 @@ ldconfig
 ARCH=$(dpkg --print-architecture)
 if [ "$ARCH" = "arm64" ]; then
     STIM2_SVC=stim2.service
+    STIM2_SVC_NAME=stim2
 else
     STIM2_SVC=stim2-x11.service
+    STIM2_SVC_NAME=stim2-x11
 fi
 
 # Detect first install vs upgrade (postinst is called as `postinst configure <old-version>`)
@@ -19,10 +21,44 @@ if [ "$1" = "configure" ] && [ -z "$2" ]; then
     FIRST_INSTALL=1
 fi
 
-# On first install of an X11-based system, create the stim user and configure
-# Xwrapper.config so xinit can launch the X server from a systemd unit.
-if [ "$FIRST_INSTALL" = "1" ] && [ "$STIM2_SVC" = "stim2-x11.service" ]; then
-    # Create a system user 'stim' to run the X session under
+# Render the stim2-agent components configuration with the platform's actual
+# unit name. The agent uses comp.Service to restart the right unit after a
+# component update and to whitelist start/stop/restart via its API. Re-rendered
+# on every configure so upgrades pick up template changes.
+mkdir -p /etc/stim2-agent
+if [ -f /usr/local/stim2/config/components.json ]; then
+    sed "s|\"service\": \"stim2\"|\"service\": \"$STIM2_SVC_NAME\"|g" \
+        /usr/local/stim2/config/components.json \
+        > /etc/stim2-agent/components.json
+fi
+
+# Generate an auth token for the agent on first install. Skip if an env file
+# already exists so admins can pre-seed their own token or leave auth off
+# deliberately. Print the token once so the admin can capture it.
+if [ ! -e /etc/stim2-agent/env ]; then
+    if command -v openssl >/dev/null 2>&1; then
+        TOKEN=$(openssl rand -hex 32)
+    else
+        TOKEN=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    fi
+    printf 'DSERV_AGENT_TOKEN=%s\n' "$TOKEN" > /etc/stim2-agent/env
+    chown root:root /etc/stim2-agent/env
+    chmod 600 /etc/stim2-agent/env
+    echo
+    echo "================================================================"
+    echo "stim2-agent auth token generated. Use it as a Bearer token:"
+    echo "  $TOKEN"
+    echo "Saved to /etc/stim2-agent/env (mode 600). Delete that file to"
+    echo "run the agent without authentication."
+    echo "================================================================"
+    echo
+fi
+
+# Ensure the 'stim' system user exists on X11-based systems. Runs on every
+# configure (idempotent) so upgrades from hand-crafted installs pick it up too,
+# which is what lets a later dpkg-reconfigure install the new User=stim unit
+# without failing on a missing account.
+if [ "$STIM2_SVC" = "stim2-x11.service" ]; then
     if ! getent passwd stim >/dev/null; then
         adduser --system --group --home /var/lib/stim \
             --shell /usr/sbin/nologin --gecos "stim2 stimulus presentation" stim
@@ -39,23 +75,43 @@ if [ "$FIRST_INSTALL" = "1" ] && [ "$STIM2_SVC" = "stim2-x11.service" ]; then
     # Ensure HOME exists with the right ownership (xinit writes .Xauthority here)
     mkdir -p /var/lib/stim
     chown stim:stim /var/lib/stim
+fi
 
-    # Configure Xwrapper so the non-console 'stim' user can start the X server.
-    # Trixie ships allowed_users=console which blocks systemd-launched xinit.
+# Configure Xwrapper so the non-console 'stim' user can start the X server.
+# Trixie ships allowed_users=console which blocks systemd-launched xinit.
+# First install only -- never clobber admin edits on upgrade.
+#
+# We use debconf preseeding so xserver-xorg-legacy's own postinst writes
+# allowed_users=Anybody. That value is package-owned and survives future
+# xserver-xorg-legacy upgrades cleanly. needs_root_rights isn't exposed via
+# debconf, so we sed-ensure it ourselves after dpkg-reconfigure runs.
+if [ "$FIRST_INSTALL" = "1" ] && [ "$STIM2_SVC" = "stim2-x11.service" ]; then
     XWRAPPER=/etc/X11/Xwrapper.config
     mkdir -p /etc/X11
     if [ -f "$XWRAPPER" ] && [ ! -f "$XWRAPPER.stim2-bak" ]; then
         cp "$XWRAPPER" "$XWRAPPER.stim2-bak"
         echo "Backed up existing $XWRAPPER to $XWRAPPER.stim2-bak"
     fi
-    cat > "$XWRAPPER" <<'EOF'
-# Written by stim2 postinst on first install. Original (if any) saved as
-# Xwrapper.config.stim2-bak. Edit freely; this file will not be overwritten
-# on upgrades.
-allowed_users=anybody
-needs_root_rights=yes
-EOF
-    echo "Configured $XWRAPPER for systemd-launched X"
+
+    if dpkg -s xserver-xorg-legacy >/dev/null 2>&1 \
+       && command -v debconf-set-selections >/dev/null 2>&1; then
+        echo "xserver-xorg-legacy xserver-xorg-legacy/xwrapper/allowed_users select Anybody" \
+            | debconf-set-selections
+        DEBIAN_FRONTEND=noninteractive dpkg-reconfigure -f noninteractive xserver-xorg-legacy
+        echo "Set Xwrapper allowed_users=anybody via debconf"
+    else
+        # Fallback: write the file directly (xserver-xorg-legacy missing/old)
+        printf 'allowed_users=anybody\n' > "$XWRAPPER"
+        echo "Wrote allowed_users=anybody to $XWRAPPER (debconf path unavailable)"
+    fi
+
+    # Ensure needs_root_rights=yes is set. Append if missing, replace if present.
+    if [ -f "$XWRAPPER" ] && grep -q '^needs_root_rights=' "$XWRAPPER"; then
+        sed -i 's/^needs_root_rights=.*/needs_root_rights=yes/' "$XWRAPPER"
+    else
+        printf 'needs_root_rights=yes\n' >> "$XWRAPPER"
+    fi
+    echo "Ensured needs_root_rights=yes in $XWRAPPER"
 fi
 
 # Install stim2 service on first install only (never clobber existing config)
@@ -103,7 +159,9 @@ if ! dpkg -s dserv >/dev/null 2>&1 && ! command -v dserv-agent >/dev/null 2>&1; 
         echo "Installed dserv-agent to /usr/local/bin/dserv-agent"
 
         if [ ! -f /etc/systemd/system/stim2-agent.service ]; then
-            cp /usr/local/stim2/systemd/stim2-agent.service /etc/systemd/system/
+            sed "s|__STIM2_SERVICE__|$STIM2_SVC_NAME|g" \
+                /usr/local/stim2/systemd/stim2-agent.service \
+                > /etc/systemd/system/stim2-agent.service
             systemctl daemon-reload
             systemctl enable stim2-agent
             systemctl start stim2-agent

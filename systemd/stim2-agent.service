@@ -1,11 +1,12 @@
 [Unit]
 Description=stim2 Management Agent
-After=network.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/dserv-agent --service stim2-x11 --no-tls --allow-reboot --components /usr/local/stim2/config/components.json
+ExecStart=/usr/local/bin/dserv-agent --listen :2580 --service __STIM2_SERVICE__ --no-tls --allow-reboot --components /etc/stim2-agent/components.json
 Restart=always
 RestartSec=5
 ProtectHome=read-only
