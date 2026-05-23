@@ -764,7 +764,7 @@ static int Box2DCreateCircleCmd(ClientData clientData, Tcl_Interp *interp,
   char *name = NULL;
   Tcl_HashEntry *entryPtr;
   int newentry;
-  double x, y, r;
+  double x, y, r, angle;
   int bodyType;
   int enableContact = true;
   int enableHits = false;
@@ -772,7 +772,7 @@ static int Box2DCreateCircleCmd(ClientData clientData, Tcl_Interp *interp,
 
   if (argc < 7) {
     Tcl_AppendResult(interp, "usage: ", argv[0],
-		     " world name type x y r [isSensor]", NULL);
+		     " world name type x y r [angle] [isSensor]", NULL);
     return TCL_ERROR;
   }
 
@@ -795,9 +795,13 @@ static int Box2DCreateCircleCmd(ClientData clientData, Tcl_Interp *interp,
   }
 
   if (argc > 7) {
-    if (Tcl_GetInt(interp, argv[7], &isSensor) != TCL_OK) return TCL_ERROR;
+    if (Tcl_GetDouble(interp, argv[7], &angle) != TCL_OK) return TCL_ERROR;
   }
+  else angle = 0.0;
 
+  if (argc > 8) {
+    if (Tcl_GetInt(interp, argv[8], &isSensor) != TCL_OK) return TCL_ERROR;
+  }
 
   userdata = (BOX2D_USERDATA *) calloc(1, sizeof(BOX2D_USERDATA));
   userdata->world = bw;
@@ -805,6 +809,7 @@ static int Box2DCreateCircleCmd(ClientData clientData, Tcl_Interp *interp,
   b2BodyDef bodyDef = b2DefaultBodyDef();
   bodyDef.type = (b2BodyType) bodyType;
   bodyDef.position = (b2Vec2){x, y};
+  bodyDef.rotation = b2MakeRot(angle);
   bodyDef.angularDamping = .05;
   bodyDef.linearDamping = .05;
 
