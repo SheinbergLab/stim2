@@ -118,7 +118,11 @@ fi
 if [ ! -f /etc/systemd/system/stim2.service ] && [ ! -f /etc/systemd/system/stim2-x11.service ]; then
     cp /usr/local/stim2/systemd/$STIM2_SVC /etc/systemd/system/
     echo "Installed $STIM2_SVC (not enabled)"
-    systemctl daemon-reload
+    # /run/systemd/system only exists when systemd is the running init system.
+    # Skip systemctl calls in build/CI containers where dbus/systemd aren't up.
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload
+    fi
 fi
 
 # Bootstrap dlsh if not already installed
@@ -166,9 +170,11 @@ if [ -n "$AGENT_ARCH" ] \
             sed "s|__STIM2_SERVICE__|$STIM2_SVC_NAME|g" \
                 /usr/local/stim2/systemd/stim2-agent.service \
                 > /etc/systemd/system/stim2-agent.service
-            systemctl daemon-reload
-            systemctl enable stim2-agent
-            systemctl start stim2-agent
+            if [ -d /run/systemd/system ]; then
+                systemctl daemon-reload
+                systemctl enable stim2-agent
+                systemctl start stim2-agent
+            fi
         fi
     else
         echo "Warning: could not determine dserv-agent download URL"
