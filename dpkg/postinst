@@ -32,27 +32,11 @@ if [ -f /usr/local/stim2/config/components.json ]; then
         > /etc/stim2-agent/components.json
 fi
 
-# Generate an auth token for the agent on first install. Skip if an env file
-# already exists so admins can pre-seed their own token or leave auth off
-# deliberately. Print the token once so the admin can capture it.
-if [ ! -e /etc/stim2-agent/env ]; then
-    if command -v openssl >/dev/null 2>&1; then
-        TOKEN=$(openssl rand -hex 32)
-    else
-        TOKEN=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-    fi
-    printf 'DSERV_AGENT_TOKEN=%s\n' "$TOKEN" > /etc/stim2-agent/env
-    chown root:root /etc/stim2-agent/env
-    chmod 600 /etc/stim2-agent/env
-    echo
-    echo "================================================================"
-    echo "stim2-agent auth token generated. Use it as a Bearer token:"
-    echo "  $TOKEN"
-    echo "Saved to /etc/stim2-agent/env (mode 600). Delete that file to"
-    echo "run the agent without authentication."
-    echo "================================================================"
-    echo
-fi
+# Note: the agent runs unauthenticated by default to keep the bundled web UI
+# working (its WebSocket client doesn't carry a Bearer token). If you want
+# auth on this box, drop a DSERV_AGENT_TOKEN=... line into /etc/stim2-agent/env
+# (mode 600) and restart stim2-agent -- the EnvironmentFile=- in the unit
+# makes the file optional, so its presence enables auth.
 
 # Ensure the 'stim' system user exists on X11-based systems. Runs on every
 # configure (idempotent) so upgrades from hand-crafted installs pick it up too,
@@ -204,12 +188,12 @@ fi
 if [ -x /usr/local/bin/dservctl ] && [ ! -e /usr/local/bin/stimctl ]; then
     cat > /usr/local/bin/stimctl <<'EOF'
 #!/bin/sh
-# stimctl: dservctl pointed at the local stim2-agent on port 2580.
+# stimctl: dservctl pointed at the local stim2-agent (default port 80).
 if [ -z "$DSERV_AGENT_TOKEN" ] && [ -r /etc/stim2-agent/env ]; then
     DSERV_AGENT_TOKEN=$(grep -m1 '^DSERV_AGENT_TOKEN=' /etc/stim2-agent/env | cut -d= -f2-)
     export DSERV_AGENT_TOKEN
 fi
-exec /usr/local/bin/dservctl --agent-port 2580 "$@"
+exec /usr/local/bin/dservctl "$@"
 EOF
     chmod +x /usr/local/bin/stimctl
     echo "Installed stimctl wrapper to /usr/local/bin/stimctl"
