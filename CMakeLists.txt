@@ -451,7 +451,19 @@ else()
         set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
     endif()
     
-    set(_STIM2_DEB_DEPS_BASE "zlib1g, libc6, libdecor-0-0, libegl1, libglx0, libopengl0, libwayland-client0, libwayland-cursor0, libwayland-egl1, libx11-6, libx11-xcb1, libxcursor1, libxext6, libxi6, libxinerama1, libxkbcommon0, libxrandr2, libxrender1, mesa-utils, libgl1-mesa-dri, libegl-mesa0, libopenal1, libfreetype6, cage, curl, mpv, xinit, xserver-xorg-legacy, x11-xserver-utils")
+    # Common runtime deps (every stim2 build needs these).
+    set(_STIM2_DEB_DEPS_BASE "zlib1g, libc6, libdecor-0-0, libegl1, libglx0, libopengl0, libwayland-client0, libwayland-cursor0, libwayland-egl1, libx11-6, libx11-xcb1, libxcursor1, libxext6, libxi6, libxinerama1, libxkbcommon0, libxrandr2, libxrender1, mesa-utils, libgl1-mesa-dri, libegl-mesa0, libopenal1, libfreetype6, curl, mpv")
+
+    # Display-server deps differ by arch: arm64 (RPi etc.) boots stim2 under
+    # cage/Wayland on tty1; amd64 still uses xinit + Xorg legacy. We don't
+    # cross-list these because xinit/xserver-xorg-legacy aren't installable
+    # on some RPi OS variants, and cage on a headless amd64 server is dead
+    # weight.
+    if(PACKAGE_ARCH STREQUAL "arm64")
+        set(_STIM2_DEB_DEPS_DISPLAY "cage")
+    else()
+        set(_STIM2_DEB_DEPS_DISPLAY "xinit, xserver-xorg-legacy, x11-xserver-utils")
+    endif()
 
     # libtcl9.0 only ships as an apt package from Debian Trixie onwards. On
     # older distros (Bookworm, Jammy) and Ubuntu releases that predate Tcl 9
@@ -461,10 +473,12 @@ else()
     set(_STIM2_DISTROS_WITH_TCL9 "trixie" "")
     list(FIND _STIM2_DISTROS_WITH_TCL9 "${DISTRO_SUFFIX}" _STIM2_TCL9_IDX)
     if(_STIM2_TCL9_IDX GREATER_EQUAL 0)
-        set(CPACK_DEBIAN_PACKAGE_DEPENDS "${_STIM2_DEB_DEPS_BASE}, libtcl9.0")
+        set(_STIM2_DEB_DEPS_TCL ", libtcl9.0")
     else()
-        set(CPACK_DEBIAN_PACKAGE_DEPENDS "${_STIM2_DEB_DEPS_BASE}")
+        set(_STIM2_DEB_DEPS_TCL "")
     endif()
+
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS "${_STIM2_DEB_DEPS_BASE}, ${_STIM2_DEB_DEPS_DISPLAY}${_STIM2_DEB_DEPS_TCL}")
     set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA ${CMAKE_CURRENT_SOURCE_DIR}/dpkg/postinst)
     
     install(TARGETS stim2 DESTINATION "/usr/local/stim2")
