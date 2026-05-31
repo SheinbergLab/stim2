@@ -48,6 +48,14 @@ def string_scalar(d, key):
     return v.decode() if isinstance(v, bytes) else str(v)
 
 
+def rel_deg(theta_rad, ref_rad):
+    """Angle(s) relative to a reference, wrapped to [-180, 180] degrees.
+    Used to plot direction relative to the trial's seed θ₀ so the seed
+    pulses sit near 0 and the probe sits at ±90 (or off-axis)."""
+    d = np.asarray(theta_rad) - ref_rad
+    return np.degrees(np.arctan2(np.sin(d), np.cos(d)))
+
+
 def load_recording(target_path, bg_path, patch_dva):
     """Load a (target, bg) recording pair into a flat dict of arrays
     aligned so that t=0 corresponds to the moment of drop, not to
@@ -86,17 +94,57 @@ def load_recording(target_path, bg_path, patch_dva):
     # two regimes without dropping legitimate trough samples.
     speed_arr = np.asarray(T['speed']) * patch_dva
     keep = speed_arr > 0.5      # dva/sec
+
+    # Direction channels. dir_cmd = per-frame commanded patch direction.
+    #
+    # dir_realized = the INDEPENDENT realized motion direction, recovered
+    # from the dots' frame-to-frame displacement (dot_x/dot_y). Note that
+    # `dot_theta` in the log is stored RELATIVE to the commanded direction
+    # (coherent dots = 0), so a circular mean of dot_theta would trivially
+    # reproduce the command — not an independent check. Displacement is
+    # the genuine measurement: coherent dots physically translate in the
+    # commanded direction (~speed·dt per frame), while respawns (lifetime
+    # turnover) jump O(patch) and are rejected by a global magnitude
+    # cutoff. Frames with too few surviving coherent displacements (troughs,
+    # 0%-coherence probes) are left NaN — direction is only carried during
+    # coherent pulses.
+    dir_cmd = np.asarray(T['direction'])[keep] if 'direction' in T else None
+    if ('dot_x' in T) and ('dot_y' in T) and ('dot_coherent' in T):
+        X = np.asarray(T['dot_x']); Y = np.asarray(T['dot_y'])
+        C = np.asarray(T['dot_coherent']) > 0
+        dX = X[1:] - X[:-1]; dY = Y[1:] - Y[:-1]    # (nframes-1, ndots)
+        both = C[1:] & C[:-1]                       # coherent across the pair
+        mag  = np.hypot(dX, dY)
+        valid_mag = mag[both & (mag > 0)]
+        thr = 5.0 * float(np.median(valid_mag)) if valid_mag.size else np.inf
+        use = both & (mag > 0) & (mag < thr)        # drop respawn jumps
+        ang = np.arctan2(dY, dX)
+        ss = np.where(use, np.sin(ang), 0.0).sum(axis=1)
+        cs = np.where(use, np.cos(ang), 0.0).sum(axis=1)
+        nuse = use.sum(axis=1)
+        realized = np.arctan2(ss, cs)
+        realized[nuse < 5] = np.nan
+        realized = np.concatenate([realized, [np.nan]])   # align to nframes
+        dir_realized = realized[keep]
+        dir_ncoh     = C.sum(axis=1)[keep]
+    else:
+        dir_realized = None
+        dir_ncoh     = None
+
     return {
-        't':         ((t_t_ms - t0_ms) / 1000.0)[keep],
-        'coh':       np.asarray(T['coherence'])[keep],
-        'speed':     speed_arr[keep],
-        'life':      np.asarray(T['lifetime_s'])[keep],
-        'mox_dva':   (mox * patch_dva)[keep],
-        'moy_dva':   (moy * patch_dva)[keep],
-        'b_t':       ((b_t_ms - t0_ms) / 1000.0)[keep],
-        'b_speed':   (np.asarray(B['speed']) * patch_dva)[keep],
-        'b_life':    np.asarray(B['lifetime_s'])[keep],
-        'drop_idx':  drop_idx,
+        't':            ((t_t_ms - t0_ms) / 1000.0)[keep],
+        'coh':          np.asarray(T['coherence'])[keep],
+        'speed':        speed_arr[keep],
+        'life':         np.asarray(T['lifetime_s'])[keep],
+        'mox_dva':      (mox * patch_dva)[keep],
+        'moy_dva':      (moy * patch_dva)[keep],
+        'b_t':          ((b_t_ms - t0_ms) / 1000.0)[keep],
+        'b_speed':      (np.asarray(B['speed']) * patch_dva)[keep],
+        'b_life':       np.asarray(B['lifetime_s'])[keep],
+        'dir_cmd':      dir_cmd,
+        'dir_realized': dir_realized,
+        'dir_ncoh':     dir_ncoh,
+        'drop_idx':     drop_idx,
     }
 
 
@@ -156,6 +204,11 @@ def main():
     d_cumE_c = np.asarray(D['cum_energy_continuous'])
     d_tiles  = np.asarray(D['tile_times'])
 
+    # Direction reference (mp_pulsed designs): per-frame commanded
+    # direction + the trial's seed θ₀, used by the direction panel.
+    d_dir  = np.asarray(D['direction']) if 'direction' in D else None
+    theta0 = scalar(D, 'seed_direction_rad') if 'seed_direction_rad' in D else 0.0
+
     patch_dva    = scalar(D, 'patch_size_dva')
     surround_dva = scalar(D, 'surround_speed_dva')
     bg_lifetime  = scalar(D, 'bg_lifetime')
@@ -209,7 +262,15 @@ def main():
         p.error('provide either (--target --bg) or one/both of '
                 '(--continuous T B) (--pulsed T B) (--peak D T B) (--trough D T B)')
 
-    fig, axes = plt.subplots(5, 1, figsize=(13, 14), sharex=True)
+    # Add a direction panel (F) when direction data is available — either
+    # the design's commanded trace or any recording's per-dot channels.
+    want_dir = (d_dir is not None) or any(
+        (r.get('dir_cmd') is not None) or (r.get('dir_realized') is not None)
+        for (_l, _c, _m, r, _bt, _bp) in recordings)
+    n_panels = 6 if want_dir else 5
+    fig, axes = plt.subplots(n_panels, 1,
+                             figsize=(13, 14 if n_panels == 5 else 16.5),
+                             sharex=True)
     # Build a list of distinct (bounce_t, color, label) entries so the
     # vertical-line annotation can show one per condition, color-matched
     # to the recording markers.
@@ -319,10 +380,46 @@ def main():
             label=f'pulsed (final = {energy_ratio*100:.1f}% of continuous)')
     mark_pulses(ax)
     ax.set_ylabel('cumulative motion-energy (s)')
-    ax.set_xlabel('time (s)')
     ax.legend(loc='upper left', fontsize='x-small')
     ax.set_title('E. delivered motion-energy budget vs continuous',
                  fontsize=10)
+
+    # F: direction, relative to the trial's seed θ₀. Shows the commanded
+    # schedule (design + recorded) and the REALIZED motion direction
+    # recovered from dot displacement (independent of the command). Seeds
+    # should wobble near 0 (within ±seed_jitter); the probe sits at +90
+    # (predicted) / −90 (violation) / off-axis (uniform_other). Realized
+    # points appear only during coherent pulses — troughs and
+    # 0%-coherence probes leave gaps, confirming direction is carried
+    # only when coherence is up.
+    if want_dir:
+        ax = axes[5]
+        for yref in (0.0, 90.0, -90.0):
+            ax.axhline(yref, color='C7', linestyle=':', alpha=0.45,
+                       linewidth=0.8)
+        if d_dir is not None:
+            ax.plot(d_t, rel_deg(d_dir, theta0), color='C8', linewidth=1.2,
+                    alpha=0.7, label='design (commanded)')
+        for (label, color, marker, r, bt, bp) in recordings:
+            if r.get('dir_cmd') is not None:
+                ax.plot(r['t'], rel_deg(r['dir_cmd'], theta0), '-',
+                        color=color, alpha=0.35, linewidth=0.8,
+                        label=f'cmd ({label})')
+            if r.get('dir_realized') is not None:
+                ax.plot(r['t'], rel_deg(r['dir_realized'], theta0), marker,
+                        markersize=3, color=color, alpha=0.85,
+                        label=f'realized (dot displacement, {label})')
+        mark_pulses(ax)
+        ax.set_ylabel('direction re seed (deg)')
+        ax.set_ylim(-180, 180)
+        ax.set_yticks([-180, -90, 0, 90, 180])
+        ax.legend(loc='upper right', fontsize='x-small', ncol=2)
+        ax.set_title('F. direction: commanded vs realized (dot displacement) '
+                     '— seeds wobble ~0; probe at ±90 or off-axis',
+                     fontsize=10)
+
+    # x-label only on the bottom panel (sharex).
+    axes[-1].set_xlabel('time (s)')
 
     fig.tight_layout(rect=[0, 0, 1, 0.97])
     fig.savefig(args.out, dpi=150)
