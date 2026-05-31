@@ -36,6 +36,11 @@ typedef struct {
   int maxobjs;
   int nobjs;
   int increment;
+  int visiting;	     /* re-entrancy guard: a metagroup may legally (but
+		        pathologically) contain itself or form a cycle
+		        (a->b->a); every recursive traversal below sets
+		        this on entry and skips if already set, so a cycle
+		        breaks instead of overflowing the stack. */
 } METAGROUP;
 
 static int MetagroupID = -1;	/* unique object id */
@@ -83,7 +88,9 @@ void metagroupTimer(GR_OBJ *o)
   int i, id;
   METAGROUP *mg = (METAGROUP *) GR_CLIENTDATA(o);
   GR_OBJ *g;
-  
+
+  if (mg->visiting) return;
+  mg->visiting = 1;
   for (i = 0; i < mg->nobjs; i++) {
     id = mg->objects[i];
     if (id >= 0 && id < OL_NOBJS(mg->objlist)) {
@@ -91,6 +98,7 @@ void metagroupTimer(GR_OBJ *o)
       if (g && GR_VISIBLE(g) && GR_TIMERFUNCP(g)) GR_TIMERFUNC(g)(g);
     }
   }
+  mg->visiting = 0;
 }
 
 /*
@@ -118,6 +126,9 @@ void metagroupDraw(GR_OBJ *o)
   METAGROUP *mg = (METAGROUP *) GR_CLIENTDATA(o);
   GR_OBJ *g;
   float modelmatrix[16];
+
+  if (mg->visiting) return;
+  mg->visiting = 1;
 
   /* Sort by priority (stable - preserves insertion order for equal priorities) */
   if (mg->nobjs > 1) {
@@ -163,6 +174,7 @@ void metagroupDraw(GR_OBJ *o)
       stimPutMatrix(STIM_MODELVIEW_MATRIX, modelmatrix);
     }
   }
+  mg->visiting = 0;
 }
 
 void metagroupUpdate(GR_OBJ *o)
@@ -171,6 +183,8 @@ void metagroupUpdate(GR_OBJ *o)
   METAGROUP *mg = (METAGROUP *) GR_CLIENTDATA(o);
   GR_OBJ *g;
 
+  if (mg->visiting) return;
+  mg->visiting = 1;
   for (i = 0; i < mg->nobjs; i++) {
     id = mg->objects[i];
     if (id >= 0 && id < OL_NOBJS(mg->objlist)) {
@@ -178,6 +192,7 @@ void metagroupUpdate(GR_OBJ *o)
       if (g && GR_UPDATEFUNCP(g)) GR_UPDATEFUNC(g)(g);
     }
   }
+  mg->visiting = 0;
 }
 
 /*
@@ -193,6 +208,8 @@ void metagroupFrameScripts(GR_OBJ *o, int phase)
   METAGROUP *mg = (METAGROUP *) GR_CLIENTDATA(o);
   GR_OBJ *g;
 
+  if (mg->visiting) return;
+  mg->visiting = 1;
   for (i = 0; i < mg->nobjs; i++) {
     id = mg->objects[i];
     if (id >= 0 && id < OL_NOBJS(mg->objlist)) {
@@ -200,6 +217,7 @@ void metagroupFrameScripts(GR_OBJ *o, int phase)
       if (g) executeObjFrameScripts(g, phase);
     }
   }
+  mg->visiting = 0;
 }
 
 void metagroupReset(GR_OBJ *o)
@@ -207,7 +225,9 @@ void metagroupReset(GR_OBJ *o)
   int i, id;
   METAGROUP *mg = (METAGROUP *) GR_CLIENTDATA(o);
   GR_OBJ *g;
-  
+
+  if (mg->visiting) return;
+  mg->visiting = 1;
   for (i = 0; i < mg->nobjs; i++) {
     id = mg->objects[i];
     if (id >= 0 && id < OL_NOBJS(mg->objlist)) {
@@ -215,6 +235,7 @@ void metagroupReset(GR_OBJ *o)
       if (g && GR_RESETFUNCP(g)) GR_RESETFUNC(g)(g);
     }
   }
+  mg->visiting = 0;
 }
 
 void metagroupDelete(GR_OBJ *g) 
