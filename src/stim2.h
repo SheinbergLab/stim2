@@ -285,6 +285,12 @@ typedef struct _grobj {
   TIMER_FUNC timerfunc;	        /* user defined timer function      */
   IDLE_FUNC idlefunc;		/* a function to run when idle      */
   OFF_FUNC offfunc;		/* run when stim is turned off      */
+  /* Container hook: drain contained objects' postframe/thisframe
+     queues. Set by aggregate object types (e.g. metagroup) so the
+     central frame-script drain recurses into members. phase is
+     STIM_POSTFRAME_SCRIPT or STIM_THISFRAME_SCRIPT. NULL for leaf
+     objects (calloc-zeroed at creation). */
+  void (*framescriptfunc)(struct _grobj *, int);
   void *clientData;		/* user defined client data         */
   char objtype;			/* object id type                   */
   char *pre_scripts[MAXSCRIPTS];/* scripts to run before each draw  */
@@ -347,6 +353,8 @@ typedef struct _grobj {
 #define GR_IDLEFUNCP(o)    ((o)->idlefunc)
 #define GR_OFFFUNC(o)      (*((o)->offfunc))
 #define GR_OFFFUNCP(o)     ((o)->offfunc)
+#define GR_FRAMESCRIPTFUNC(o)  (*((o)->framescriptfunc))
+#define GR_FRAMESCRIPTFUNCP(o) ((o)->framescriptfunc)
 #define GR_CLIENTDATA(o)   ((o)->clientData)
 
 #define GR_N_PRE_SCRIPTS(o) ((o)->n_pre_scripts)
@@ -449,6 +457,10 @@ int  gobjAddPreScript(GR_OBJ *obj, char *script);
 int  gobjAddPostScript(GR_OBJ *obj, char *script);
 int  gobjAddPostFrameScript(GR_OBJ *obj, char *script);
 int  gobjAddThisFrameScript(GR_OBJ *obj, char *script);
+/* Drain one object's postframe/thisframe queue (phase =
+   STIM_POSTFRAME_SCRIPT / STIM_THISFRAME_SCRIPT), then recurse into any
+   container members via the object's framescriptfunc. */
+void executeObjFrameScripts(GR_OBJ *o, int phase);
   
 int  gobjActivatePreScript(GR_OBJ *obj, int slot);
 int  gobjActivatePostScript(GR_OBJ *obj, int slot);
