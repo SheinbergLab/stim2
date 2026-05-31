@@ -423,6 +423,43 @@ void updateTimes(void)
 }
 
 
+/*
+ * Drain one object's frame-script queue for the given phase
+ * (STIM_POSTFRAME_SCRIPT or STIM_THISFRAME_SCRIPT), then recurse into
+ * any container members via the object's framescriptfunc hook.
+ *
+ * postframe queue is persistent (re-run every frame until removed);
+ * thisframe queue is one-shot (drained, executed, freed, and the count
+ * zeroed so it can be re-armed). Container objects (e.g. metagroup) set
+ * GR_FRAMESCRIPTFUNCP so members' queues are drained too -- without that
+ * hook the central per-group loop only sees top-level objects, and a
+ * frame script queued onto a metagroup *member* would never fire.
+ */
+void executeObjFrameScripts(GR_OBJ *o, int phase)
+{
+  if (!o) return;
+
+  if (phase == STIM_POSTFRAME_SCRIPT) {
+    executeScripts(GR_POSTFRAME_SCRIPTS(o),
+                   GR_POSTFRAME_SCRIPT_ACTIVES(o),
+                   GR_N_POSTFRAME_SCRIPTS(o));
+  } else { /* STIM_THISFRAME_SCRIPT: one-shot */
+    int j, n;
+    char *thisframe_scripts[MAXSCRIPTS];
+    for (j = 0, n = 0; j < GR_N_THISFRAME_SCRIPTS(o); j++) {
+      thisframe_scripts[n++] = GR_THISFRAME_SCRIPT(o, j);
+    }
+    GR_N_THISFRAME_SCRIPTS(o) = 0;
+    for (j = 0; j < n; j++) {
+      sendTclCommand(thisframe_scripts[j]);
+      free(thisframe_scripts[j]);
+    }
+  }
+
+  /* Recurse into container members (metagroup, etc.) */
+  if (GR_FRAMESCRIPTFUNCP(o)) GR_FRAMESCRIPTFUNC(o)(o, phase);
+}
+
 void executePostFrameScripts(OBJ_GROUP *g)
 {
   GR_OBJ *o;
@@ -430,37 +467,22 @@ void executePostFrameScripts(OBJ_GROUP *g)
 
   for (i = 0; i < OG_NOBJS(g); i++)  {
     o = OL_OBJ(OBJList, OG_OBJID(g, i));
-    if (o) {
-      executeScripts(GR_POSTFRAME_SCRIPTS(o),
-             GR_POSTFRAME_SCRIPT_ACTIVES(o),
-             GR_N_POSTFRAME_SCRIPTS(o));
-    }
+    if (o) executeObjFrameScripts(o, STIM_POSTFRAME_SCRIPT);
   }
 }
 
 /*
  * These are oneshot scripts
- * Ensure that they can be re-armed 
+ * Ensure that they can be re-armed
  */
 void executeThisFrameScripts(OBJ_GROUP *g)
 {
   GR_OBJ *o;
-  int i, j, n;
-  
-  char *thisframe_scripts[MAXSCRIPTS];
+  int i;
 
   for (i = 0; i < OG_NOBJS(g); i++)  {
     o = OL_OBJ(OBJList, OG_OBJID(g, i));
-    if (o) {
-      for (j = 0, n = 0; j < GR_N_THISFRAME_SCRIPTS(o); j++) {
-    thisframe_scripts[n++] = GR_THISFRAME_SCRIPT(o, j);
-      }
-      GR_N_THISFRAME_SCRIPTS(o) = 0;
-      for (j = 0; j < n; j++) {
-    sendTclCommand(thisframe_scripts[j]);
-    free(thisframe_scripts[j]);
-      }
-    }
+    if (o) executeObjFrameScripts(o, STIM_THISFRAME_SCRIPT);
   }
 }
 
