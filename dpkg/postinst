@@ -36,7 +36,11 @@ fi
 # working (its WebSocket client doesn't carry a Bearer token). If you want
 # auth on this box, drop a DSERV_AGENT_TOKEN=... line into /etc/stim2-agent/env
 # (mode 600) and restart stim2-agent -- the EnvironmentFile=- in the unit
-# makes the file optional, so its presence enables auth.
+# makes the file optional, so its presence enables auth. To turn auth back
+# off, remove /etc/stim2-agent/env and restart stim2-agent; clients then need
+# no token (and the bundled web UI's tokenless WebSocket works again). Note
+# dservctl reads its own token from ~/.dservctl / DSERV_AGENT_TOKEN, so clear
+# those too when disabling auth to avoid a stale mismatch.
 
 # Ensure the 'stim' system user exists on X11-based systems. Runs on every
 # configure (idempotent) so upgrades from hand-crafted installs pick it up too,
@@ -167,7 +171,7 @@ fi
 
 # Bootstrap dservctl CLI from the same release. stim2-agent speaks the same
 # HTTP/WS API as dserv-agent, so dservctl works against either; the stimctl
-# shim below just points it at port 2580.
+# shim below just wraps it for the local agent (default port 80).
 if [ -n "$AGENT_ARCH" ] && ! command -v dservctl >/dev/null 2>&1; then
     echo "dservctl not found, installing..."
     DCTL_URL=$(curl -s https://api.github.com/repos/SheinbergLab/dserv/releases/latest \
@@ -182,9 +186,11 @@ if [ -n "$AGENT_ARCH" ] && ! command -v dservctl >/dev/null 2>&1; then
     fi
 fi
 
-# Convenience wrapper: dservctl pointed at the local stim2-agent (:2580) and
-# auto-loading the agent's bearer token when the caller has permission to
-# read /etc/stim2-agent/env (typically only root).
+# Convenience wrapper: dservctl pointed at the local stim2-agent (default
+# port 80) and auto-loading the agent's bearer token when the caller has
+# permission to read /etc/stim2-agent/env (typically only root). When the
+# agent runs unauthenticated (no env file) the token is simply absent and
+# the wrapper still works.
 if [ -x /usr/local/bin/dservctl ] && [ ! -e /usr/local/bin/stimctl ]; then
     cat > /usr/local/bin/stimctl <<'EOF'
 #!/bin/sh
