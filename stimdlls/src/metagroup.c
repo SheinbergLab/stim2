@@ -170,12 +170,34 @@ void metagroupUpdate(GR_OBJ *o)
   int i, id;
   METAGROUP *mg = (METAGROUP *) GR_CLIENTDATA(o);
   GR_OBJ *g;
-  
+
   for (i = 0; i < mg->nobjs; i++) {
     id = mg->objects[i];
     if (id >= 0 && id < OL_NOBJS(mg->objlist)) {
       g = OL_OBJ(mg->objlist,id);
       if (g && GR_UPDATEFUNCP(g)) GR_UPDATEFUNC(g)(g);
+    }
+  }
+}
+
+/*
+ * Drain each member's postframe/thisframe queue (and recurse into nested
+ * metagroups, since executeObjFrameScripts re-invokes this hook). The
+ * central drain in stim2 only walks top-level group objects; this is what
+ * lets a postframe/thisframe script attached to an object *inside* a
+ * metagroup actually fire.
+ */
+void metagroupFrameScripts(GR_OBJ *o, int phase)
+{
+  int i, id;
+  METAGROUP *mg = (METAGROUP *) GR_CLIENTDATA(o);
+  GR_OBJ *g;
+
+  for (i = 0; i < mg->nobjs; i++) {
+    id = mg->objects[i];
+    if (id >= 0 && id < OL_NOBJS(mg->objlist)) {
+      g = OL_OBJ(mg->objlist, id);
+      if (g) executeObjFrameScripts(g, phase);
     }
   }
 }
@@ -220,6 +242,7 @@ int metagroupCreate(OBJ_LIST *objlist)
   GR_UPDATEFUNCP(obj) = metagroupUpdate;
   GR_RESETFUNCP(obj) = metagroupReset;
   GR_TIMERFUNCP(obj) = metagroupTimer;
+  GR_FRAMESCRIPTFUNCP(obj) = metagroupFrameScripts;
  
   g = (METAGROUP *) calloc(1, sizeof(METAGROUP));
   GR_CLIENTDATA(obj) = g;
