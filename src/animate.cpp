@@ -309,9 +309,27 @@ void animateUpdateObj(GR_OBJ *obj, unsigned int ticks_ms, unsigned int dt_ms)
             
         case ANIM_POSITION:
             {
-                if (prop->speed != 0 && prop->amplitude != 0) {
+                if (prop->pos_oscillate) {
+                    /* Back-and-forth oscillation about a centre, along an axis.
+                       Sine = smooth-pursuit target; triangle = constant-velocity
+                       (step-ramp) target. */
+                    float ph = (prop->perframe ? prop->osc_freq * frame
+                                               : prop->osc_freq * t) + prop->phase;
+                    float s;
+                    if (prop->waveform == 1) {
+                        float u = ph - floorf(ph);          /* 0..1 */
+                        s = 1.0f - 4.0f * fabsf(u - 0.5f);  /* triangle -1..1 */
+                    } else {
+                        s = sinf(ph * 2.0f * M_PI);         /* sine -1..1 */
+                    }
+                    float d = prop->osc_amp * s;
+                    gobjTranslateObj(obj,
+                                     prop->ox + d * prop->ax,
+                                     prop->oy + d * prop->ay,
+                                     prop->oz + d * prop->az);
+                } else if (prop->speed != 0 && prop->amplitude != 0) {
                     /* Orbital motion */
-                    float angle_rad = (prop->perframe ? prop->speed * frame : prop->speed * t) 
+                    float angle_rad = (prop->perframe ? prop->speed * frame : prop->speed * t)
                                       * M_PI / 180.0f;
                     float x = prop->amplitude * cosf(angle_rad);
                     float y = prop->amplitude * sinf(angle_rad);
@@ -731,11 +749,21 @@ static void positionToResult(Tcl_Interp *interp, AnimProperty *prop)
     Tcl_ListObjAppendElement(interp, vel, Tcl_NewDoubleObj(prop->vz));
     Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("velocity", -1), vel);
     
-    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("orbit", -1), 
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("orbit", -1),
                    Tcl_NewDoubleObj(prop->speed));
-    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("radius", -1), 
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("radius", -1),
                    Tcl_NewDoubleObj(prop->amplitude));
-    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("perframe", -1), 
+
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("oscillate", -1),
+                   Tcl_NewIntObj(prop->pos_oscillate));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("amplitude", -1),
+                   Tcl_NewDoubleObj(prop->osc_amp));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("freq", -1),
+                   Tcl_NewDoubleObj(prop->osc_freq));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("waveform", -1),
+                   Tcl_NewStringObj(prop->waveform == 1 ? "triangle" : "sine", -1));
+
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("perframe", -1),
                    Tcl_NewIntObj(prop->perframe));
     Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("active", -1), 
                    Tcl_NewIntObj(prop->active));
@@ -743,7 +771,13 @@ static void positionToResult(Tcl_Interp *interp, AnimProperty *prop)
 }
 
 /*
- * animatePosition obj ?-velocity {vx vy}? ?-orbit speed? ?-radius r? ?-perframe?
+ * animatePosition obj ?-velocity {vx vy}? ?-orbit speed? ?-radius r?
+ *                      ?-oscillate amp -freq hz -axis {x y} -center {x y}
+ *                       -waveform sine|triangle -phase p? ?-perframe?
+ *
+ *   -oscillate: back-and-forth motion about -center (default: the object's
+ *   current position) along the unit -axis (default x). sine = smooth-pursuit
+ *   target; triangle = constant-velocity (step-ramp) target.
  */
 static int animatePositionCmd(ClientData clientData, Tcl_Interp *interp,
                               int argc, const char **argv)
@@ -783,8 +817,15 @@ static int animatePositionCmd(ClientData clientData, Tcl_Interp *interp,
         prop->speed = 0;       /* orbit speed (deg/sec) */
         prop->amplitude = 0;   /* orbit radius */
         prop->perframe = 0;
+        prop->pos_oscillate = 0;
+        prop->waveform = 0;    /* sine */
+        prop->osc_amp = 0;
+        prop->osc_freq = 1.0f;
+        prop->ax = 1.0f; prop->ay = 0.0f; prop->az = 0.0f;   /* default x-axis */
+        prop->ox = GR_TX(obj); prop->oy = GR_TY(obj); prop->oz = GR_TZ(obj);
+        prop->phase = 0;
     }
-    
+
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "-velocity") == 0 && i+1 < argc) {
             /* Parse {vx vy} or {vx vy vz} list */
@@ -802,6 +843,36 @@ static int animatePositionCmd(ClientData clientData, Tcl_Interp *interp,
             prop->speed = atof(argv[++i]);  /* deg/sec */
         } else if (strcmp(argv[i], "-radius") == 0 && i+1 < argc) {
             prop->amplitude = atof(argv[++i]);
+        } else if (strcmp(argv[i], "-oscillate") == 0 && i+1 < argc) {
+            prop->pos_oscillate = 1;
+            prop->osc_amp = atof(argv[++i]);
+        } else if (strcmp(argv[i], "-freq") == 0 && i+1 < argc) {
+            prop->osc_freq = atof(argv[++i]);
+        } else if (strcmp(argv[i], "-phase") == 0 && i+1 < argc) {
+            prop->phase = atof(argv[++i]);
+        } else if (strcmp(argv[i], "-waveform") == 0 && i+1 < argc) {
+            i++;
+            prop->waveform = (strcmp(argv[i], "triangle") == 0) ? 1 : 0;
+        } else if (strcmp(argv[i], "-axis") == 0 && i+1 < argc) {
+            Tcl_Size listc;
+            const char **listv;
+            if (Tcl_SplitList(interp, argv[++i], &listc, &listv) == TCL_OK) {
+                float ax = listc > 0 ? atof(listv[0]) : 0;
+                float ay = listc > 1 ? atof(listv[1]) : 0;
+                float az = listc > 2 ? atof(listv[2]) : 0;
+                float n = sqrtf(ax*ax + ay*ay + az*az);
+                if (n > 0) { prop->ax = ax/n; prop->ay = ay/n; prop->az = az/n; }
+                Tcl_Free((char *)listv);
+            }
+        } else if (strcmp(argv[i], "-center") == 0 && i+1 < argc) {
+            Tcl_Size listc;
+            const char **listv;
+            if (Tcl_SplitList(interp, argv[++i], &listc, &listv) == TCL_OK) {
+                if (listc > 0) prop->ox = atof(listv[0]);
+                if (listc > 1) prop->oy = atof(listv[1]);
+                if (listc > 2) prop->oz = atof(listv[2]);
+                Tcl_Free((char *)listv);
+            }
         } else if (strcmp(argv[i], "-perframe") == 0) {
             prop->perframe = 1;
         }
