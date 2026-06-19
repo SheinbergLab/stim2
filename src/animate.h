@@ -58,6 +58,14 @@ typedef struct _anim_property {
     
     /* For position/velocity */
     float vx, vy, vz;
+
+    /* For position oscillation (pursuit-style back-and-forth) */
+    int   pos_oscillate;    /* 1 = oscillate around (ox,oy,oz) along (ax,ay,az) */
+    int   waveform;         /* 0 = sine, 1 = triangle (constant-velocity ramp) */
+    float osc_amp;          /* oscillation amplitude (world units) */
+    float osc_freq;         /* oscillation frequency (Hz) */
+    float ax, ay, az;       /* oscillation axis (unit) */
+    float ox, oy, oz;       /* oscillation centre */
     
     /* For color cycling */
     int color_mode;         /* 0=off, 1=replace, 2=multiply */
