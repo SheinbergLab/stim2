@@ -39,6 +39,7 @@ namespace eval launchdemo {
     variable m_heading    45.0   ;# manual launch: heading (deg)
     variable m_speed      2.5    ;# manual launch: speed
     variable m_gravity    5.0    ;# manual launch: gravity
+    variable show_endpoint 1     ;# show the green endpoint bar on arrival?
 }
 
 # ============================================================
@@ -123,20 +124,15 @@ proc launchdemo_drive { t dt frame obj } {
 
     lassign [launch_sim::ball_pos_at_time $launchdemo::tr $tt] x y
     translateObj $obj $x $y 0
-
-    # hide while inside the occluder
-    if { [llength $launchdemo::occluder] &&
-         [launch_sim::point_occluded $x $y $launchdemo::occluder] } {
-        setVisible $obj 0
-    } else {
-        setVisible $obj 1
-    }
+    # NB the ball is NOT hidden here -- the occluder is drawn on top of it
+    # (higher priorityObj), so it is clipped by the occluder edge as a real
+    # accretion/deletion event rather than popping on/off.
 
     # "arrived" at the rim: a real task fires a sound + opens the response
     # window here (dserv_send); the demo just flashes the true catcher green.
     if { $tt >= $lt && !$launchdemo::arrived } {
         set launchdemo::arrived 1
-        if { $launchdemo::catcher ne "" } {
+        if { $launchdemo::catcher ne "" && $launchdemo::show_endpoint } {
             setVisible $launchdemo::catcher 1
         }
     }
@@ -179,36 +175,49 @@ proc launchdemo_build_scene { {with_response 0} } {
     set h  [dict get $launchdemo::tr heading]
     set half [expr {[dict get $launchdemo::tr arc_span_deg]/2.0*$::pi/180.0}]
 
-    glistAddObject [launchdemo_arc_band $cx $cy $R $half $h {0.4 0.4 0.45}] 0
+    # z-order (priorityObj, higher = drawn on top): ball(0) < occluder(1) <
+    # markers(2). The occluder is OPAQUE and on top of the ball, so the ball is
+    # clipped by its edge -- a real accretion/deletion event, not a visibility
+    # toggle. The arc guide, launcher, and catcher sit above the occluder so
+    # they stay visible.
+    set arc [launchdemo_arc_band $cx $cy $R $half $h {0.4 0.4 0.45}]
+    priorityObj $arc 2
+    glistAddObject $arc 0
 
-    # occluder regions (under the path)
     foreach reg $launchdemo::occluder {
-        glistAddObject [launchdemo_region_obj $reg {0.16 0.16 0.22}] 0
+        set ob [launchdemo_region_obj $reg {0.16 0.16 0.22}]
+        priorityObj $ob 1
+        glistAddObject $ob 0
     }
 
     # launcher (arc center)
-    glistAddObject [launchdemo_circle $cx $cy 0.22 {0.6 0.6 0.6}] 0
+    set lo [launchdemo_circle $cx $cy 0.22 {0.6 0.6 0.6}]
+    priorityObj $lo 2
+    glistAddObject $lo 0
 
     # catcher at the true exit -- GREEN, hidden until the ball ARRIVES (no
     # endpoint marker is shown during the prediction; the green appearing is
     # the "arrived" cue, standing in for the task's exit sound)
     lassign [launch_sim::catcher_pose $launchdemo::tr [dict get $launchdemo::tr deviation]] kx ky ka
     set launchdemo::catcher [launchdemo_bar $kx $ky $ka {0.3 1.0 0.4}]
+    priorityObj $launchdemo::catcher 2
     setVisible $launchdemo::catcher 0
     glistAddObject $launchdemo::catcher 0
 
     # subject's swipe catcher (hidden until they respond)
     if { $with_response } {
         set launchdemo::resp_catcher [launchdemo_bar $kx $ky $ka {0.4 0.7 1.0}]
+        priorityObj $launchdemo::resp_catcher 2
         setVisible $launchdemo::resp_catcher 0
         glistAddObject $launchdemo::resp_catcher 0
     } else {
         set launchdemo::resp_catcher ""
     }
 
-    # ball -- replayed each frame from launch_sim
+    # ball -- replayed each frame from launch_sim (priority 0 = behind occluder)
     set b [launchdemo_circle 0 0 0.18 {0.2 0.9 1.0}]
     objName $b ball
+    priorityObj $b 0
     set launchdemo::ball $b
     animateCustom ball -proc launchdemo_drive -params {}
     glistAddObject $b 0
@@ -330,6 +339,19 @@ proc launchdemo_set_occ { prop } {
 }
 proc launchdemo_get_occ { {target {}} } { dict create prop $launchdemo::occ_prop }
 
+# Show/hide the green endpoint bar that appears on arrival. Updates live: when
+# turned off, a trial just stays occluded (the "arrived" sound, not vision,
+# would signal it in the real task).
+proc launchdemo_set_endpoint { v } {
+    set launchdemo::show_endpoint $v
+    if { $launchdemo::catcher ne "" } {
+        setVisible $launchdemo::catcher [expr {$v && $launchdemo::arrived}]
+        redraw
+    }
+    return
+}
+proc launchdemo_get_endpoint { {target {}} } { dict create show $launchdemo::show_endpoint }
+
 # Manual launch params (Heading/Speed/Gravity). Stored on change; fired by the
 # Launch button -- but if we're already in Launch mode, re-fire live.
 proc launchdemo_relaunch_if_manual {} {
@@ -346,7 +368,7 @@ if { [llength [info commands workspace::setup]] } {
     workspace::reset
     workspace::setup launchdemo_setup {} \
         -adjusters {launchdemo_actions launchdemo_heading launchdemo_speed \
-                    launchdemo_gravity launchdemo_occlusion} \
+                    launchdemo_gravity launchdemo_occlusion launchdemo_endpoint} \
         -label "Launcher (analytic)"
     workspace::adjuster launchdemo_actions {
         random {action "Random"}
@@ -364,6 +386,9 @@ if { [llength [info commands workspace::setup]] } {
     workspace::adjuster launchdemo_occlusion {
         prop {float 0.1 0.95 0.05 0.55 "Occlusion"}
     } -target {} -proc launchdemo_set_occ -getter launchdemo_get_occ -label "Occlusion"
+    workspace::adjuster launchdemo_endpoint {
+        show {bool 1 "Show endpoint bar"}
+    } -target {} -proc launchdemo_set_endpoint -getter launchdemo_get_endpoint -label "Endpoint"
 }
 
 # Build an initial trial so the demo shows something when sourced directly.
