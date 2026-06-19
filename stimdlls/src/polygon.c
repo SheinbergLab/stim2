@@ -960,14 +960,18 @@ int polygonShaderCreate(Tcl_Interp *interp)
     /* circle == 1 : anti-aliased round mask -- disc, annulus, sector (pac-man),
        or arc band, depending on innerRad/mouthHalf. The mouth is centred on +X;
        rotate the object to aim it. */
+    /* edge softness in uv units (quad is 1 wide). NB: do NOT use fwidth() here
+       -- the unit quad is two triangles and the texcoord gradient differs across
+       their shared diagonal, so fwidth() jumps there and paints a faint diagonal
+       seam through the shape. A constant width is scale-proportional and seam-free. */
+    " float aa = 0.012;"
     " vec2 uv = texcoord - vec2(0.5);"
     " float r = length(uv);"
-    " float aa = fwidth(r); if (aa <= 0.0) aa = 0.001;"
     " float alpha = 1.0 - smoothstep(0.5 - aa, 0.5, r);"           /* outer rim */
     " if (innerRad > 0.0) alpha *= smoothstep(innerRad - aa, innerRad + aa, r);"
     " if (mouthHalf > 0.0) {"                                       /* cut wedge */
     "   float ang = atan(uv.y, uv.x);"
-    "   float aaA = fwidth(ang); if (aaA <= 0.0) aaA = 0.001;"
+    "   float aaA = aa / max(r, aa);"      /* ~constant linear softness on the wedge edges */
     "   alpha *= smoothstep(-aaA, aaA, abs(ang) - mouthHalf);"
     " }"
     " if (alpha <= 0.0) discard;"
