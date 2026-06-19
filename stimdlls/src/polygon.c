@@ -17,6 +17,10 @@
 #include <tcl.h>
 #include <math.h>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #include <glad/glad.h>
 #include <GLFW/glfw3.h> 
 
@@ -36,28 +40,25 @@ typedef struct _vao_info {
 
 
 typedef struct polygon {
-  int angle;			/* rotation angle   */
   int filled;
-  int tessellated;		/* use gluTess routines */
-  int tessid;			/* display list */
   int type;			/* draw type        */
   float linewidth;
   float pointsize;
   float color[4];
   int circ;                     /* treat poly as circ */
+  float mouth_half;		/* sector half-mouth, radians (0 = no wedge) */
+  float inner_rad;		/* annulus inner radius, uv units 0..0.5 (0 = solid) */
   int nverts;			/* number of x,y,xs */
   float *verts;			/* x,y,z triplets   */
   int ntexcoords;		/* number of u,vs   */
   float *texcoords;		/* u,v doubles vv   */
-  int three_d;			/* is z specified?  */
-  int colori;
-  int aa;			/* anti-alias?      */
-  int blend;
-  
+
   UNIFORM_INFO *modelviewMat;
   UNIFORM_INFO *projMat;
   UNIFORM_INFO *uColor;
   UNIFORM_INFO *circle;
+  UNIFORM_INFO *mouthHalf;
+  UNIFORM_INFO *innerRad;
   UNIFORM_INFO *pointSize;
   SHADER_PROG *program;
   VAO_INFO *vao_info;		/* to track vertex attributes */
@@ -139,10 +140,25 @@ void polygonDraw(GR_OBJ *g)
   if (p->circle) {
     memcpy(p->circle->val, &p->circ, sizeof(int));
   }
-  
+
+  if (p->mouthHalf) {
+    memcpy(p->mouthHalf->val, &p->mouth_half, sizeof(float));
+  }
+
+  if (p->innerRad) {
+    memcpy(p->innerRad->val, &p->inner_rad, sizeof(float));
+  }
+
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  
+
+  /* Line primitives honor the requested width (driver may clamp in core
+     profiles, where widths > 1 are not guaranteed). */
+  if (p->type == GL_LINES || p->type == GL_LINE_STRIP ||
+      p->type == GL_LINE_LOOP) {
+    glLineWidth(p->linewidth);
+  }
+
   glUseProgram(sp->program);
   update_uniforms(&p->uniformTable);
   if (p->vao_info->narrays) {
@@ -216,7 +232,6 @@ int polygonCreate(OBJ_LIST *objlist, SHADER_PROG *sp)
 
   p->filled = 1;
   p->type = GL_TRIANGLES;
-  p->colori = -1;		/* Don't use color index mode */
 
   p->linewidth = 1.0;
   
@@ -269,6 +284,16 @@ int polygonCreate(OBJ_LIST *objlist, SHADER_PROG *sp)
   if ((entryPtr = Tcl_FindHashEntry(&p->uniformTable, "circle"))) {
     p->circle = Tcl_GetHashValue(entryPtr);
     p->circle->val = calloc(1,sizeof(int));
+  }
+
+  if ((entryPtr = Tcl_FindHashEntry(&p->uniformTable, "mouthHalf"))) {
+    p->mouthHalf = Tcl_GetHashValue(entryPtr);
+    p->mouthHalf->val = calloc(1,sizeof(float));
+  }
+
+  if ((entryPtr = Tcl_FindHashEntry(&p->uniformTable, "innerRad"))) {
+    p->innerRad = Tcl_GetHashValue(entryPtr);
+    p->innerRad->val = calloc(1,sizeof(float));
   }
 
   if ((entryPtr = Tcl_FindHashEntry(&p->uniformTable, "pointSize"))) {
@@ -341,6 +366,91 @@ static int polycircCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 
+/*
+ * polysector polygon ?mouthDeg?
+ *   Turn the (default unit-quad) polygon into an anti-aliased circular sector
+ *   -- a "pac-man" -- by removing a wedge ("mouth") of the given angular width.
+ *   The mouth is centred on +X; aim it with rotateObj. mouthDeg 0 = full disc.
+ *   Operates on the masked round shape (implies circ=1), so scale the quad to
+ *   the desired diameter; do not replace its verts with polyverts.
+ */
+static int polysectorCmd(ClientData clientData, Tcl_Interp *interp,
+			 int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  POLYGON *p;
+  int id;
+  double mouth;
+
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " polygon ?mouthDeg?", NULL);
+    return TCL_ERROR;
+  }
+
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
+    return TCL_ERROR;
+  p = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  /* Getter: return current mouth width in degrees */
+  if (argc == 2) {
+    char result[32];
+    snprintf(result, sizeof(result), "%.6g", p->mouth_half * 2.0 * 180.0 / M_PI);
+    Tcl_SetResult(interp, result, TCL_VOLATILE);
+    return TCL_OK;
+  }
+
+  if (Tcl_GetDouble(interp, argv[2], &mouth) != TCL_OK) return TCL_ERROR;
+  if (mouth < 0.0)   mouth = 0.0;
+  if (mouth > 359.0) mouth = 359.0;   /* keep a sliver of shape */
+  p->mouth_half = (mouth / 2.0) * M_PI / 180.0;
+  p->circ = 1;
+  p->filled = 1;
+  return TCL_OK;
+}
+
+
+/*
+ * polyannulus polygon ?innerFrac?
+ *   Turn the (default unit-quad) polygon into an anti-aliased annulus (ring) by
+ *   cutting a central hole of radius innerFrac * (outer radius). innerFrac in
+ *   [0,1); 0 = solid disc. Combine with polysector to get an arc band. Implies
+ *   circ=1, so scale the quad to the desired outer diameter.
+ */
+static int polyannulusCmd(ClientData clientData, Tcl_Interp *interp,
+			  int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  POLYGON *p;
+  int id;
+  double frac;
+
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " polygon ?innerFrac?", NULL);
+    return TCL_ERROR;
+  }
+
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
+    return TCL_ERROR;
+  p = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  /* Getter: return current inner radius as a fraction of the outer radius */
+  if (argc == 2) {
+    char result[32];
+    snprintf(result, sizeof(result), "%.6g", p->inner_rad / 0.5);
+    Tcl_SetResult(interp, result, TCL_VOLATILE);
+    return TCL_OK;
+  }
+
+  if (Tcl_GetDouble(interp, argv[2], &frac) != TCL_OK) return TCL_ERROR;
+  if (frac < 0.0)  frac = 0.0;
+  if (frac > 0.99) frac = 0.99;
+  p->inner_rad = frac * 0.5;   /* outer radius is 0.5 in uv units */
+  p->circ = 1;
+  p->filled = 1;
+  return TCL_OK;
+}
+
+
 int combineDynlists(Tcl_Interp *interp, char *procname,
 		    DYN_LIST *xlist, DYN_LIST *ylist, DYN_LIST *zlist,
 		    int three_d, int *nOut,float  **vList)
@@ -370,12 +480,7 @@ int combineDynlists(Tcl_Interp *interp, char *procname,
     return TCL_ERROR;
   }
 
-  /* Fix below */
-  if (type != 0) {
-    Tcl_AppendResult(interp, procname, 
-		     ": verts must be all floats", NULL);
-    return TCL_ERROR;
-  }
+  /* type 0-3 (any mix of float/long x,y lists) are all handled below */
 
   if (zlist && three_d) {
     if (DYN_LIST_DATATYPE(zlist) != DYN_LIST_DATATYPE(xlist)) {
@@ -620,36 +725,10 @@ static int polycolorCmd(ClientData clientData, Tcl_Interp *interp,
   else {
     a = 1.0;
   }
-  if (a < 1.) {
-    p->blend = 1;
-  }
   p->color[0] = r;
   p->color[1] = g;
   p->color[2] = b;
   p->color[3] = a;
-  return(TCL_OK);
-}
-
-static int polycolorindexCmd(ClientData clientData, Tcl_Interp *interp,
-			     int argc, char *argv[])
-{
-  OBJ_LIST *olist = (OBJ_LIST *) clientData;
-  POLYGON *p;
-  int n;
-  int id;
-
-  if (argc < 3) {
-    Tcl_AppendResult(interp, "usage: ", argv[0], " polygon index", NULL);
-    return TCL_ERROR;
-  }
-
-  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
-    return TCL_ERROR;
-  p = GR_CLIENTDATA(OL_OBJ(olist,id));
-
-  if (Tcl_GetInt(interp, argv[2], &n) != TCL_OK) return TCL_ERROR;
-
-  p->colori = n;
   return(TCL_OK);
 }
 
@@ -798,30 +877,6 @@ static int polytypeCmd(ClientData clientData, Tcl_Interp *interp,
   return(TCL_OK);
 }
 
-static int polyangleCmd(ClientData clientData, Tcl_Interp *interp,
-			int argc, char *argv[])
-{
-
-  OBJ_LIST *olist = (OBJ_LIST *) clientData;
-  POLYGON *p;
-  int angle, id;
-  
-  if (argc < 3) {
-    Tcl_AppendResult(interp, "usage: ", argv[0],
-		     " polygon angle", NULL);
-    return TCL_ERROR;
-  }
-
-  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
-    return TCL_ERROR;
-  p = GR_CLIENTDATA(OL_OBJ(olist,id));
-
-  if (Tcl_GetInt(interp, argv[2], &angle) != TCL_OK) return TCL_ERROR;
-  p->angle = angle;
-
-  return(TCL_OK);
-}
-
 static int polypointsizeCmd(ClientData clientData, Tcl_Interp *interp,
 			    int argc, char *argv[])
 {
@@ -852,31 +907,6 @@ static int polypointsizeCmd(ClientData clientData, Tcl_Interp *interp,
   p->pointsize = size;
   return(TCL_OK);
 }
-
-static int polyaaCmd(ClientData clientData, Tcl_Interp *interp,
-		     int argc, char *argv[])
-{
-
-  OBJ_LIST *olist = (OBJ_LIST *) clientData;
-  POLYGON *p;
-  int id, aa;
-  
-  if (argc < 3) {
-    Tcl_AppendResult(interp, "usage: ", argv[0],
-		     " polygon aa", NULL);
-    return TCL_ERROR;
-  }
-
-  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
-    return TCL_ERROR;
-  p = GR_CLIENTDATA(OL_OBJ(olist,id));
-
-  if (Tcl_GetInt(interp, argv[2], &aa) != TCL_OK) return TCL_ERROR;
-  p->aa = aa;
-
-  return(TCL_OK);
-}
-
 
 int polygonShaderCreate(Tcl_Interp *interp)
 {
@@ -915,17 +945,33 @@ int polygonShaderCreate(Tcl_Interp *interp)
 
     "uniform vec4 uColor;"
     "uniform int circle;"
+    "uniform float mouthHalf;"   /* sector half-mouth, radians; <=0 => no wedge */
+    "uniform float innerRad;"    /* annulus inner radius, uv units; <=0 => solid */
     "in vec2 texcoord;"
     "out vec4 frag_color;"
     "void main () {"
-    " vec2 uv;"
-    " if (circle == 0) frag_color = vec4(uColor);"
-    " else if (circle == 2) { vec2 coord = gl_PointCoord - vec2(0.5); float t = 1.0 - smoothstep(0.4, 0.5, length(coord)); frag_color=vec4(uColor.rgb, t); }"
-    " else {"
-    "  uv = texcoord-vec2(.5,.5);"
-    "  if (dot(uv,uv) > 0.25) frag_color=vec4(0,0,0,0);"
-    "  else frag_color=vec4(uColor);"
+    " if (circle == 0) { frag_color = uColor; return; }"
+    " if (circle == 2) {"            /* point-sprite disc */
+    "   vec2 coord = gl_PointCoord - vec2(0.5);"
+    "   float t = 1.0 - smoothstep(0.4, 0.5, length(coord));"
+    "   frag_color = vec4(uColor.rgb, uColor.a*t);"
+    "   return;"
     " }"
+    /* circle == 1 : anti-aliased round mask -- disc, annulus, sector (pac-man),
+       or arc band, depending on innerRad/mouthHalf. The mouth is centred on +X;
+       rotate the object to aim it. */
+    " vec2 uv = texcoord - vec2(0.5);"
+    " float r = length(uv);"
+    " float aa = fwidth(r); if (aa <= 0.0) aa = 0.001;"
+    " float alpha = 1.0 - smoothstep(0.5 - aa, 0.5, r);"           /* outer rim */
+    " if (innerRad > 0.0) alpha *= smoothstep(innerRad - aa, innerRad + aa, r);"
+    " if (mouthHalf > 0.0) {"                                       /* cut wedge */
+    "   float ang = atan(uv.y, uv.x);"
+    "   float aaA = fwidth(ang); if (aaA <= 0.0) aaA = 0.001;"
+    "   alpha *= smoothstep(-aaA, aaA, abs(ang) - mouthHalf);"
+    " }"
+    " if (alpha <= 0.0) discard;"
+    " frag_color = vec4(uColor.rgb, uColor.a * alpha);"
     "}";
   
   if (build_prog(PolygonShaderProg, vertex_shader, fragment_shader, 0) == -1) {
@@ -977,24 +1023,21 @@ int Polygon_Init(Tcl_Interp *interp)
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "polytexcoords", (Tcl_CmdProc *) polytexcoordsCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateCommand(interp, "polycolor", (Tcl_CmdProc *) polycolorCmd, 
+  Tcl_CreateCommand(interp, "polycolor", (Tcl_CmdProc *) polycolorCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateCommand(interp, "polycolorIndex", 
-		    (Tcl_CmdProc *) polycolorindexCmd, 
+  Tcl_CreateCommand(interp, "polycirc", (Tcl_CmdProc *) polycircCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateCommand(interp, "polycirc", (Tcl_CmdProc *) polycircCmd, 
+  Tcl_CreateCommand(interp, "polysector", (Tcl_CmdProc *) polysectorCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "polyannulus", (Tcl_CmdProc *) polyannulusCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "polyfill", (Tcl_CmdProc *) polyfillCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "polylinewidth", (Tcl_CmdProc *) polylinewidthCmd, 
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateCommand(interp, "polytype", (Tcl_CmdProc *) polytypeCmd, 
+  Tcl_CreateCommand(interp, "polytype", (Tcl_CmdProc *) polytypeCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateCommand(interp, "polyangle", (Tcl_CmdProc *) polyangleCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateCommand(interp, "polypointsize", (Tcl_CmdProc *) polypointsizeCmd, 
-		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateCommand(interp, "polyaa", (Tcl_CmdProc *) polyaaCmd, 
+  Tcl_CreateCommand(interp, "polypointsize", (Tcl_CmdProc *) polypointsizeCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
   return TCL_OK;
