@@ -1,6 +1,25 @@
 # stim2
 A cross platform system for visual stimulus presentation
 
+## Quick start (macOS, Apple Silicon)
+
+The macOS build is a self-contained, signed and notarized app — no Homebrew or
+other dependencies required.
+
+1. Download the latest `stim2-<version>-Darwin.dmg` from the
+   [releases page](https://github.com/SheinbergLab/stim2/releases/latest).
+2. Open the `.dmg` and drag **stim2** to **Applications**.
+3. Launch stim2 (the first launch may take a moment while macOS verifies it).
+4. With stim2 running, open
+   [http://localhost:4613/stim2-dev.html](http://localhost:4613/stim2-dev.html)
+   in a browser to browse and run the built-in examples. A Tcl terminal for
+   driving the program directly is at [http://localhost:4613/](http://localhost:4613/).
+
+The app bundles its own copy of the `dlsh` Tcl package library (`dlsh.zip`), so
+it runs standalone. If a shared copy is installed at `/usr/local/dlsh/dlsh.zip`
+(or `$DLSH_LIBRARY` is set), stim2 uses that instead, so labs can update the
+package library without reinstalling the app.
+
 ## Design
 
 stim2 is an OpenGL/GLES based program for showing graphics objects. It uses GLFW to open and initialize its display. The core role of the main program is to provide containers (graphics lists). These objects are created using "stimdlls", which define a large variety of graphics objects:
