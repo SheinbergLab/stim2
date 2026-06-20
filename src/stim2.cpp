@@ -1688,12 +1688,22 @@ public:
         "proc load_local_packages {} {\n"
         " global auto_path\n"
         " set f [file dirname [info nameofexecutable]]\n"
-        " if [file exists [file join $f dlsh.zip]] { set dlshzip [file join $f dlsh.zip] } {"
 #ifdef _WIN32
-        "   set dlshzip c:/usr/local/dlsh/dlsh.zip }\n"
+        " set sysdlsh c:/usr/local/dlsh/dlsh.zip\n"
 #else
-        "   set dlshzip /usr/local/dlsh/dlsh.zip }\n"
+        " set sysdlsh /usr/local/dlsh/dlsh.zip\n"
 #endif
+        // Resolution order: explicit DLSH_LIBRARY override, then the shared
+        // system install (so labs can update dlsh.zip without rebuilding the
+        // app), then the copy bundled inside the app as a self-contained
+        // fallback.
+        " if {[info exists ::env(DLSH_LIBRARY)] && [file exists $::env(DLSH_LIBRARY)]} {\n"
+        "   set dlshzip $::env(DLSH_LIBRARY)\n"
+        " } elseif {[file exists $sysdlsh]} {\n"
+        "   set dlshzip $sysdlsh\n"
+        " } else {\n"
+        "   set dlshzip [file join $f dlsh.zip]\n"
+        " }\n"
         " set dlshroot [file join [zipfs root] dlsh]\n"
         " zipfs unmount $dlshroot\n"
         " zipfs mount $dlshzip $dlshroot\n"

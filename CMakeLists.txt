@@ -80,8 +80,10 @@ set(USOCKETS_SOURCES
     ${usockets_SOURCE_DIR}/src/socket.c
 )
 
-# Platform-specific event loop
-if(APPLE OR WIN32)
+# Platform-specific event loop.
+# Only Windows uses the libuv backend. macOS/BSD use kqueue and Linux uses
+# epoll -- both are implemented in epoll_kqueue.c -- so neither needs libuv.
+if(WIN32)
     list(APPEND USOCKETS_SOURCES ${usockets_SOURCE_DIR}/src/eventing/libuv.c)
     set(WITH_LIBUV 1)
 else()
@@ -110,13 +112,9 @@ if(WIN32)
     target_compile_definitions(usockets PRIVATE LIBUS_USE_LIBUV)
     set(USOCKETS_LIBS ws2_32)
 elseif(APPLE)
-    target_compile_definitions(usockets PRIVATE LIBUS_USE_LIBUV)
-    find_library(LIBUV_LIBRARIES NAMES uv libuv REQUIRED)
-    if(NOT LIBUV_LIBRARIES)
-        message(FATAL_ERROR "libuv is required on macOS. Install with: brew install libuv")
-    endif()
-    target_link_libraries(usockets PRIVATE ${LIBUV_LIBRARIES})
-    set(USOCKETS_LIBS ${LIBUV_LIBRARIES})
+    # kqueue is uSockets' native (and default) backend on macOS -- no libuv.
+    target_compile_definitions(usockets PRIVATE LIBUS_USE_KQUEUE)
+    set(USOCKETS_LIBS)
 else()
     target_compile_definitions(usockets PRIVATE LIBUS_USE_EPOLL)
     set(USOCKETS_LIBS)
@@ -392,6 +390,25 @@ elseif(APPLE)
         PATTERN "*.js"
     )
     
+    # Bundle dlsh.zip next to the executable so the app is self-contained.
+    # At runtime stim2 still prefers $DLSH_LIBRARY and /usr/local/dlsh/dlsh.zip
+    # over this copy (see load_local_packages in stim2.cpp), so this is just
+    # the fallback that lets the app run with no separate dlsh install.
+    # Defaults to the dlsh.zip placed by the dlsh .pkg the CI installs.
+    set(DLSH_ZIP "/usr/local/dlsh/dlsh.zip" CACHE FILEPATH
+        "Path to dlsh.zip to bundle inside the app")
+    if(EXISTS "${DLSH_ZIP}")
+        message(STATUS "Bundling dlsh.zip from ${DLSH_ZIP}")
+        install(
+            FILES ${DLSH_ZIP}
+            DESTINATION ${APP_BUNDLE}/Contents/MacOS
+            COMPONENT stim2
+        )
+    else()
+        message(WARNING "dlsh.zip not found at ${DLSH_ZIP}; "
+            "the app will rely on /usr/local/dlsh/dlsh.zip at runtime")
+    endif()
+
     # Make stimdlls relocatable
     set(DYLIBBUNDLER_COMMAND "dylibbundler --bundle-deps -s /usr/local/lib -s deps/bink/lib/macos --dest-dir ${APP_BUNDLE}/Contents/Frameworks --install-path @rpath")
     install(
