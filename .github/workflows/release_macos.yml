@@ -60,7 +60,16 @@ jobs:
           echo "Using dlsh version: $DLSH_VERSION"
           
           wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-arm64-signed.pkg
-          sudo installer -pkg dlsh-${DLSH_VERSION}-Darwin-arm64-signed.pkg -target /    
+          sudo installer -pkg dlsh-${DLSH_VERSION}-Darwin-arm64-signed.pkg -target /
+
+          # The .pkg installs libs/headers only. Also fetch the dlsh.zip VFS and
+          # place it at /usr/local/dlsh/dlsh.zip, which is where the app build
+          # bundles it from (DLSH_ZIP default in CMakeLists.txt) and the runtime
+          # fallback location.
+          wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}.zip
+          sudo mkdir -p /usr/local/dlsh
+          sudo cp dlsh-${DLSH_VERSION}.zip /usr/local/dlsh/dlsh.zip
+          echo "${DLSH_VERSION}" | sudo tee /usr/local/dlsh/VERSION
       - name: Build our stimdlls to include within the stim2 app bundle.
         run: |
           cd stimdlls
