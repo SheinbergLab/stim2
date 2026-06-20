@@ -112,6 +112,38 @@ jobs:
           cmake --build build --config Release
           cpack -G DragNDrop --config build/CPackConfig.cmake
 
+          # Guard the self-contained property before we notarize/release.
+          APP=build/Release/stim2.app
+          BIN="$APP/Contents/MacOS/stim2"
+          echo "== verifying self-contained app bundle =="
+
+          # 1. dlsh.zip must be bundled in Resources (NOT MacOS -- a data file
+          #    in Contents/MacOS breaks code signing/notarization).
+          if [ ! -f "$APP/Contents/Resources/dlsh.zip" ]; then
+            echo "FAIL: dlsh.zip is not bundled in Contents/Resources"; exit 1
+          fi
+          if [ -f "$APP/Contents/MacOS/dlsh.zip" ]; then
+            echo "FAIL: dlsh.zip is in Contents/MacOS (will break notarization)"; exit 1
+          fi
+
+          # 2. The libuv->kqueue migration must hold: no libuv anywhere.
+          if otool -L "$BIN" | grep -qi libuv; then
+            echo "FAIL: stim2 still links libuv:"; otool -L "$BIN"; exit 1
+          fi
+          if ls "$APP"/Contents/Frameworks/libuv* >/dev/null 2>&1; then
+            echo "FAIL: libuv is bundled in Frameworks (kqueue migration regressed)"; exit 1
+          fi
+
+          # 3. No Homebrew or /usr/local dependencies in any bundled binary.
+          leak=0
+          for f in "$BIN" "$APP"/Contents/Frameworks/*.dylib "$APP"/Contents/MacOS/stimdlls/*.dylib; do
+            [ -e "$f" ] || continue
+            dep=$(otool -L "$f" 2>/dev/null | tail -n +2 | grep -iE "/usr/local|/opt/(home|local)" || true)
+            if [ -n "$dep" ]; then echo "FAIL: external dep in $(basename "$f"):"; echo "$dep"; leak=1; fi
+          done
+          [ "$leak" -eq 0 ] || exit 1
+          echo "OK: dlsh.zip bundled, no libuv, no /usr/local or /opt deps"
+
           xcrun notarytool store-credentials --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APPLE_APP_PASSWORD" "stim2-signing"
           xcrun notarytool submit stim2-${{ github.ref_name }}-Darwin.dmg --keychain-profile "stim2-signing" --wait
           xcrun stapler staple stim2-${{ github.ref_name }}-Darwin.dmg
@@ -147,5 +179,14 @@ jobs:
 
       - name: Sanity check the installed stim2.
         run: |
+          # This is a clean runner with no /usr/local/dlsh, so a successful run
+          # proves the app loads dlsh from its bundled copy (the self-contained
+          # fallback path).
+          if [ -e /usr/local/dlsh ]; then
+            echo "FAIL: /usr/local/dlsh exists on this runner; cannot prove bundled fallback"; exit 1
+          fi
+          if [ ! -f /Applications/stim2.app/Contents/Resources/dlsh.zip ]; then
+            echo "FAIL: shipped app is missing the bundled Contents/Resources/dlsh.zip"; exit 1
+          fi
           /Applications/stim2.app/Contents/MacOS/stim2 --help
           timeout --preserve-status --signal SIGINT 2 /Applications/stim2.app/Contents/MacOS/stim2 || echo "$?"

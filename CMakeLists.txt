@@ -390,18 +390,20 @@ elseif(APPLE)
         PATTERN "*.js"
     )
     
-    # Bundle dlsh.zip next to the executable so the app is self-contained.
+    # Bundle dlsh.zip inside the app so it is self-contained. It must go in
+    # Contents/Resources (NOT Contents/MacOS) -- macOS code signing treats
+    # everything in Contents/MacOS as a code object, so a data file there makes
+    # the signature invalid and notarization fails.
     # At runtime stim2 still prefers $DLSH_LIBRARY and /usr/local/dlsh/dlsh.zip
     # over this copy (see load_local_packages in stim2.cpp), so this is just
     # the fallback that lets the app run with no separate dlsh install.
-    # Defaults to the dlsh.zip placed by the dlsh .pkg the CI installs.
     set(DLSH_ZIP "/usr/local/dlsh/dlsh.zip" CACHE FILEPATH
         "Path to dlsh.zip to bundle inside the app")
     if(EXISTS "${DLSH_ZIP}")
         message(STATUS "Bundling dlsh.zip from ${DLSH_ZIP}")
         install(
             FILES ${DLSH_ZIP}
-            DESTINATION ${APP_BUNDLE}/Contents/MacOS
+            DESTINATION ${APP_BUNDLE}/Contents/Resources
             COMPONENT stim2
         )
     else()

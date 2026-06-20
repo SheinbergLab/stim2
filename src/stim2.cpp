@@ -1693,17 +1693,19 @@ public:
 #else
         " set sysdlsh /usr/local/dlsh/dlsh.zip\n"
 #endif
-        // Resolution order: explicit DLSH_LIBRARY override, then the shared
-        // system install (so labs can update dlsh.zip without rebuilding the
-        // app), then the copy bundled inside the app as a self-contained
-        // fallback.
-        " if {[info exists ::env(DLSH_LIBRARY)] && [file exists $::env(DLSH_LIBRARY)]} {\n"
-        "   set dlshzip $::env(DLSH_LIBRARY)\n"
-        " } elseif {[file exists $sysdlsh]} {\n"
-        "   set dlshzip $sysdlsh\n"
-        " } else {\n"
-        "   set dlshzip [file join $f dlsh.zip]\n"
-        " }\n"
+        // Candidate dlsh.zip locations, in priority order: explicit
+        // DLSH_LIBRARY override, the shared system install (so labs can update
+        // dlsh.zip without rebuilding the app), then copies bundled with the
+        // app -- next to the executable (Linux/Windows) or in the macOS .app
+        // Contents/Resources dir. Data must live in Resources, not MacOS, or
+        // macOS code signing/notarization rejects the bundle.
+        " set candidates {}\n"
+        " if {[info exists ::env(DLSH_LIBRARY)]} { lappend candidates $::env(DLSH_LIBRARY) }\n"
+        " lappend candidates $sysdlsh\n"
+        " lappend candidates [file join $f dlsh.zip]\n"
+        " lappend candidates [file normalize [file join $f .. Resources dlsh.zip]]\n"
+        " set dlshzip [lindex $candidates end]\n"
+        " foreach c $candidates { if {[file exists $c]} { set dlshzip $c; break } }\n"
         " set dlshroot [file join [zipfs root] dlsh]\n"
         " zipfs unmount $dlshroot\n"
         " zipfs mount $dlshzip $dlshroot\n"
