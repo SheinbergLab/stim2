@@ -63,18 +63,19 @@ proc launchdemo_bar { x y angle_rad color {len 1.3} {thick 0.28} } {
     return $r
 }
 
-# A thin arc band (triangle strip), centered on the heading, span +-half.
+# A thin arc band centered on the heading, span +-half, radial half-width w.
+# An annular sector = polyannulus (ring) + polysector (wedge) on the unit quad:
+# anti-aliased, no vertex work. polysector removes a mouth centred on +X, so the
+# KEPT wedge is centred on -X -- rotate by (h+180) to aim it at the heading.
 proc launchdemo_arc_band { cx cy R half h color {w 0.06} } {
     set obj [polygon]
-    set n 48; set xs {}; set ys {}
-    for { set k 0 } { $k <= $n } { incr k } {
-        set a [expr {$h-$half + ($k/double($n))*2.0*$half}]
-        lappend xs [expr {$cx+($R-$w)*cos($a)}]; lappend ys [expr {$cy+($R-$w)*sin($a)}]
-        lappend xs [expr {$cx+($R+$w)*cos($a)}]; lappend ys [expr {$cy+($R+$w)*sin($a)}]
-    }
-    polyverts $obj [dl_flist {*}$xs] [dl_flist {*}$ys]
-    polytype $obj triangle_strip
+    set span_deg [expr {2.0*$half*180.0/$::pi}]
+    scaleObj $obj [expr {2.0*($R+$w)}] [expr {2.0*($R+$w)}]   ;# outer radius R+w
+    polyannulus $obj [expr {($R-$w)/($R+$w)}]                 ;# inner radius R-w
+    if { $span_deg < 359.0 } { polysector $obj [expr {360.0-$span_deg}] }
     polycolor $obj {*}$color
+    translateObj $obj $cx $cy
+    rotateObj $obj [expr {$h*180.0/$::pi + 180.0}] 0 0 1
     return $obj
 }
 
@@ -95,18 +96,21 @@ proc launchdemo_region_obj { reg color } {
                         [dict get $reg r] $color]
         }
         arc {
+            # annular sector r0..r1 spanning a0..a1 -> polyannulus + polysector
+            # (AA masked quad). Kept wedge is centred on -X, so aim it at the
+            # span midpoint with rotateObj.
             set cx [dict get $reg cx]; set cy [dict get $reg cy]
             set r0 [dict get $reg r0]; set r1 [dict get $reg r1]
             set a0 [dict get $reg a0]; set a1 [dict get $reg a1]
-            set obj [polygon]; set n 48; set xs {}; set ys {}
-            for { set k 0 } { $k <= $n } { incr k } {
-                set a [expr {$a0 + ($k/double($n))*($a1-$a0)}]
-                lappend xs [expr {$cx+$r0*cos($a)}]; lappend ys [expr {$cy+$r0*sin($a)}]
-                lappend xs [expr {$cx+$r1*cos($a)}]; lappend ys [expr {$cy+$r1*sin($a)}]
-            }
-            polyverts $obj [dl_flist {*}$xs] [dl_flist {*}$ys]
-            polytype $obj triangle_strip
+            set span_deg [expr {($a1-$a0)*180.0/$::pi}]
+            set mid_deg  [expr {0.5*($a0+$a1)*180.0/$::pi}]
+            set obj [polygon]
+            scaleObj $obj [expr {2.0*$r1}] [expr {2.0*$r1}]
+            polyannulus $obj [expr {$r0/$r1}]
+            if { $span_deg < 359.0 } { polysector $obj [expr {360.0-$span_deg}] }
             polycolor $obj {*}$color
+            translateObj $obj $cx $cy
+            rotateObj $obj [expr {$mid_deg + 180.0}] 0 0 1
             return $obj
         }
     }
