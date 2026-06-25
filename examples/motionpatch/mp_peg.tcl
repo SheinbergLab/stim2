@@ -507,7 +507,9 @@ proc mp_peg_index_for_time {tsec} {
 }
 
 proc mp_peg_update {} {
-    set t [expr {$::StimTime / 1000.0}]
+    # StimTimeF (float ms) dt source: int StimTime makes dt alternate 8/9 ms
+    # at 120 Hz, which the play_t accumulator carries into per-frame judder.
+    set t [expr {$::StimTimeF / 1000.0}]
     set dt [expr {$t - $::mp_peg::last_t}]
     if {$dt < 0.0 || $dt > 0.1} { set dt 0.016 }
     set ::mp_peg::last_t $t
@@ -575,7 +577,7 @@ proc mp_peg_trigger {what} {
     switch -- $what {
         drop {
             set ::mp_peg::play_t   0.0
-            set ::mp_peg::last_t   [expr {$::StimTime / 1000.0}]
+            set ::mp_peg::last_t   [expr {$::StimTimeF / 1000.0}]
             set ::mp_peg::dropping 1
         }
         reset {
@@ -594,7 +596,7 @@ proc mp_peg_trigger {what} {
             catch {motionpatch_logBegin dots_bg}
             set ::mp_peg::recording 1
             set ::mp_peg::play_t   0.0
-            set ::mp_peg::last_t   [expr {$::StimTime / 1000.0}]
+            set ::mp_peg::last_t   [expr {$::StimTimeF / 1000.0}]
             set ::mp_peg::dropping 1
         }
         write_dgs {

@@ -86,7 +86,9 @@ proc mp_doubledrift_make_circle_tex {size} {
 # untouched here; both patches share the same mask offset so the
 # surround tiles cleanly around the moving aperture.
 proc mp_doubledrift_update {} {
-    set t [expr {double($::StimTime) / 1000.0}]
+    # StimTimeF (float ms) dt source: int StimTime makes dt alternate 8/9 ms
+    # at 120 Hz, which the play_t accumulator carries into per-frame judder.
+    set t [expr {double($::StimTimeF) / 1000.0}]
     set dt [expr {$t - $::mp_doubledrift::last_t}]
     if {$dt < 0.0 || $dt > 0.1} { set dt 0.016 }
     set ::mp_doubledrift::last_t $t

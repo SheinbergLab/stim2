@@ -232,7 +232,9 @@ proc planko_generate_world {} {
 # ============================================================
 
 proc planko_update_position { ball body start } {
-    set now [expr {($::StimTime - $start) / 1000.0}]
+    # float clock (StimTimeF): per-frame replay time with no int-ms 8/9 judder
+    # at 120 Hz. $start is the baked StimTimeF captured at setup.
+    set now [expr {($::StimTimeF - $start) / 1000.0}]
 
     # Find first trajectory sample past current time
     set n [llength $planko::traj_t]
@@ -367,7 +369,7 @@ proc planko_trigger { action } {
                 set body [setObjProp $planko::ball body]
                 Box2D_setBodyType $planko::bworld $body 1 ;# kinematic
                 addPreScript $planko::ball \
-                    "planko_update_position $planko::ball $body $::StimTime"
+                    "planko_update_position $planko::ball $body $::StimTimeF"
             }
         }
         reset {

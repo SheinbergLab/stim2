@@ -139,7 +139,9 @@ proc pworld_simulate { dg } {
 # ============================================================
 
 proc pworld_update_ball { ball body start } {
-    set now [expr { ($::StimTime - $start) / 1000.0 }]
+    # float clock (StimTimeF): per-frame replay time with no int-ms 8/9 judder
+    # at 120 Hz. $start is the baked StimTimeF captured at setup.
+    set now [expr { ($::StimTimeF - $start) / 1000.0 }]
     set n [llength $pworld::traj_t]
     for { set i 0 } { $i < $n } { incr i } {
         if { [lindex $pworld::traj_t $i] > $now } {
@@ -271,7 +273,7 @@ proc pworld_trigger { action } {
                 set body [setObjProp $pworld::ball body]
                 Box2D_setBodyType $pworld::bworld $body 1
                 addPreScript $pworld::ball \
-                    "pworld_update_ball $pworld::ball $body $::StimTime"
+                    "pworld_update_ball $pworld::ball $body $::StimTimeF"
             }
         }
         reset {

@@ -218,7 +218,10 @@ proc pcatch_generate_world {} {
 # ============================================================
 
 proc pcatch_update_position { ball body start } {
-    set now [expr {($::StimTime - $start) / 1000.0}]
+    # float clock (StimTimeF) for judder-free replay at 120 Hz. NOTE: this proc
+    # is currently unused (the ball runs as a live box2d dynamic body); kept
+    # correct as a reference replay path. Pass a baked $::StimTimeF as $start.
+    set now [expr {($::StimTimeF - $start) / 1000.0}]
 
     set n [llength $pcatch::traj_t]
     for { set i 0 } { $i < $n } { incr i } {

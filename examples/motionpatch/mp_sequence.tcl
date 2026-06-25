@@ -86,12 +86,14 @@ proc mp_sequence_apply_pattern {pattern n_steps step_ms start_deg} {
     set ::mp_sequence::last_dir [lindex $dirs 0]
 }
 
-# Per-frame preScript: advance the sequence index based on StimTime,
+# Per-frame preScript: advance the sequence index based on StimTimeF,
 # optionally interpolate across direction transitions, and push the
 # resulting direction (and inverted-surround direction in induced /
 # contrast modes) to both motionpatches.
 proc mp_sequence_update {} {
-    set t [expr {$::StimTime / 1000.0}]
+    # StimTimeF (float ms) dt source: int StimTime makes dt alternate 8/9 ms
+    # at 120 Hz, which the seq_t accumulator carries into per-frame judder.
+    set t [expr {$::StimTimeF / 1000.0}]
     set dt [expr {$t - $::mp_sequence::last_t}]
     if {$dt < 0.0 || $dt > 0.1} { set dt 0.016 }
     if {!$::mp_sequence::playing} { set dt 0.0 }

@@ -78,7 +78,8 @@ proc mp_tracking_bake_simplex {} {
 
 # Per-frame preScript: update the shared mask offset along the currently
 # selected path.
-# Uses ::StimTime (ms) so freezing motion is independent of time-driving.
+# Uses ::StimTimeF (float ms) so freezing motion is independent of time-driving
+# and the per-frame dt stays a steady ~8.33 ms (no int-ms 8/9 judder at 120 Hz).
 # The offset is in patch-local centered coords; patch spans [-0.5, 0.5]
 # before the metagroup scale, so |offset| < 0.5 keeps the shape on-screen.
 #
@@ -91,7 +92,7 @@ proc mp_tracking_bake_simplex {} {
 #                       deterministic, reproducible, and suitable for smooth
 #                       pursuit at low rates.
 proc mp_tracking_update_offset {} {
-    set t [expr {$::StimTime / 1000.0}]
+    set t [expr {$::StimTimeF / 1000.0}]
     set dt [expr {$t - $::mp_tracking::last_t}]
     # Guard against absurd first-frame dt or paused-then-resumed spikes.
     if {$dt < 0.0 || $dt > 0.1} { set dt 0.016 }
