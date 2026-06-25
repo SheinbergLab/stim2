@@ -2773,6 +2773,10 @@ void addTclCommands(Tcl_Interp *interp)
   Tcl_LinkVar(interp, "StimVersion", (char *) &StimVersion, TCL_LINK_INT);
   Tcl_LinkVar(interp, "StimTime", (char *) &StimTime, TCL_LINK_INT);
   Tcl_LinkVar(interp, "StimTicks", (char *) &StimTicks, TCL_LINK_INT);
+  /* float (double) parallels -- sub-ms placement clock, no int truncation */
+  Tcl_LinkVar(interp, "StimTimeF", (char *) &StimTimeF, TCL_LINK_DOUBLE | TCL_LINK_READ_ONLY);
+  Tcl_LinkVar(interp, "StimTicksF", (char *) &StimTicksF, TCL_LINK_DOUBLE | TCL_LINK_READ_ONLY);
+  Tcl_LinkVar(interp, "StimDeltaTimeF", (char *) &StimDeltaTimeF, TCL_LINK_DOUBLE | TCL_LINK_READ_ONLY);
   Tcl_LinkVar(interp, "StimVRetraceCount", (char *) &StimVRetraceCount, TCL_LINK_INT);
   Tcl_LinkVar(interp, "NextFrameTime", (char *) &NextFrameTime, TCL_LINK_INT);
   Tcl_LinkVar(interp, "SwapPulse", (char *) &SwapPulse, TCL_LINK_INT);

@@ -828,7 +828,7 @@ void videoTimer(GR_OBJ *gobj) {
         v->eof_fired = 0;      // Reset for potential future EOF
         v->current_time = 0.0;
         v->current_pts = 0;
-        v->video_start_time = getStimTime() / 1000.0;  // Reset timing
+        v->video_start_time = getStimTimeF() / 1000.0;  // Reset timing
         v->frames_decoded = 0;
         
         // Decode first frame immediately after restart
@@ -842,7 +842,7 @@ void videoTimer(GR_OBJ *gobj) {
     }
     
     // Normal playback processing - get current stimulus time in seconds
-    double current_time = getStimTime() / 1000.0;
+    double current_time = getStimTimeF() / 1000.0;
     double elapsed_time = current_time - v->video_start_time;
     
     // Calculate how many frames should have been displayed by now
@@ -1334,7 +1334,7 @@ static int videopauseCmd(ClientData clientData, Tcl_Interp *interp,
     // Handle timing when transitioning from paused to playing
     if (!pause && v->paused) {
         // Starting playback - record the start time
-        v->video_start_time = getStimTime() / 1000.0;
+        v->video_start_time = getStimTimeF() / 1000.0;
         v->frames_decoded = 1;  // We already have first frame loaded
         
         // Start audio playback

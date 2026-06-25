@@ -30,7 +30,7 @@
 #include <dfana.h>
 #include <tcl_dl.h>
 
-#include <stim.h>
+#include <stim2.h>
 
 typedef granny_real64x granny_real64;
 

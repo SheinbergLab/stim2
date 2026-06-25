@@ -26,7 +26,7 @@
 #include <sys/stat.h>
 #include <math.h>
 #include <tcl.h>
-#include <stim.h>
+#include <stim2.h>
 
 #include "miniaudio.h"		/* the entire library is in this header */
 

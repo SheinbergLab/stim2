@@ -145,6 +145,9 @@ unsigned int StimTicks = 0; /* available from tcl */
 double StimStart = 0;           /* absolute time of last reset */
 unsigned int StimVRetraceCount = 0;
 unsigned int StimDeltaTime = 0;
+double StimTimeF = 0.0;        /* float ms since reset (no int truncation) */
+double StimTicksF = 0.0;       /* float free-running ms */
+double StimDeltaTimeF = 0.0;   /* float ms since last frame */
 
 int NextFrameTime = -1;
 
@@ -411,15 +414,20 @@ void resetStimTime(void)
 {
   StimStart = glfwGetTime();
   StimTime = 0;
+  StimTimeF = 0.0;
 }
 
 void updateTimes(void)
 {
   double curtime = glfwGetTime();
-  unsigned int prevTicks = StimTicks;   
+  unsigned int prevTicks = StimTicks;
+  double prevTicksF = StimTicksF;
   StimTicks = (int) (1000*curtime);
-  StimDeltaTime = StimTicks - prevTicks;     
+  StimTicksF = 1000.0*curtime;
+  StimDeltaTime = StimTicks - prevTicks;
+  StimDeltaTimeF = StimTicksF - prevTicksF;
   StimTime = (int) (1000*(curtime-StimStart));
+  StimTimeF = 1000.0*(curtime-StimStart);
 }
 
 
@@ -496,7 +504,7 @@ void executeScripts(char **scripts, int *actives, int n)
 
 void drawObject(GR_OBJ *o)
 {
-  animateUpdateObj(o, StimTicks, StimDeltaTime);  
+  animateUpdateObj(o, StimTicksF, StimDeltaTimeF);  
   executeScripts(GR_PRE_SCRIPTS(o),
          GR_PRE_SCRIPT_ACTIVES(o),
          GR_N_PRE_SCRIPTS(o));
@@ -592,6 +600,26 @@ int getStimTime(void)
 int getStimTicks(void)
 {
   return StimTicks;
+}
+
+/********************************************************************
+ * Functions:    getStimTimeF / getStimTicksF
+ * Returns:      double (ms)
+ * Description:  Float-precision parallels of getStimTime/getStimTicks.
+ *               No integer-ms truncation -- use for smooth per-frame
+ *               motion (constant-velocity integration) so steps aren't
+ *               quantized (e.g. 8/9 ms at 120 Hz). getStimTime stays int
+ *               for event timestamps / printf %d callers.
+ ********************************************************************/
+
+double getStimTimeF(void)
+{
+  return StimTimeF;
+}
+
+double getStimTicksF(void)
+{
+  return StimTicksF;
 }
 
 /********************************************************************
@@ -714,7 +742,7 @@ static void drawGroup(OBJ_GROUP *g)
     o = OL_OBJ(OBJList, OG_OBJID(g, i));
     if (o && GR_VISIBLE(o)) drawObject(o);
     else if (o) {
-      animateUpdateObj(o, StimTicks, StimDeltaTime);      
+      animateUpdateObj(o, StimTicksF, StimDeltaTimeF);      
       executeScripts(GR_PRE_SCRIPTS(o), GR_PRE_SCRIPT_ACTIVES(o),
              GR_N_PRE_SCRIPTS(o));
       executeScripts(GR_POST_SCRIPTS(o), GR_POST_SCRIPT_ACTIVES(o),
@@ -731,7 +759,7 @@ static void drawGroup(OBJ_GROUP *g)
       o = OL_OBJ(OBJList, OG_OBJID(g, i));
       if (o && GR_VISIBLE(o) && GR_LEFT_EYE(o)) drawObject(o);
       else if (o) {
-	animateUpdateObj(o, StimTicks, StimDeltaTime);      
+	animateUpdateObj(o, StimTicksF, StimDeltaTimeF);      
         executeScripts(GR_PRE_SCRIPTS(o), GR_PRE_SCRIPT_ACTIVES(o),
                GR_N_PRE_SCRIPTS(o));
         executeScripts(GR_POST_SCRIPTS(o), GR_POST_SCRIPT_ACTIVES(o),
@@ -748,7 +776,7 @@ static void drawGroup(OBJ_GROUP *g)
       o = OL_OBJ(OBJList, OG_OBJID(g, i));
       if (o && GR_VISIBLE(o) && GR_RIGHT_EYE(o)) drawObject(o);
       else if (o) {
-	animateUpdateObj(o, StimTicks, StimDeltaTime);      
+	animateUpdateObj(o, StimTicksF, StimDeltaTimeF);      
         executeScripts(GR_PRE_SCRIPTS(o), GR_PRE_SCRIPT_ACTIVES(o),
                GR_N_PRE_SCRIPTS(o));
         executeScripts(GR_POST_SCRIPTS(o), GR_POST_SCRIPT_ACTIVES(o),
@@ -765,7 +793,7 @@ static void drawGroup(OBJ_GROUP *g)
       o = OL_OBJ(OBJList, OG_OBJID(g, i));
       if (o && GR_VISIBLE(o) && GR_LEFT_EYE(o)) drawObject(o);
       else if (o) {
-	animateUpdateObj(o, StimTicks, StimDeltaTime);      
+	animateUpdateObj(o, StimTicksF, StimDeltaTimeF);      
         executeScripts(GR_PRE_SCRIPTS(o), GR_PRE_SCRIPT_ACTIVES(o),
                GR_N_PRE_SCRIPTS(o));
         executeScripts(GR_POST_SCRIPTS(o), GR_POST_SCRIPT_ACTIVES(o),
@@ -780,7 +808,7 @@ static void drawGroup(OBJ_GROUP *g)
       o = OL_OBJ(OBJList, OG_OBJID(g, i));
       if (o && GR_VISIBLE(o) && GR_RIGHT_EYE(o)) drawObject(o);
       else if (o) {
-	animateUpdateObj(o, StimTicks, StimDeltaTime);      
+	animateUpdateObj(o, StimTicksF, StimDeltaTimeF);      
         executeScripts(GR_PRE_SCRIPTS(o), GR_PRE_SCRIPT_ACTIVES(o),
                GR_N_PRE_SCRIPTS(o));
         executeScripts(GR_POST_SCRIPTS(o), GR_POST_SCRIPT_ACTIVES(o),

@@ -67,7 +67,7 @@
  *     spans a fixed dva (degrees visual angle) extent on screen.
  *
  *   * `motionpatch_speed`:  patch-local-units PER SECOND. The C-side
- *     integration loop multiplies by real `dt` from getStimTime(),
+ *     integration loop multiplies by real `dt` from StimTimeF (float ms),
  *     so dot velocity is frame-rate-independent (60 Hz, 120 Hz,
  *     variable-rate displays all produce the same screen-coord
  *     motion). To convert from a desired physical speed in dva/sec:
@@ -555,8 +555,14 @@ void motionpatchUpdate(GR_OBJ *g)
    * making now_ms jump backward; treat that as a sentinel and
    * re-anchor to a nominal frame so dots don't lurch on the post-
    * reset frame. Abnormally large gaps (>0.5 s, e.g. paused stim)
-   * likewise fall back to nominal. */
-  double now_ms = getStimTime();
+   * likewise fall back to nominal.
+   *
+   * Use getStimTimeF() (float ms) NOT getStimTime() (int ms): integer-ms
+   * truncation quantizes the per-frame dt (e.g. 8/9 ms at 120 Hz instead of the
+   * true 8.33), which judders the dot integration. The float clock resets to 0
+   * at glist boundaries just like StimTime, so the sentinel below still catches
+   * resets. */
+  double now_ms = getStimTimeF();
   float dt;
   if (s->last_stim_time_ms < 0.0 || now_ms < s->last_stim_time_ms) {
     dt = 1.0f / 60.0f;

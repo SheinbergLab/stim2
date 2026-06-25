@@ -144,7 +144,7 @@ void metagroupDraw(GR_OBJ *o)
 
       stimGetMatrix(STIM_MODELVIEW_MATRIX, modelmatrix);
 
-      animateUpdateObj(g, StimTicks, StimDeltaTime);
+      animateUpdateObj(g, StimTicksF, StimDeltaTimeF);
 
       executeScripts(GR_PRE_SCRIPTS(g),
 		     GR_PRE_SCRIPT_ACTIVES(g),

@@ -116,7 +116,7 @@ static AnimState *createAnimState(GR_OBJ *obj)
     
     state->obj = obj;
     state->properties = NULL;
-    state->start_time = StimTicks;  /* Use Ticks (never resets) for stable timing */
+    state->start_time = StimTicksF;  /* Use Ticks (never resets) for stable timing */
     state->frame_count = 0;
     
     GR_SET_ANIM_STATE(obj, state);
@@ -234,16 +234,17 @@ static void removeAnimProperty(AnimState *state, AnimType type)
  *                    Core Update Function
  ********************************************************************/
 
-void animateUpdateObj(GR_OBJ *obj, unsigned int ticks_ms, unsigned int dt_ms)
+void animateUpdateObj(GR_OBJ *obj, double ticks_ms, double dt_ms)
 {
     if (!obj) return;
-    
+
     AnimState *state = GR_ANIM_STATE(obj);
     if (!state) return;  /* No animations - fast exit */
-    
-    /* Use ticks (never resets) for stable animation timing */
-    float t = (ticks_ms - state->start_time) / 1000.0f;  /* seconds since start */
-    float dt = dt_ms / 1000.0f;
+
+    /* Use ticks (never resets) for stable animation timing. ticks_ms is the
+     * float (sub-ms) clock, so per-frame motion is not quantized to integer ms. */
+    float t = (float) ((ticks_ms - state->start_time) / 1000.0);  /* seconds since start */
+    float dt = (float) (dt_ms / 1000.0);
     unsigned int frame = state->frame_count;
     
     AnimProperty *prop = state->properties;
@@ -1181,7 +1182,7 @@ static int animateResetCmd(ClientData clientData, Tcl_Interp *interp,
     if (!state) return TCL_OK;
     
     /* Reset timing - use StimTicks for stable reference */
-    state->start_time = StimTicks;
+    state->start_time = StimTicksF;
     state->frame_count = 0;
     
     /* Reset phase on all properties */

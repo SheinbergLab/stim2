@@ -260,7 +260,7 @@ static void shaderObjUpdate(GR_OBJ *m)
   float res[2];
   int w, h;
   if (g->time) {
-    sec = getStimTime()/1000.0;
+    sec = getStimTimeF()/1000.0;
     memcpy(g->time->val, &sec, sizeof(float));
   }
   if (g->resolution) {

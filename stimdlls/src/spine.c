@@ -526,7 +526,7 @@ static void spineUpdate(GR_OBJ *m)
 {
   SpineObject *s = (SpineObject *) GR_CLIENTDATA(m);
   float delta;
-  float StimClock = getStimTime()/1000.;
+  float StimClock = getStimTimeF()/1000.;
 
   if (s->do_reset) {
     delta = 0.01;
@@ -559,7 +559,7 @@ static void spineReset(GR_OBJ *m)
 static void spineOn(GR_OBJ *m) 
 {
   SpineObject *s = (SpineObject *) GR_CLIENTDATA(m);
-  float StimClock = getStimTime()/1000.;
+  float StimClock = getStimTimeF()/1000.;
   s->last_update = StimClock;
 }
 

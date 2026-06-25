@@ -49,14 +49,8 @@
 #include <tcl.h>
 #include <math.h>
 
-#ifdef STIM_V1
-#include <GL/glew.h>
-#include <GL/gl.h>
-#include <GL/glu.h>
-#else
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
-#endif
 
 #include <df.h>
 #include <dfana.h>
@@ -68,13 +62,9 @@
 /*                 Stim Specific Headers                        */
 /****************************************************************/
 
-#ifdef STIM_V1
-#include <stim.h>
-#else
 #include <stim2.h>
 #include <objname.h>
 #include "shaderutils.h"
-#endif
 
 #ifndef M_PI
 #define M_PI (3.14159265358979323)
@@ -82,12 +72,8 @@
 
 static int MeshObjID = -1;	/* unique mesh object id */
 
-#ifdef STIM_V1
-static char shaderPath[MAX_PATH];	/* where to find shaders */
-#else
 #ifndef MAX_PATH
 #define MAX_PATH 512
-#endif
 #endif
 
 Tcl_HashTable shaderProgramTable; /* keep track of compiled/linked programs */
@@ -95,32 +81,6 @@ static int shaderProgramCount = 0;
 
 #define NSAMPLERS 4		/* currently allow four textures in shader */
 
-#ifdef STIM_V1
-typedef struct _attrib_info {
-  GLint size;
-  GLenum type;
-  int location;
-  GLchar *name;
-} ATTRIB_INFO;
-
-
-typedef struct _uniform_info {
-  char *name;
-  GLenum type;
-  int location;
-  void *val;			
-} UNIFORM_INFO;
-
-typedef struct _shader_prog {
-  char name[64];
-  GLhandleARB     fragShader;
-  GLhandleARB     vertShader;
-  GLhandleARB     program;
-  Tcl_HashTable   uniformTable;	/* master copy */
-  Tcl_HashTable   attribTable;	/* master copy */
-  Tcl_HashTable   defaultsTable;
-} SHADER_PROG;
-#endif
 
 typedef struct _vao_info {
   GLuint vao;
@@ -156,26 +116,6 @@ typedef struct _mesh_obj {
   Tcl_HashTable attribTable;	/* local unique version */
 } MESH_OBJ;
 
-#ifdef STIM_V1
-static int build_prog(SHADER_PROG *sp, char *shadername, int verbose);
-static int add_uniforms_to_table(Tcl_HashTable *utable, SHADER_PROG *sp,
-				 int verbose);
-static int copy_uniform_table(Tcl_HashTable *source, Tcl_HashTable *dest);
-static int delete_uniform_table(Tcl_HashTable *utable);
-
-static int add_attribs_to_table(Tcl_HashTable *atable, SHADER_PROG *sp,
-				int verbose);
-static int copy_attrib_table(Tcl_HashTable *source, Tcl_HashTable *dest);
-static int delete_attrib_table(Tcl_HashTable *atable);
-static int add_defaults_to_table(Tcl_Interp *interp, Tcl_HashTable *dtable,
-				char *shadername);
-static int delete_defaults_table(Tcl_HashTable *dtable);
-
-static int set_default_uniforms(Tcl_Interp *interp, MESH_OBJ *);
-
-static const char* GL_type_to_string (GLenum type);
-
-#endif
 
 static int uniform_set(Tcl_Interp *interp, Tcl_HashTable *table,
 		       char *shader_name, char *name, char *valstr);
@@ -235,55 +175,6 @@ static void meshObjReset(GR_OBJ *o)
   MESH_OBJ *g = (MESH_OBJ *) GR_CLIENTDATA(o);
 }
 
-#ifdef STIM_V1
-static int update_uniforms(Tcl_HashTable *utable)
-{
-  Tcl_HashEntry *entryPtr;
-  Tcl_HashSearch searchEntry;
-  UNIFORM_INFO *uinfo;
-
-  entryPtr = Tcl_FirstHashEntry(utable, &searchEntry);
-  while (entryPtr) {
-    uinfo = Tcl_GetHashValue(entryPtr);
-    if (uinfo->val) {
-      switch (uinfo->type) {
-      case GL_BOOL: 
-      case GL_INT:
-      case GL_SAMPLER_2D:
-      case GL_SAMPLER_2D_ARRAY:
-      case GL_SAMPLER_3D:
-	glUniform1iv(uinfo->location, 1, uinfo->val);
-	break;
-      case GL_FLOAT:
-	glUniform1fv(uinfo->location, 1, uinfo->val);
-	break;
-      case GL_FLOAT_VEC2:
-	glUniform2fv(uinfo->location, 1, uinfo->val);
-	break;
-      case GL_FLOAT_VEC3:
-	glUniform3fv(uinfo->location, 1, uinfo->val);
-	break;
-      case GL_FLOAT_VEC4:
-	glUniform4fv(uinfo->location, 1, uinfo->val);
-	break;
-      case GL_FLOAT_MAT2:
-	glUniformMatrix2fv(uinfo->location, 1, 0, uinfo->val);
-	break;
-      case GL_FLOAT_MAT3:
-	glUniformMatrix3fv(uinfo->location, 1, 0, uinfo->val);
-	break;
-      case GL_FLOAT_MAT4:
-       	glUniformMatrix4fv(uinfo->location, 1, 0, uinfo->val);
-	break;
-      default: 
-	break;
-      }
-    }
-    entryPtr = Tcl_NextHashEntry(&searchEntry);
-  }
-  return 0;
-}
-#endif
 
 static float determinant(float m[9]) {
   return 
@@ -328,33 +219,12 @@ static void meshObjDraw(GR_OBJ *m)
   MESH_OBJ *g = (MESH_OBJ *) GR_CLIENTDATA(m);
   SHADER_PROG *sp = (SHADER_PROG *) g->program;
 
-#ifdef STIM_V1
-  glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT);
-#endif  
   glEnable(GL_TEXTURE_2D);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glEnable(GL_BLEND);
   glEnable(GL_DEPTH_TEST);  
   glUseProgram(sp->program);
-#ifdef STIM_V1
-  glDisable(GL_LIGHTING);
-#endif
   
-#ifdef STIM_V1
-  if (g->modelviewMat) {
-    glGetFloatv(GL_MODELVIEW_MATRIX, g->modelviewMat->val);
-  }
-  if (g->projMat) {
-    glGetFloatv(GL_PROJECTION_MATRIX, g->projMat->val);
-  }
-  if (g->normalMat) {
-    float mv[16], temp[18];
-    glGetFloatv(GL_MODELVIEW_MATRIX, mv);
-    mat4_to_mat3(mv, temp);
-    inverse(temp, temp, 9);
-    transpose(temp, 9, g->normalMat->val);
-  }
-#else
   float *v;
   if (g->modelviewMat) {
     v = (float *) g->modelviewMat->val;
@@ -368,7 +238,6 @@ static void meshObjDraw(GR_OBJ *m)
     v = (float *) g->normalMat->val;
     stimGetMatrix(STIM_NORMAL_MATRIX, v);
   }
-#endif
   
   update_uniforms(&g->uniformTable);
 
@@ -422,11 +291,6 @@ static void meshObjDraw(GR_OBJ *m)
     glBindVertexArray(g->vao_info->vao);
     glDrawArrays(g->vao_info->element_type, 0, g->vao_info->nindices);
   }
-#ifdef STIM_V1
-  glActiveTexture(GL_TEXTURE0);
-  glBindVertexArray(0);
-  glPopAttrib();
-#endif
   glUseProgram(0);
 }
 
@@ -437,7 +301,7 @@ static void meshObjUpdate(GR_OBJ *m)
   float res[2];
   int w, h;
   if (g->time) {
-    sec = getStimTime()/1000.0;
+    sec = getStimTimeF()/1000.0;   /* float ms clock: no integer-ms quantization */
     memcpy(g->time->val, &sec, sizeof(float));
   }
   if (g->resolution) {
@@ -481,17 +345,10 @@ static int meshObjCreate(OBJ_LIST *olist,
   strcpy(GR_NAME(obj), name);
   GR_OBJTYPE(obj) = MeshObjID;
 
-#ifdef STIM_V1
-  GR_ACTIONFUNC(obj) = meshObjDraw;
-  GR_RESETFUNC(obj) = meshObjReset;
-  GR_DELETEFUNC(obj) = meshObjDelete;
-  GR_UPDATEFUNC(obj) = meshObjUpdate;
-#else
   GR_ACTIONFUNCP(obj) = meshObjDraw;
   GR_RESETFUNCP(obj) = meshObjReset;
   GR_DELETEFUNCP(obj) = meshObjDelete;
   GR_UPDATEFUNCP(obj) = meshObjUpdate;
-#endif  
   g = (MESH_OBJ *) calloc(1, sizeof(MESH_OBJ));
   GR_CLIENTDATA(obj) = g;
 
@@ -649,11 +506,7 @@ static int meshObjCmd(ClientData clientData, Tcl_Interp *interp,
   SHADER_PROG *sp;
   int n_elements;
   
-#ifdef STIM_V1
-  int element_type = GL_QUADS;	/* needs to be an argument... */
-#else
   int element_type = GL_TRIANGLES;
-#endif
  
   DYN_LIST *verts, *uvs = NULL, *normals = NULL;
   
@@ -785,11 +638,7 @@ static int shaderBuildCmd(ClientData clientData, Tcl_Interp *interp,
     Tcl_AppendResult(interp, argv[0], ": no shader file specified", NULL);
     return(TCL_ERROR);
   }
-#ifdef STIM_V1
-  if (build_prog(&shader_prog, argv[1], verbose) != GL_NO_ERROR)
-#else
   if (build_prog_from_file(&shader_prog, argv[1], verbose) != GL_NO_ERROR) 
-#endif    
     return TCL_ERROR;
 
   
@@ -801,11 +650,7 @@ static int shaderBuildCmd(ClientData clientData, Tcl_Interp *interp,
 
   /* Now add uniforms into master table */
   Tcl_InitHashTable(&newprog->uniformTable, TCL_STRING_KEYS);
-#ifdef STIM_V1
-  add_uniforms_to_table(&newprog->uniformTable, newprog, verbose);
-#else
   add_uniforms_to_table(&newprog->uniformTable, newprog);
-#endif  
 
   /* Add default values from shader file */
   Tcl_InitHashTable(&newprog->defaultsTable, TCL_STRING_KEYS);
@@ -813,11 +658,7 @@ static int shaderBuildCmd(ClientData clientData, Tcl_Interp *interp,
   
   /* Now add attribs into master table */
   Tcl_InitHashTable(&newprog->attribTable, TCL_STRING_KEYS);
-#ifdef STIM_V1
-  add_attribs_to_table(&newprog->attribTable, newprog, verbose);
-#else
   add_attribs_to_table(&newprog->attribTable, newprog);
-#endif  
   sprintf(shader_name, "shader%d", shaderProgramCount++);
   strcpy(newprog->name, shader_name);
   entryPtr = Tcl_CreateHashEntry(&shaderProgramTable, shader_name, &newentry);
@@ -826,189 +667,6 @@ static int shaderBuildCmd(ClientData clientData, Tcl_Interp *interp,
   return(TCL_OK);
 }
 
-#ifdef STIM_V1
-static int add_uniforms_to_table(Tcl_HashTable *utable, SHADER_PROG *sp,
-				 int verbose)
-{
-  int total = -1, maxlength = -1;
-  int i;
-  char *name;
-  UNIFORM_INFO *uinfo;
-  Tcl_HashEntry *entryPtr;
-  int newentry;
-
-  glGetProgramiv(sp->program, GL_ACTIVE_UNIFORMS, &total ); 
-  if (total <= 0) 
-    return TCL_OK;
-
-  glGetProgramiv(sp->program, GL_ACTIVE_UNIFORM_MAX_LENGTH, &maxlength);
-  name = malloc(maxlength+1);
-  for(i = 0; i < total; i++)  {
-    int name_len=-1, num=-1;
-    GLenum type = GL_ZERO;
-    GLint location;
-    glGetActiveUniform(sp->program, i, maxlength,
-			&name_len, &num, &type, name);
-    name[name_len] = 0;
-    location = glGetUniformLocation(sp->program, name);
-
-    if (location >= 0) {
-      uinfo = (UNIFORM_INFO *) calloc(1, sizeof(UNIFORM_INFO));
-      uinfo->name = strdup(name); /* make local copy */
-      uinfo->type = type;
-      uinfo->location = location;
-      uinfo->val = NULL;
-      entryPtr = Tcl_CreateHashEntry(&sp->uniformTable, uinfo->name, &newentry);
-      Tcl_SetHashValue(entryPtr, uinfo);
-      if (verbose)
-	fprintf(getConsoleFP(), "%s: %s\n",
-		uinfo->name, GL_type_to_string(type));
-    }
-  }
-  free(name);
-  return TCL_OK;
-}
-
-static int copy_uniform_table(Tcl_HashTable *source, Tcl_HashTable *dest)
-{
-  Tcl_HashEntry *entryPtr, *newEntryPtr;
-  Tcl_HashSearch searchEntry;
-  int newentry;
-  UNIFORM_INFO *uinfo, *new_uinfo;
-
-  Tcl_InitHashTable(dest, TCL_STRING_KEYS);
-  entryPtr = Tcl_FirstHashEntry(source, &searchEntry);
-  while (entryPtr) {
-    uinfo = Tcl_GetHashValue(entryPtr);
-    new_uinfo = (UNIFORM_INFO *) calloc(1, sizeof(UNIFORM_INFO));
-    new_uinfo->name = strdup(uinfo->name);
-    new_uinfo->type = uinfo->type;
-    new_uinfo->location = uinfo->location;
-    newEntryPtr = Tcl_CreateHashEntry(dest, new_uinfo->name, &newentry);
-    Tcl_SetHashValue(newEntryPtr, new_uinfo);
-    entryPtr = Tcl_NextHashEntry(&searchEntry);
-  }
-  return 0;
-}
-
-static int delete_uniform_table(Tcl_HashTable *utable)
-{
-  Tcl_HashEntry *entryPtr;
-  Tcl_HashSearch searchEntry;
-  UNIFORM_INFO *uinfo;
-
-  entryPtr = Tcl_FirstHashEntry(utable, &searchEntry);
-  while (entryPtr) {
-    uinfo = Tcl_GetHashValue(entryPtr);
-    if (uinfo->name) free(uinfo->name); /* also the hash key */
-    if (uinfo->val) free(uinfo->val);
-    free(uinfo);
-    entryPtr = Tcl_NextHashEntry(&searchEntry);
-  }
-  Tcl_DeleteHashTable(utable);
-
-  return 0;
-}
-
-
-static int add_attribs_to_table(Tcl_HashTable *atable, SHADER_PROG *sp,
-				int verbose)
-{
-  int total = -1, maxlength = -1;
-  int i;
-  char *name;
-  ATTRIB_INFO *ainfo;
-  Tcl_HashEntry *entryPtr;
-  int newentry;
-
-  glGetProgramiv(sp->program, GL_ACTIVE_ATTRIBUTES, &total); 
-
-  if (total <= 0) return TCL_OK;
-
-  glGetProgramiv(sp->program, GL_ACTIVE_ATTRIBUTE_MAX_LENGTH, &maxlength);
-  name = malloc(maxlength+1);
-
-  if (verbose)
-    fprintf(getConsoleFP(), "%d active attribs / maxlength = %d\n", 
-	    total, maxlength);
-  
-  for(i = 0; i < total; i++)  {
-    int name_len=-1, size=-1;
-    GLenum type = GL_ZERO;
-    GLint location;
-    glGetActiveAttrib(sp->program, i, maxlength,
-		      &name_len, &size, &type, name);
-    name[name_len] = 0;
-    location = glGetAttribLocation(sp->program, name);
-    if (location >= 0) {
-
-      ainfo = (ATTRIB_INFO *) calloc(1, sizeof(ATTRIB_INFO));
-      ainfo->name = malloc(name_len+1); /* make local copy */
-      strcpy(ainfo->name, name);
-      ainfo->size = size;
-      ainfo->type = type;
-      ainfo->location = location;
-      entryPtr = Tcl_CreateHashEntry(&sp->attribTable, ainfo->name, &newentry);
-      Tcl_SetHashValue(entryPtr, ainfo);
-
-      if (verbose)
-	fprintf(getConsoleFP(), "%s: %s [%d@%d]\n", 
-		ainfo->name, GL_type_to_string(type), size, location);
-    }
-  }
-  free(name);
-  return TCL_OK;
-}
-
-static int copy_attrib_table(Tcl_HashTable *source, Tcl_HashTable *dest)
-{
-  Tcl_HashEntry *entryPtr, *newEntryPtr;
-  Tcl_HashSearch searchEntry;
-  int newentry;
-  ATTRIB_INFO *ainfo, *new_ainfo;
-
-  Tcl_InitHashTable(dest, TCL_STRING_KEYS);
-  entryPtr = Tcl_FirstHashEntry(source, &searchEntry);
-  while (entryPtr) {
-    ainfo = Tcl_GetHashValue(entryPtr);
-    new_ainfo = (ATTRIB_INFO *) calloc(1, sizeof(ATTRIB_INFO));
-    new_ainfo->name = strdup(ainfo->name);
-    new_ainfo->type = ainfo->type;
-    new_ainfo->size = ainfo->size;
-    new_ainfo->location = ainfo->location;
-    newEntryPtr = Tcl_CreateHashEntry(dest, new_ainfo->name, &newentry);
-    Tcl_SetHashValue(newEntryPtr, new_ainfo);
-    entryPtr = Tcl_NextHashEntry(&searchEntry);
-  }
-  return 0;
-}
-
-static int delete_attrib_table(Tcl_HashTable *atable)
-{
-  Tcl_HashEntry *entryPtr;
-  Tcl_HashSearch searchEntry;
-  ATTRIB_INFO *ainfo;
-  
-  for (entryPtr = Tcl_FirstHashEntry(atable, &searchEntry);
-       entryPtr != NULL;
-       entryPtr = Tcl_NextHashEntry(&searchEntry)) {
-    ainfo = (ATTRIB_INFO *) Tcl_GetHashValue(entryPtr);
-    if (ainfo->name) free(ainfo->name); /* also the hash key */
-    free(ainfo);
-  }
-  Tcl_DeleteHashTable(atable);
-
-  return 0;
-}
-
-static int delete_defaults_table(Tcl_HashTable *utable)
-{
-  /* All strings, so allocation is taken care of by Tcl */
-  Tcl_DeleteHashTable(utable);
-  return 0;
-}
-
-#endif
 
 static void delete_vao_info(VAO_INFO *vinfo)
 {
@@ -1083,28 +741,6 @@ static int shaderDeleteAllCmd(ClientData clientData, Tcl_Interp *interp,
   return 0;
 }
 
-#ifdef STIM_V1
-static const char* GL_type_to_string (GLenum type) {
-  switch (type) {
-    case GL_BOOL: return "bool";
-    case GL_INT: return "int";
-    case GL_FLOAT: return "float";
-    case GL_FLOAT_VEC2: return "vec2";
-    case GL_FLOAT_VEC3: return "vec3";
-    case GL_FLOAT_VEC4: return "vec4";
-    case GL_FLOAT_MAT2: return "mat2";
-    case GL_FLOAT_MAT3: return "mat3";
-    case GL_FLOAT_MAT4: return "mat4";
-    case GL_SAMPLER_2D: return "sampler2D";
-    case GL_SAMPLER_3D: return "sampler3D";
-    case GL_SAMPLER_2D_ARRAY: return "sampler2Darray";
-    case GL_SAMPLER_CUBE: return "samplerCube";
-    case GL_SAMPLER_2D_SHADOW: return "sampler2DShadow";
-    default: break;
-  }
-  return "other";
-}
-#endif
 
 static int uniform_names(Tcl_Interp *interp, Tcl_HashTable *table)
 {
@@ -1419,200 +1055,6 @@ static int meshObjSetUniformCmd(ClientData clientData, Tcl_Interp *interp,
 		       argv[2]));
   }
 }
-#ifdef STIM_V1
-/********************************************************************/
-/*                           SHADER CODE                            */
-/********************************************************************/
-
-static GLenum LinkProgram(GLhandleARB program, int verbose)
-{
-  GLint	logLength;
-  GLint linked;
-  
-  glLinkProgramARB(program);
-	
-  glGetObjectParameterivARB(program,GL_OBJECT_LINK_STATUS_ARB,&linked);
-  glGetObjectParameterivARB(program,GL_OBJECT_INFO_LOG_LENGTH_ARB,&logLength);
-  if (logLength)
-    {
-      GLint	charsWritten;
-      GLcharARB *log;
-      
-      if (verbose) {
-	log = malloc(logLength+128);
-	glGetInfoLogARB(program, logLength, &charsWritten, log);
-	fprintf(getConsoleFP(), "Link GetInfoLogARB:\n%s\n",log);
-	free (log);
-      }
-    }
-  if (!linked) {
-    return -1;
-  }
-  return GL_NO_ERROR;
-}
-
-GLenum CompileProgram(GLenum target, const GLcharARB* sourcecode,
-		      GLhandleARB *shader,
-		      int verbose)
-{
-  GLint	logLength;
-  GLint	compiled;
-  
-  if (sourcecode != 0)
-    {
-      *shader = glCreateShaderObjectARB(target);
-      glShaderSourceARB(*shader,1,(const GLcharARB **)&sourcecode,0);
-      glCompileShaderARB(*shader);
-      
-      glGetObjectParameterivARB(*shader,GL_OBJECT_COMPILE_STATUS_ARB,&compiled);
-      glGetObjectParameterivARB(*shader,GL_OBJECT_INFO_LOG_LENGTH_ARB,&logLength);
-      if (logLength && verbose) {
-	GLcharARB *log = malloc(logLength+128);
-	glGetInfoLogARB(*shader, logLength, &logLength, log);
-	fprintf(getConsoleFP(), "Compile log: \n%s\n", log);
-	free (log);
-      }
-      if (!compiled)
-	return -1;
-    }
-  return GL_NO_ERROR;
-}
-
-static void printShaderInfoLog(GLuint obj)
-{
-  int infologLength = 0;
-  int charsWritten  = 0;
-  char *infoLog;
-  
-  glGetShaderiv(obj, GL_INFO_LOG_LENGTH,&infologLength);
-  
-  if (infologLength > 0)
-    {
-      infoLog = (char *)malloc(infologLength);
-      glGetShaderInfoLog(obj, infologLength, &charsWritten, infoLog);
-      fprintf(getConsoleFP(), "%s\n",infoLog);
-      free(infoLog);
-    }
-}
-
-
-static int build_prog(SHADER_PROG *sp, char *shadername, int verbose)
-{
-  int err;
-  char sname[256];
-  const char *f, *v;
-
-  glswShutdown();
-  glswInit();
-  if (shaderPath[0] == 0) {
-    glswSetPath("c:/stim/shaders/", ".glsl");
-  }
-  else {
-    glswSetPath(shaderPath, ".glsl");
-  }
-
-  glswAddDirectiveToken("", "#version 330");
-
-  sprintf(sname, "%s.Vertex", shadername);
-  v = glswGetShader(sname);
-  if (!v) {
-    fprintf(getConsoleFP(), glswGetError());
-    goto error;
-  }
-
-  sprintf(sname, "%s.Fragment", shadername);
-  f = glswGetShader(sname);
-  if (!f) {
-    fprintf(getConsoleFP(), glswGetError());
-    goto error;
-  }
-
-  err = CompileProgram(GL_VERTEX_SHADER_ARB, v, &sp->vertShader, verbose);
-  if (GL_NO_ERROR != err) {
-    glDeleteShader(sp->fragShader);
-    glDeleteShader(sp->vertShader);
-    goto error;
-  }
-
-  err = CompileProgram(GL_FRAGMENT_SHADER_ARB, f, &sp->fragShader, verbose);
-  if (GL_NO_ERROR != err) {
-    glDeleteShader(sp->fragShader);
-    goto error;
-  }
-
-
-  sp->program = glCreateProgramObjectARB();
-  glAttachShader(sp->program,sp->vertShader);
-  glAttachShader(sp->program,sp->fragShader);
-
-  err = LinkProgram(sp->program, verbose);
-
-  if (GL_NO_ERROR != err) {
-    glDeleteShader(sp->fragShader);
-    glDeleteShader(sp->vertShader);
-    glDeleteObjectARB(sp->program);
-    fprintf(getConsoleFP(), "Program could not link");
-    goto error;
-  }
-
-  glswShutdown();
-  return err;
-
- error:
-  glswShutdown();
-  return -1;
-}
-
-
-
-static int add_defaults_to_table(Tcl_Interp *interp, Tcl_HashTable *dtable,
-				 char *shadername)
-{
-  char sname[256];
-  const char *u;
-  char *pch;
-  int argc;
-  char **argv;
-  Tcl_HashEntry *entryPtr;
-  int newentry;
-  
-  glswShutdown();
-  glswInit();
-  if (shaderPath[0] == 0) {
-    glswSetPath("c:/stim/shaders/", ".glsl");
-  }
-  else {
-    glswSetPath(shaderPath, ".glsl");
-  }
-
-  sprintf(sname, "%s.Uniforms", shadername);
-  u = glswGetShader(sname);
-  if (!u) {
-    goto error;
-  }
-  
-  /* For each line with text, set uniform to specified val */
-  pch = (char *) strtok((char *) u, "\n");
-  while (pch != NULL) {
-    if (pch[0] != '#') {
-      if (Tcl_SplitList(interp, pch, &argc, &argv) == TCL_OK) {
-	if (argc == 2) {
-	  entryPtr = Tcl_CreateHashEntry(dtable, argv[0], &newentry);
-	  Tcl_SetHashValue(entryPtr, argv[1]);
-	}
-      }
-    }
-    pch = (char *) strtok(NULL, "\n");
-  }
-
-  glswShutdown();
-  return 0;
-
- error:
-  glswShutdown();
-  return -1;
-}
-#endif
 
 /********************************************************************/
 /*                  PACKAGE INITIALIZATION CODE                     */
@@ -1638,20 +1080,7 @@ int Mesh_Init(Tcl_Interp *interp)
   
   if (MeshObjID < 0) MeshObjID = gobjRegisterType("mesh");
 
-#ifdef STIM_V1
-  glewInit();
-
-  if (GLEW_ARB_vertex_shader && 
-      GLEW_ARB_fragment_shader &&
-      GLEW_ARB_shading_language_100) {
-  }
-  else {
-    Tcl_SetResult(interp, "shader: no GLSL support", TCL_STATIC);
-    return TCL_ERROR;
-  }
-#else
   gladLoadGL();
-#endif
   
   Tcl_InitHashTable(&shaderProgramTable, TCL_STRING_KEYS);
 

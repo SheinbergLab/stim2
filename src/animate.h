@@ -90,7 +90,7 @@ typedef struct _anim_property {
 typedef struct _anim_state {
     GR_OBJ *obj;               /* back-pointer to object */
     AnimProperty *properties;  /* linked list of animated properties */
-    unsigned int start_time;   /* StimTime when animation started (ms) */
+    double start_time;         /* StimTicksF (float ms) when animation started */
     unsigned int frame_count;  /* frames since animation started */
 } AnimState;
 
@@ -103,7 +103,7 @@ typedef struct _anim_state {
  * ticks_ms: current StimTicks value
  * dt_ms: StimDeltaTime (time since last frame)
  */
-void animateUpdateObj(GR_OBJ *obj, unsigned int ticks_ms, unsigned int dt_ms);
+void animateUpdateObj(GR_OBJ *obj, double ticks_ms, double dt_ms);
 
 /* Clear all animations on an object - call when object destroyed */
 void animateClearObj(GR_OBJ *obj);

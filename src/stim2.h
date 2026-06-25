@@ -126,6 +126,9 @@ extern unsigned int StimTime;	/* Stim time counter            */
 extern unsigned int StimTicks;	/* Free running counter         */
 extern unsigned int StimVRetraceCount;   /* Counts vretraces    */
 extern unsigned int StimDeltaTime;  /* ms since last frame      */
+extern double StimTimeF;        /* float ms since reset (no int truncation) */
+extern double StimTicksF;       /* float free-running ms                    */
+extern double StimDeltaTimeF;   /* float ms since last frame                */
 extern int NextFrameTime;       /* When does next frame start   */
 extern int SwapCount;	        /* Do a swap pulse every swap?  */
 extern int SwapPulse;	        /* Do a swap pulse every swap?  */
@@ -181,6 +184,8 @@ extern char *getWGLExtensions(void);
 extern int getOverlayStatus(void);
 extern int getCurrentEye(void);
 extern int getStimTime(void);
+extern double getStimTimeF(void);   /* float ms since reset (no int truncation) */
+extern double getStimTicksF(void);  /* float free-running ms */
 extern double getFrameDuration(void);
 extern int getStereoMode(void);
 extern int setStereoMode(int);
