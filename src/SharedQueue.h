@@ -13,11 +13,16 @@ public:
   SharedQueue() {}
   ~SharedQueue() {}
   
-  T& front() {
+  T front() {
     std::unique_lock<std::mutex> mlock(mutex_);
     while (queue_.empty()) {
       cond_.wait(mlock);
     }
+    // Return a COPY made while the lock is held. Returning T& bound a
+    // reference into the deque; the unique_lock then unlocked at scope exit
+    // and the caller read deque memory with no lock held, racing a concurrent
+    // push_back that can reallocate the deque (use-after-free / corruption).
+    // All callers do `x = q.front()` (a copy), so by-value is a drop-in change.
     return queue_.front();
   }
   
