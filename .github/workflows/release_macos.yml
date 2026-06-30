@@ -155,6 +155,13 @@ jobs:
           body: stim2 version ${{ github.ref_name }}
           generateReleaseNotes: true
           allowUpdates: true
+          # Build into a prerelease so the tag is never returned by
+          # /releases/latest while artifacts are still uploading. The publish
+          # workflow flips this to a full release once all platforms succeed.
+          # omitPrereleaseDuringUpdate keeps re-runs from reverting a published
+          # release back to prerelease.
+          prerelease: true
+          omitPrereleaseDuringUpdate: true
 
   check-stim2:
 
