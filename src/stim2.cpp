@@ -447,11 +447,30 @@ void executeObjFrameScripts(GR_OBJ *o, int phase)
 {
   if (!o) return;
 
-  if (phase == STIM_POSTFRAME_SCRIPT) {
+  switch (phase) {
+  case STIM_PRE_SCRIPT:
+    /* Per-frame pre-draw work: advance the object's animation, then run
+       its pre-scripts. Driven from a dedicated traversal (executePreScripts)
+       rather than the draw pass, so it runs for every object regardless of
+       visibility or metagroup nesting -- the same guarantee the postframe/
+       thisframe queues already had. animateUpdateObj stays paired with the
+       pre-scripts here to preserve the historical "animate then pre" order. */
+    animateUpdateObj(o, StimTicksF, StimDeltaTimeF);
+    executeScripts(GR_PRE_SCRIPTS(o),
+                   GR_PRE_SCRIPT_ACTIVES(o),
+                   GR_N_PRE_SCRIPTS(o));
+    break;
+  case STIM_POST_SCRIPT:
+    executeScripts(GR_POST_SCRIPTS(o),
+                   GR_POST_SCRIPT_ACTIVES(o),
+                   GR_N_POST_SCRIPTS(o));
+    break;
+  case STIM_POSTFRAME_SCRIPT:
     executeScripts(GR_POSTFRAME_SCRIPTS(o),
                    GR_POSTFRAME_SCRIPT_ACTIVES(o),
                    GR_N_POSTFRAME_SCRIPTS(o));
-  } else { /* STIM_THISFRAME_SCRIPT: one-shot */
+    break;
+  case STIM_THISFRAME_SCRIPT: { /* one-shot: drain, execute, free */
     int j, n;
     char *thisframe_scripts[MAXSCRIPTS];
     for (j = 0, n = 0; j < GR_N_THISFRAME_SCRIPTS(o); j++) {
@@ -462,6 +481,8 @@ void executeObjFrameScripts(GR_OBJ *o, int phase)
       sendTclCommand(thisframe_scripts[j]);
       free(thisframe_scripts[j]);
     }
+    break;
+  }
   }
 
   /* Recurse into container members (metagroup, etc.) */
@@ -502,17 +523,42 @@ void executeScripts(char **scripts, int *actives, int n)
   }
 }
 
+/*
+ * Pre-draw and post-draw script passes. Mirror executePostFrameScripts:
+ * iterate the group's top-level objects and recurse into container members
+ * via the framescript hook, independent of visibility. This decouples
+ * pre/post scripts (and per-object animation advance) from the draw
+ * traversal, so a per-frame driver attached to a metagroup MEMBER keeps
+ * running even when the parent metagroup is hidden -- matching the behavior
+ * hidden top-level objects already had.
+ */
+void executePreScripts(OBJ_GROUP *g)
+{
+  GR_OBJ *o;
+  int i;
+  for (i = 0; i < OG_NOBJS(g); i++)  {
+    o = OL_OBJ(OBJList, OG_OBJID(g, i));
+    if (o) executeObjFrameScripts(o, STIM_PRE_SCRIPT);
+  }
+}
+
+void executePostScripts(OBJ_GROUP *g)
+{
+  GR_OBJ *o;
+  int i;
+  for (i = 0; i < OG_NOBJS(g); i++)  {
+    o = OL_OBJ(OBJList, OG_OBJID(g, i));
+    if (o) executeObjFrameScripts(o, STIM_POST_SCRIPT);
+  }
+}
+
+/* Pure draw: transform + render. Animation advance and pre/post scripts
+   are handled by executePreScripts/executePostScripts, not here, so this
+   only runs for VISIBLE objects (callers gate on GR_VISIBLE). */
 void drawObject(GR_OBJ *o)
 {
-  animateUpdateObj(o, StimTicksF, StimDeltaTimeF);  
-  executeScripts(GR_PRE_SCRIPTS(o),
-         GR_PRE_SCRIPT_ACTIVES(o),
-         GR_N_PRE_SCRIPTS(o));
   setModelViewMatrix(o);
   drawObj(o);
-  executeScripts(GR_POST_SCRIPTS(o),
-         GR_POST_SCRIPT_ACTIVES(o),
-         GR_N_POST_SCRIPTS(o));
 }
 
 /********************************************************************
@@ -734,6 +780,10 @@ static void drawGroup(OBJ_GROUP *g)
   else if (OL_DYNAMIC(OBJList) && !OGL_VISIBLE(GList))
     stopAnimation();
 
+  /* Draw pass: VISIBLE objects only. Per-object animation advance and
+     pre/post scripts run in executePreScripts/executePostScripts (which
+     traverse regardless of visibility), so hidden objects -- top-level or
+     metagroup members -- are simply not drawn here. */
   if (g && OGL_VISIBLE(GList)) {
     switch (StereoMode) {
     case 0:
@@ -741,13 +791,6 @@ static void drawGroup(OBJ_GROUP *g)
       for (i = 0; i < OG_NOBJS(g); i++)  {
     o = OL_OBJ(OBJList, OG_OBJID(g, i));
     if (o && GR_VISIBLE(o)) drawObject(o);
-    else if (o) {
-      animateUpdateObj(o, StimTicksF, StimDeltaTimeF);      
-      executeScripts(GR_PRE_SCRIPTS(o), GR_PRE_SCRIPT_ACTIVES(o),
-             GR_N_PRE_SCRIPTS(o));
-      executeScripts(GR_POST_SCRIPTS(o), GR_POST_SCRIPT_ACTIVES(o),
-             GR_N_POST_SCRIPTS(o));
-    }
       }
       break;
     case 1:
@@ -758,13 +801,6 @@ static void drawGroup(OBJ_GROUP *g)
     for (i = 0; i < OG_NOBJS(g); i++)  {
       o = OL_OBJ(OBJList, OG_OBJID(g, i));
       if (o && GR_VISIBLE(o) && GR_LEFT_EYE(o)) drawObject(o);
-      else if (o) {
-	animateUpdateObj(o, StimTicksF, StimDeltaTimeF);      
-        executeScripts(GR_PRE_SCRIPTS(o), GR_PRE_SCRIPT_ACTIVES(o),
-               GR_N_PRE_SCRIPTS(o));
-        executeScripts(GR_POST_SCRIPTS(o), GR_POST_SCRIPT_ACTIVES(o),
-               GR_N_POST_SCRIPTS(o));
-      }
     }
       }
       if (StereoMode == 2) break;
@@ -775,13 +811,6 @@ static void drawGroup(OBJ_GROUP *g)
     for (i = 0; i < OG_NOBJS(g); i++)  {
       o = OL_OBJ(OBJList, OG_OBJID(g, i));
       if (o && GR_VISIBLE(o) && GR_RIGHT_EYE(o)) drawObject(o);
-      else if (o) {
-	animateUpdateObj(o, StimTicksF, StimDeltaTimeF);      
-        executeScripts(GR_PRE_SCRIPTS(o), GR_PRE_SCRIPT_ACTIVES(o),
-               GR_N_PRE_SCRIPTS(o));
-        executeScripts(GR_POST_SCRIPTS(o), GR_POST_SCRIPT_ACTIVES(o),
-               GR_N_POST_SCRIPTS(o));
-      }
     }
       }
       break;
@@ -792,13 +821,6 @@ static void drawGroup(OBJ_GROUP *g)
     for (i = 0; i < OG_NOBJS(g); i++)  {
       o = OL_OBJ(OBJList, OG_OBJID(g, i));
       if (o && GR_VISIBLE(o) && GR_LEFT_EYE(o)) drawObject(o);
-      else if (o) {
-	animateUpdateObj(o, StimTicksF, StimDeltaTimeF);      
-        executeScripts(GR_PRE_SCRIPTS(o), GR_PRE_SCRIPT_ACTIVES(o),
-               GR_N_PRE_SCRIPTS(o));
-        executeScripts(GR_POST_SCRIPTS(o), GR_POST_SCRIPT_ACTIVES(o),
-               GR_N_POST_SCRIPTS(o));
-      }
     }
       }
       if (OG_RIGHT_EYE(g)) {
@@ -807,13 +829,6 @@ static void drawGroup(OBJ_GROUP *g)
     for (i = 0; i < OG_NOBJS(g); i++)  {
       o = OL_OBJ(OBJList, OG_OBJID(g, i));
       if (o && GR_VISIBLE(o) && GR_RIGHT_EYE(o)) drawObject(o);
-      else if (o) {
-	animateUpdateObj(o, StimTicksF, StimDeltaTimeF);      
-        executeScripts(GR_PRE_SCRIPTS(o), GR_PRE_SCRIPT_ACTIVES(o),
-               GR_N_PRE_SCRIPTS(o));
-        executeScripts(GR_POST_SCRIPTS(o), GR_POST_SCRIPT_ACTIVES(o),
-               GR_N_POST_SCRIPTS(o));
-      }
     }
       }
       break;
@@ -2682,12 +2697,14 @@ void Application::updateDisplay(bool log_events)
     if (OGL_NEWLY_VISIBLE(GList) && OG_START(g) == -1) {
       resetStimTime();
     }
-    
-    drawGroup(g); 
+
+    executePreScripts(g);
+    drawGroup(g);
+    executePostScripts(g);
 
     if (show_imgui)
-      ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());  
-    
+      ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PreSwap");
     /* Swap front and back buffers */
     glfwSwapBuffers(window);
@@ -2739,9 +2756,11 @@ void Application::updateDisplay(bool log_events)
     if (ClearBackground) {
       glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     }
-    if (OGL_NEWLY_VISIBLE(GList) && OG_START(g) == -1) 
+    if (OGL_NEWLY_VISIBLE(GList) && OG_START(g) == -1)
       resetStimTime();
+    executePreScripts(g);
     drawGroup(g);
+    executePostScripts(g);
     glFlush();
 
     updateTimes();
