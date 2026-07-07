@@ -144,11 +144,10 @@ void metagroupDraw(GR_OBJ *o)
 
       stimGetMatrix(STIM_MODELVIEW_MATRIX, modelmatrix);
 
-      animateUpdateObj(g, StimTicksF, StimDeltaTimeF);
-
-      executeScripts(GR_PRE_SCRIPTS(g),
-		     GR_PRE_SCRIPT_ACTIVES(g),
-		     GR_N_PRE_SCRIPTS(g));
+      /* Animation advance and pre/post scripts for members are handled by
+         the group-level executePreScripts/executePostScripts passes (via
+         the framescript recursion hook), independent of visibility. This
+         loop only draws. */
 
       if (GR_USEMATRIX(g)) {
 	/* Object has a 4x4 matrix (e.g. set by Box2D_linkObj) -
@@ -166,10 +165,6 @@ void metagroupDraw(GR_OBJ *o)
       }
 
       if (GR_VISIBLE(g)) drawObj(g);
-
-      executeScripts(GR_POST_SCRIPTS(g),
-		     GR_POST_SCRIPT_ACTIVES(g),
-		     GR_N_POST_SCRIPTS(g));
 
       stimPutMatrix(STIM_MODELVIEW_MATRIX, modelmatrix);
     }
