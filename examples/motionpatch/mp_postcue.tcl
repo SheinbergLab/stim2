@@ -242,6 +242,68 @@ proc mp_pc_probe_rgb {which} {
     return [list [mp_pc_l2s $rl] [mp_pc_l2s $gl] [mp_pc_l2s $bl]]
 }
 
+# Meter-patch color: red (a) / green (b) at a BRIGHT fixed pedestal (linear
+# 0.5) instead of the experimental base_lum, so the chroma (meter_delta, up to
+# 0.5) has headroom to be strongly saturated while staying in-gamut AND
+# equiluminant. (At the dim experimental pedestal a big chroma would clip a
+# channel to 0 and quietly break equiluminance.) Same lum_balance tilt as the
+# probe, so the patches verify the SAME red/green null -- just brighter/bolder.
+proc mp_pc_meter_rgb {which} {
+    set y0  0.5
+    set c   $::mp_pc::meter_delta
+    set k   [expr {0.2126/0.7152}]
+    set off [expr {$::mp_pc::lum_balance * $y0}]
+    if {$which eq "a"} {                 ;# red
+        set rl [expr {$y0 + $c      + $off}]
+        set gl [expr {$y0 - $k*$c   + $off}]
+        set bl [expr {$y0           + $off}]
+    } else {                             ;# green
+        set rl [expr {$y0 - $c      - $off}]
+        set gl [expr {$y0 + $k*$c   - $off}]
+        set bl [expr {$y0           - $off}]
+    }
+    return [list [mp_pc_l2s $rl] [mp_pc_l2s $gl] [mp_pc_l2s $bl]]
+}
+
+# ---- Color report / photometry verification -----------------------------
+# 8-bit (0..255) form of a float RGB triplet.
+proc mp_pc_rgb8 {rgb} { lmap c $rgb {expr {int(round($c*255.0))}} }
+
+# Predicted relative luminance (sRGB EOTF + Rec709 weights). This is "what we
+# think the flicker test shows" -- compare against the luminance meter.
+proc mp_pc_predicted_lum {rgb} {
+    lassign $rgb r g b
+    expr {0.2126*[mp_pc_s2l $r] + 0.7152*[mp_pc_s2l $g] + 0.0722*[mp_pc_s2l $b]}
+}
+
+# Print two triplets (float, 8-bit, predicted luminance). predY is the model's
+# luminance ("what we think it shows") -- compare against the meter. Returns
+# {a {...} b {...}}.
+proc mp_pc_print_triplets {label a b} {
+    puts "mp_postcue $label  (lum_balance=[format %.3f $::mp_pc::lum_balance])"
+    puts [format "  a (red)   float %s   8bit %s   predY %.4f" \
+              [lmap c $a {format %.4f $c}] [mp_pc_rgb8 $a] [mp_pc_predicted_lum $a]]
+    puts [format "  b (green) float %s   8bit %s   predY %.4f" \
+              [lmap c $b {format %.4f $c}] [mp_pc_rgb8 $b] [mp_pc_predicted_lum $b]]
+    return [dict create a $a b $b]
+}
+# Experimental probe colors (base_lum + color_delta).
+proc mp_pc_print_colors {} {
+    mp_pc_print_triplets \
+        "probe colors (base_lum=[format %.3f $::mp_pc::base_lum] color_delta=[format %.3f $::mp_pc::color_delta])" \
+        [mp_pc_probe_rgb a] [mp_pc_probe_rgb b]
+}
+# Meter-patch colors (bright pedestal + meter_delta).
+proc mp_pc_print_meter {} {
+    mp_pc_print_triplets \
+        "meter patches (pedestal 0.5, meter_delta=[format %.3f $::mp_pc::meter_delta])" \
+        [mp_pc_meter_rgb a] [mp_pc_meter_rgb b]
+}
+# Report whatever is on screen: meter patches in Photometer mode, else probes.
+proc mp_pc_report_action {action} {
+    if {$::mp_pc::phot_a ne ""} { mp_pc_print_meter } else { mp_pc_print_colors }
+}
+
 proc mp_pc_tint_off {} {
     foreach mp {dots_target dots_bg} { motionpatch_layermode $mp R 0 }
     set ::mp_pc::tint_on 0
@@ -391,7 +453,7 @@ proc mp_pc_init_params {} {
         surround_speed 1.5  bg_lifetime 0.08  surround_alpha 1.0
         show_color 1  probe_color random  catch_frac 0.2
         color_delta 0.16  color_dur_ms 33.0  soa_ms -100.0
-        base_lum 0.5  lum_balance 0.0
+        base_lum 0.5  lum_balance 0.0  meter_delta 0.4
         blob_sigma 0.09  overlap_dx 0.0  overlap_dy 0.0
         pointsize 3.0  fix_r 0.15  flicker_hz 12.0
     } {
@@ -406,7 +468,8 @@ proc mp_pc_init_runtime {} {
         coh_dt 0.0167  coh_nframes 0  coh_peak_s 0.8
         color_on_s 0.0  color_off_s 0.0  flicker_mode 0
     } { set ::mp_pc::$k $v }
-    foreach k {loc_ex loc_ey loc_tex timeline patch_mg flick_mg flick_bars fix_id} {
+    foreach k {loc_ex loc_ey loc_tex timeline patch_mg flick_mg flick_bars fix_id \
+               phot_a phot_b} {
         set ::mp_pc::$k {}
     }
 }
@@ -522,6 +585,50 @@ proc mp_pc_flicker_setup {} {
     mp_pc_init_runtime
     mp_pc_build_scene $::mp_pc::patch_size 20.0
     mp_pc_set_flicker 1 $::mp_pc::flicker_hz   ;# calibration mode
+    redraw
+}
+
+# Photometer Patches: two big, well-separated static squares painted with the
+# exact a (red, left) and b (green, right) probe colors, so a luminance meter
+# can be pointed at each to verify the flicker null. A prescript recolors them
+# live, so changing color_delta / lum_balance updates the squares in place.
+proc mp_pc_photometer_update {} {
+    catch {
+        polycolor $::mp_pc::phot_a {*}[mp_pc_meter_rgb a]
+        polycolor $::mp_pc::phot_b {*}[mp_pc_meter_rgb b]
+    }
+}
+proc mp_pc_photometer_setup {} {
+    mp_pc_init_params
+    mp_pc_init_runtime
+    glistInit 1
+    resetObjList
+
+    set sz  8.0    ;# square side (dva)
+    set gap 4.0    ;# gap between the two squares (dva)
+    set off [expr {($sz + $gap) / 2.0}]
+
+    set a [polygon]
+    objName $a phot_a
+    scaleObj $a $sz $sz
+    translateObj $a [expr {-$off}] 0
+    set ::mp_pc::phot_a $a
+
+    set b [polygon]
+    objName $b phot_b
+    scaleObj $b $sz $sz
+    translateObj $b $off 0
+    set ::mp_pc::phot_b $b
+
+    glistAddObject $a 0
+    glistAddObject $b 0
+    addPreScript $a mp_pc_photometer_update
+
+    glistSetDynamic 0 1
+    glistSetCurGroup 0
+    glistSetVisible 1
+    mp_pc_photometer_update
+    mp_pc_print_meter
     redraw
 }
 
@@ -660,6 +767,12 @@ proc mp_pc_set_flicker {flicker_mode flicker_hz} {
 proc mp_pc_set_flicker_hz {flicker_hz} { set ::mp_pc::flicker_hz $flicker_hz }
 proc mp_pc_get_flicker_hz {} { dict create flicker_hz $::mp_pc::flicker_hz }
 
+# Meter saturation: chroma of the photometer patches ONLY. Independent of the
+# experimental color_delta, and equiluminant at any value, so you can boost the
+# patches for a stronger meter reading without changing the stimulus.
+proc mp_pc_set_meter {meter_delta} { set ::mp_pc::meter_delta $meter_delta }
+proc mp_pc_get_meter {} { dict create meter_delta $::mp_pc::meter_delta }
+
 # ============================================================
 # WORKSPACE INTERFACE
 # ============================================================
@@ -675,7 +788,12 @@ workspace::setup mp_pc_setup {
 # so the observer nulls lum_balance by minimizing flicker. lum_balance (and the
 # other color knobs) persist back into Post-cue Trials.
 workspace::variant flicker {} -proc mp_pc_flicker_setup \
-  -adjusters {pc_color pc_flicker} -label "Flicker Calibration"
+  -adjusters {pc_color pc_flicker pc_report} -label "Flicker Calibration"
+
+# Photometer Patches: static big red/green squares of the actual probe colors
+# for luminance-meter verification of the flicker null.
+workspace::variant photometer {} -proc mp_pc_photometer_setup \
+  -adjusters {pc_color pc_meter pc_report} -label "Photometer Patches"
 
 workspace::adjuster pc_actions {
     drop  {action "Trial now (↓)"}
@@ -711,6 +829,15 @@ workspace::adjuster pc_flicker {
     flicker_hz {float 4.0 20.0 1.0 12.0 "Flicker Rate (Hz)"}
 } -target {} -proc mp_pc_set_flicker_hz -getter mp_pc_get_flicker_hz \
   -label "Flicker Rate"
+
+workspace::adjuster pc_meter {
+    meter_delta {float 0.0 0.5 0.02 0.4 "Meter Saturation (patch chroma; equiluminant)"}
+} -target {} -proc mp_pc_set_meter -getter mp_pc_get_meter \
+  -label "Meter Saturation"
+
+workspace::adjuster pc_report {
+    print {action "Print R/G triplets to console"}
+} -target {} -proc mp_pc_report_action -label "Report Colors"
 
 workspace::adjuster pc_spatial {
     shape_size  {float 0.05 0.4 0.01 0.16 "Shape Aperture (patch fraction)"}
