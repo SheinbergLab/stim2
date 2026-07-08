@@ -223,7 +223,12 @@ jobs:
       - name: Install the package we just released
         run: |
           wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/stim2_${{ github.ref_name }}_${{ matrix.arch }}_${{ matrix.distro }}.deb
-          sudo apt install --yes ./stim2_${{ github.ref_name }}_${{ matrix.arch }}_${{ matrix.distro }}.deb
+          # NB: sudo resets the environment, so the job-level DEBIAN_FRONTEND
+          # does NOT reach apt/dpkg -- pass it through explicitly. Without this,
+          # the jammy .deb pulls keyboard-configuration, whose debconf prompt
+          # falls back to the Readline frontend and hangs for the full 6h job
+          # timeout waiting on stdin.
+          sudo DEBIAN_FRONTEND=noninteractive apt install --yes ./stim2_${{ github.ref_name }}_${{ matrix.arch }}_${{ matrix.distro }}.deb
 
       - name: Sanity check the installed package
         run: |
