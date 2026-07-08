@@ -1642,7 +1642,11 @@ proc ::workspace::invoke_setup {setup_name args} {
     
     set result [uplevel #0 [list $procname {*}$args]]
     set active_setup $setup_name
-    
+
+    # Apply the initial adjuster state now, so setter side-effects run at load
+    # and the running stimulus matches the panel (see apply_adjuster_state).
+    apply_adjuster_state $setup_name
+
     return $result
 }
 
@@ -1764,6 +1768,50 @@ proc ::workspace::get_templates {} {
     return $templates
 }
 
+# Call an adjuster getter tolerantly. Getters may be declared to take the
+# target ({target} or {{target {}}}) OR to take no arguments at all; both
+# conventions appear in the wild. Try with the target first, then without.
+proc ::workspace::call_getter {getter target} {
+    if {![catch {$getter $target} values]} { return $values }
+    return [$getter]
+}
+
+# After a setup (or variant) runs, push each of its adjusters' current getter
+# values back through the adjuster's setter. This makes the setters' side
+# effects execute at load, so the running stimulus matches what the panel
+# shows. Without it the workspace only invokes a setter when the user actually
+# changes a control, leaving the initial state un-applied (controls "look
+# selected" but don't take effect until wiggled). Adjusters with no getter
+# (e.g. actions) are skipped; any getter/setter that errors is ignored so a
+# single bad adjuster can't break setup.
+proc ::workspace::apply_adjuster_state {setup_name} {
+    variable setups
+    variable adjusters
+    if {![dict exists $setups $setup_name]} return
+    set info [dict get $setups $setup_name]
+    if {![dict exists $info adjusters]} return
+    foreach adj_name [dict get $info adjusters] {
+        if {![dict exists $adjusters $adj_name]} continue
+        set ainfo [dict get $adjusters $adj_name]
+        if {![dict exists $ainfo getter]} continue
+        if {![dict exists $ainfo params]} continue
+        set getter [dict get $ainfo getter]
+        set target [dict get $ainfo target]
+        if {[catch {call_getter $getter $target} values]} continue
+        # Order the values by the adjuster's DECLARED params (the setter's
+        # positional arg order) rather than the getter's dict order, and
+        # invoke through the same path a user change would take. Any missing
+        # key / erroring setter skips just this adjuster.
+        if {[catch {
+            set argv {}
+            foreach p [dict get $ainfo params] {
+                lappend argv [dict get $values [dict get $p name]]
+            }
+            invoke_adjuster $adj_name {*}$argv
+        }]} continue
+    }
+}
+
 # Get current values for a list of adjusters by calling their getters
 # Returns JSON: {"adjuster_name": {param: value, ...}, ...}
 proc ::workspace::get_adjuster_values {adjuster_names} {
@@ -1782,9 +1830,9 @@ proc ::workspace::get_adjuster_values {adjuster_names} {
         
         set getter [dict get $info getter]
         set target [dict get $info target]
-        
-        # Call the getter with target
-        if {[catch {$getter $target} values]} {
+
+        # Call the getter (tolerant of {target} vs no-arg getters)
+        if {[catch {call_getter $getter $target} values]} {
             # Getter failed - skip this adjuster
             continue
         }
