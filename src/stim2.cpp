@@ -64,6 +64,7 @@
 #include <tcl.h>
 
 #include "stim2.h"
+#include "socket_keepalive.h"
 #include "rawapi.h"
 #include "objname.h"
 #include "animate.h"
@@ -2257,6 +2258,12 @@ void Application::start_tcp_server(void)
     }
     
     setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, (char *) &on, sizeof(on));
+
+    /* The client thread below blocks in read() with no timeout, so a peer that
+       vanishes WITHOUT closing -- a rig host rebooting, dserv's machine losing
+       power -- would leak the socket and the thread forever. Keepalive is what
+       makes that read() eventually fail. See socket_keepalive.h. */
+    dserv_set_keepalive(new_socket_fd);
     
     // Create a thread and transfer the new stream to it.
     std::thread thr(tcp_client_process, new_socket_fd, &queue);
@@ -2313,6 +2320,12 @@ void Application::start_msg_server(void)
     }
     
     setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, (char *) &on, sizeof(on));
+
+    /* The client thread below blocks in read() with no timeout, so a peer that
+       vanishes WITHOUT closing -- a rig host rebooting, dserv's machine losing
+       power -- would leak the socket and the thread forever. Keepalive is what
+       makes that read() eventually fail. See socket_keepalive.h. */
+    dserv_set_keepalive(new_socket_fd);
     
     // Create a thread and transfer the new stream to it.
     std::thread thr(message_client_process, new_socket_fd, &queue);
@@ -2369,6 +2382,12 @@ void Application::start_dstcp_server(void)
     }
     
     setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, (char *) &on, sizeof(on));
+
+    /* The client thread below blocks in read() with no timeout, so a peer that
+       vanishes WITHOUT closing -- a rig host rebooting, dserv's machine losing
+       power -- would leak the socket and the thread forever. Keepalive is what
+       makes that read() eventually fail. See socket_keepalive.h. */
+    dserv_set_keepalive(new_socket_fd);
     
     // Create a thread and transfer the new stream to it.
     std::thread thr(ds_client_process, new_socket_fd, &ds_queue);
