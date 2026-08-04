@@ -331,7 +331,10 @@ static void ImGui_ImplOpenGL3_SetupRenderState(ImDrawData* draw_data, int fb_wid
         glDisable(GL_PRIMITIVE_RESTART);
 #endif
 #ifdef GL_POLYGON_MODE
-    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    // With glad, glPolygonMode is a loaded pointer; on GLES-only stacks
+    // (e.g. ARM Mali blob) it resolves to NULL rather than a glvnd no-op.
+    if (glPolygonMode)
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 #endif
 
     // Support for GL 4.5 rarely used glClipControl(GL_UPPER_LEFT)
@@ -413,7 +416,9 @@ void    ImGui_ImplOpenGL3_RenderDrawData(ImDrawData* draw_data)
     GLuint last_vertex_array_object; glGetIntegerv(GL_VERTEX_ARRAY_BINDING, (GLint*)&last_vertex_array_object);
 #endif
 #ifdef GL_POLYGON_MODE
-    GLint last_polygon_mode[2]; glGetIntegerv(GL_POLYGON_MODE, last_polygon_mode);
+    GLint last_polygon_mode[2] = { GL_FILL, GL_FILL };
+    if (glPolygonMode)
+        glGetIntegerv(GL_POLYGON_MODE, last_polygon_mode);
 #endif
     GLint last_viewport[4]; glGetIntegerv(GL_VIEWPORT, last_viewport);
     GLint last_scissor_box[4]; glGetIntegerv(GL_SCISSOR_BOX, last_scissor_box);
@@ -522,7 +527,8 @@ void    ImGui_ImplOpenGL3_RenderDrawData(ImDrawData* draw_data)
 #endif
 
 #ifdef GL_POLYGON_MODE
-    glPolygonMode(GL_FRONT_AND_BACK, (GLenum)last_polygon_mode[0]);
+    if (glPolygonMode)
+        glPolygonMode(GL_FRONT_AND_BACK, (GLenum)last_polygon_mode[0]);
 #endif
     glViewport(last_viewport[0], last_viewport[1], (GLsizei)last_viewport[2], (GLsizei)last_viewport[3]);
     glScissor(last_scissor_box[0], last_scissor_box[1], (GLsizei)last_scissor_box[2], (GLsizei)last_scissor_box[3]);

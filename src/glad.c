@@ -142,6 +142,43 @@ void* get_proc(const char *namez) {
     return result;
 }
 
+#if !defined(_WIN32) && !defined(__CYGWIN__) && !defined(__APPLE__) && !defined(__HAIKU__)
+/* Fallback for EGL-native GL stacks that bypass glvnd (e.g. the ARM Mali
+ * blob on NXP i.MX95): there libGL.so.1 is glvnd with no vendor behind the
+ * blob's EGL context, so glX-obtained entry points dispatch to nothing and
+ * gladLoadGLLoader() fails its glGetString check.  Resolve through
+ * libEGL/libGLESv2 instead -- the same libraries GLFW created the context
+ * with.  Handles are deliberately never closed so the loaded pointers stay
+ * valid, and RTLD_GLOBAL lets dlsym(RTLD_DEFAULT, ...) users (mpv render
+ * API) resolve GL symbols too. */
+typedef void* (APIENTRYP PFNEGLGETPROCADDRESSPROC_PRIVATE)(const char*);
+static PFNEGLGETPROCADDRESSPROC_PRIVATE gladEglGetProcAddressPtr;
+static void* libGLES;
+
+static
+int open_gl_egl(void) {
+    void* libEGL = dlopen("libEGL.so.1", RTLD_NOW | RTLD_GLOBAL);
+    if(libEGL == NULL) libEGL = dlopen("libEGL.so", RTLD_NOW | RTLD_GLOBAL);
+    if(libEGL != NULL) {
+        gladEglGetProcAddressPtr = (PFNEGLGETPROCADDRESSPROC_PRIVATE)
+            dlsym(libEGL, "eglGetProcAddress");
+    }
+    libGLES = dlopen("libGLESv2.so.2", RTLD_NOW | RTLD_GLOBAL);
+    if(libGLES == NULL) libGLES = dlopen("libGLESv2.so", RTLD_NOW | RTLD_GLOBAL);
+    return gladEglGetProcAddressPtr != NULL || libGLES != NULL;
+}
+
+static
+void* get_proc_egl(const char *namez) {
+    void* result = NULL;
+    if(libGLES != NULL) result = dlsym(libGLES, namez);
+    if(result == NULL && gladEglGetProcAddressPtr != NULL) {
+        result = gladEglGetProcAddressPtr(namez);
+    }
+    return result;
+}
+#endif
+
 int gladLoadGL(void) {
     int status = 0;
 
@@ -149,6 +186,12 @@ int gladLoadGL(void) {
         status = gladLoadGLLoader(&get_proc);
         close_gl();
     }
+
+#if !defined(_WIN32) && !defined(__CYGWIN__) && !defined(__APPLE__) && !defined(__HAIKU__)
+    if(!status && open_gl_egl()) {
+        status = gladLoadGLLoader(&get_proc_egl);
+    }
+#endif
 
     return status;
 }

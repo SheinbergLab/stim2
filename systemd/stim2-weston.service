@@ -1,0 +1,41 @@
+# stim2 under a Weston kiosk session. For platforms where wlroots/cage
+# can't run on the vendor GL stack (e.g. NXP i.MX95 with the ARM Mali
+# blob), Weston is the vendor-validated compositor; kiosk-shell plus
+# [autolaunch] gives the same lifecycle as the cage-based stim2.service.
+#
+# Install as /etc/systemd/system/stim2.service together with
+# /etc/xdg/weston/stim2-kiosk.ini:
+#
+#   [core]
+#   shell=kiosk-shell.so
+#   idle-time=0
+#   require-input=false
+#   use-g2d=true
+#
+#   [autolaunch]
+#   path=/usr/local/stim2/stim2-kiosk.sh
+#   watch=true
+#
+# and /usr/local/stim2/stim2-kiosk.sh:
+#
+#   #!/bin/sh
+#   exec /usr/local/stim2/stim2 -F -f /usr/local/stim2/config/linux.cfg
+
+[Unit]
+Description=Stim2 Stimulus Presentation (Weston kiosk)
+Conflicts=weston.service weston.socket
+Wants=seatd.service
+After=seatd.service systemd-user-sessions.service
+
+[Service]
+Type=notify
+RuntimeDirectory=stim2
+Environment=XDG_RUNTIME_DIR=/run/stim2
+ExecStart=/usr/bin/weston --log=/run/stim2/weston.log --modules=systemd-notify.so -c /etc/xdg/weston/stim2-kiosk.ini
+Restart=always
+RestartSec=2
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=50
+
+[Install]
+WantedBy=multi-user.target
