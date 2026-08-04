@@ -19,14 +19,50 @@ if [ "$ARCH" = "arm64" ]; then
     fi
     STIM2_SVC_NAME=stim2
 else
+    # X11 flavor lives in the packaged FILE name only; it too installs as
+    # stim2.service so 'systemctl start stim2' works on every platform.
     STIM2_SVC=stim2-x11.service
-    STIM2_SVC_NAME=stim2-x11
+    STIM2_SVC_NAME=stim2
 fi
 
 # Detect first install vs upgrade (postinst is called as `postinst configure <old-version>`)
 FIRST_INSTALL=0
 if [ "$1" = "configure" ] && [ -z "$2" ]; then
     FIRST_INSTALL=1
+fi
+
+# Migrate legacy installs where the unit was named stim2-x11.service: the
+# unit name is now 'stim2' on every platform. Preserves enabled/active
+# state (brief stop/start if it was running).
+if [ -f /etc/systemd/system/stim2-x11.service ] && [ ! -f /etc/systemd/system/stim2.service ]; then
+    WAS_ENABLED=0
+    WAS_ACTIVE=0
+    if [ -d /run/systemd/system ]; then
+        systemctl is-enabled --quiet stim2-x11 2>/dev/null && WAS_ENABLED=1
+        systemctl is-active --quiet stim2-x11 2>/dev/null && WAS_ACTIVE=1
+        systemctl disable --now stim2-x11 >/dev/null 2>&1 || true
+    fi
+    mv /etc/systemd/system/stim2-x11.service /etc/systemd/system/stim2.service
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload
+        if [ "$WAS_ENABLED" = 1 ]; then systemctl enable stim2 >/dev/null 2>&1 || true; fi
+        if [ "$WAS_ACTIVE" = 1 ]; then systemctl start stim2 || true; fi
+    fi
+    echo "Migrated stim2-x11.service -> stim2.service (state preserved)"
+fi
+
+# Repair agent units rendered before the name unification: they have
+# '--service stim2-x11' baked in, which left the agent unable to manage
+# the unit 'dservctl component update stim2' actually targets.
+if [ -f /etc/systemd/system/stim2.service ] \
+   && [ -f /etc/systemd/system/stim2-agent.service ] \
+   && grep -q -- "--service stim2-x11" /etc/systemd/system/stim2-agent.service; then
+    sed -i "s/--service stim2-x11/--service stim2/" /etc/systemd/system/stim2-agent.service
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload
+        systemctl try-restart stim2-agent >/dev/null 2>&1 || true
+    fi
+    echo "Updated stim2-agent.service to --service stim2"
 fi
 
 # Render the stim2-agent components configuration with the platform's actual

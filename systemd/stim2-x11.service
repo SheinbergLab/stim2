@@ -1,3 +1,7 @@
+# Installed by postinst as /etc/systemd/system/stim2.service -- the unit
+# name is 'stim2' on every platform; the -x11 suffix is the packaged
+# flavor only (amd64 boxes running xinit/Xorg).
+
 [Unit]
 Description=Stim2 Stimulus Presentation (X11)
 Conflicts=getty@tty1.service
