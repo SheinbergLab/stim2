@@ -508,6 +508,13 @@ else()
 	COMPONENT stim2
     )
 
+    # Launcher for the Weston kiosk variant (stim2-weston.service)
+    install(
+	PROGRAMS scripts/stim2-kiosk.sh
+	DESTINATION "/usr/local/stim2"
+	COMPONENT stim2
+    )
+
     # Add stimdlls
     file(GLOB STIMDLLS stimdlls/build/*.so)
     message("Adding STIMDLLS: ${STIMDLLS}")
@@ -595,7 +602,16 @@ else()
     # Add systemd service
     set(SYSTEMD_SCRIPT systemd/stim2.service)
     set(SYSTEMD_SCRIPT_X11 systemd/stim2-x11.service)
-    message("Bundling systemd service: ${SYSTEMD_SCRIPT}, ${SYSTEMD_SCRIPT_X11}")
+    set(SYSTEMD_SCRIPT_WESTON systemd/stim2-weston.service)
+    message("Bundling systemd services: ${SYSTEMD_SCRIPT}, ${SYSTEMD_SCRIPT_X11}, ${SYSTEMD_SCRIPT_WESTON}")
+
+    # Weston kiosk config template (postinst seeds it to /etc/xdg/weston
+    # on Mali-blob boards)
+    install(
+        FILES config/stim2-kiosk.ini
+        DESTINATION "/usr/local/stim2/config"
+        COMPONENT stim2
+    )
 
     # Add stim2-agent service and components
     install(
@@ -611,7 +627,7 @@ else()
     )
 
     install(
-        FILES ${SYSTEMD_SCRIPT} ${SYSTEMD_SCRIPT_X11}
+        FILES ${SYSTEMD_SCRIPT} ${SYSTEMD_SCRIPT_X11} ${SYSTEMD_SCRIPT_WESTON}
         DESTINATION /usr/local/stim2/systemd
         COMPONENT stim2
     )

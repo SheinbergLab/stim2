@@ -3,23 +3,10 @@
 # blob), Weston is the vendor-validated compositor; kiosk-shell plus
 # [autolaunch] gives the same lifecycle as the cage-based stim2.service.
 #
-# Install as /etc/systemd/system/stim2.service together with
-# /etc/xdg/weston/stim2-kiosk.ini:
-#
-#   [core]
-#   shell=kiosk-shell.so
-#   idle-time=0
-#   require-input=false
-#   use-g2d=true
-#
-#   [autolaunch]
-#   path=/usr/local/stim2/stim2-kiosk.sh
-#   watch=true
-#
-# and /usr/local/stim2/stim2-kiosk.sh:
-#
-#   #!/bin/sh
-#   exec /usr/local/stim2/stim2 -F -f /usr/local/stim2/config/linux.cfg
+# postinst installs this as /etc/systemd/system/stim2.service on
+# Mali-blob boards and seeds /etc/xdg/weston/stim2-kiosk.ini from
+# /usr/local/stim2/config/stim2-kiosk.ini; the autolaunch target is
+# /usr/local/stim2/stim2-kiosk.sh (both ship in the package).
 
 [Unit]
 Description=Stim2 Stimulus Presentation (Weston kiosk)

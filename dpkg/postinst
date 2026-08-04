@@ -8,7 +8,15 @@ ldconfig
 # Determine platform-appropriate stim2 service
 ARCH=$(dpkg --print-architecture)
 if [ "$ARCH" = "arm64" ]; then
-    STIM2_SVC=stim2.service
+    # Boards running a vendor Mali blob (e.g. NXP i.MX95) can't run
+    # cage/wlroots (segfaults in the blob's compositor-side EGL/GBM);
+    # use the Weston kiosk variant there. Unit name stays 'stim2' either
+    # way so stim2-agent/stimctl are unaffected.
+    if [ -e /dev/mali0 ] || [ -e /usr/lib/libmali.so.0 ]; then
+        STIM2_SVC=stim2-weston.service
+    else
+        STIM2_SVC=stim2.service
+    fi
     STIM2_SVC_NAME=stim2
 else
     STIM2_SVC=stim2-x11.service
@@ -102,10 +110,18 @@ if [ "$FIRST_INSTALL" = "1" ] && [ "$STIM2_SVC" = "stim2-x11.service" ]; then
     echo "Ensured needs_root_rights=yes in $XWRAPPER"
 fi
 
+# Weston-kiosk variant needs its compositor config; seed it if absent
+# (never clobber admin edits, e.g. an [output] mode= line for high refresh).
+if [ "$STIM2_SVC" = "stim2-weston.service" ] && [ ! -f /etc/xdg/weston/stim2-kiosk.ini ]; then
+    mkdir -p /etc/xdg/weston
+    cp /usr/local/stim2/config/stim2-kiosk.ini /etc/xdg/weston/stim2-kiosk.ini
+    echo "Installed /etc/xdg/weston/stim2-kiosk.ini"
+fi
+
 # Install stim2 service on first install only (never clobber existing config)
 if [ ! -f /etc/systemd/system/stim2.service ] && [ ! -f /etc/systemd/system/stim2-x11.service ]; then
-    cp /usr/local/stim2/systemd/$STIM2_SVC /etc/systemd/system/
-    echo "Installed $STIM2_SVC (not enabled)"
+    cp /usr/local/stim2/systemd/$STIM2_SVC /etc/systemd/system/$STIM2_SVC_NAME.service
+    echo "Installed $STIM2_SVC as $STIM2_SVC_NAME.service (not enabled)"
     # /run/systemd/system only exists when systemd is the running init system.
     # Skip systemctl calls in build/CI containers where dbus/systemd aren't up.
     if [ -d /run/systemd/system ]; then
