@@ -11,8 +11,12 @@
 [Unit]
 Description=Stim2 Stimulus Presentation (Weston kiosk)
 Conflicts=weston.service weston.socket
-Wants=seatd.service
-After=seatd.service systemd-user-sessions.service
+Wants=seatd.service dev-dri-card0.device
+After=seatd.service systemd-user-sessions.service dev-dri-card0.device
+# A rig must never give up on its display: without this, a slow display
+# driver at boot means 5 failed starts in 10s and systemd stops retrying,
+# leaving the console on screen until someone logs in.
+StartLimitIntervalSec=0
 
 [Service]
 Type=notify
