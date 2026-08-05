@@ -631,6 +631,14 @@ else()
         DESTINATION /usr/local/stim2/systemd
         COMPONENT stim2
     )
+
+    # udev rule backing the units' Wants=dev-dri-card0.device (postinst
+    # installs it to /usr/lib/udev/rules.d)
+    install(
+        FILES systemd/99-drm-systemd-tag.rules
+        DESTINATION /usr/local/stim2/systemd
+        COMPONENT stim2
+    )
 endif()
 
 include(CPack)

@@ -11,6 +11,9 @@
 [Unit]
 Description=Stim2 Stimulus Presentation (Weston kiosk)
 Conflicts=weston.service weston.socket
+# The device dep needs 99-drm-systemd-tag.rules (shipped alongside): stock
+# Debian udev never tags DRM cards "systemd", so without it the device unit
+# can't activate and every start eats the 90s device-job timeout instead.
 Wants=seatd.service dev-dri-card0.device
 After=seatd.service systemd-user-sessions.service dev-dri-card0.device
 # A rig must never give up on its display: without this, a slow display

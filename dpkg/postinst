@@ -154,6 +154,22 @@ if [ "$STIM2_SVC" = "stim2-weston.service" ] && [ ! -f /etc/xdg/weston/stim2-kio
     echo "Installed /etc/xdg/weston/stim2-kiosk.ini"
 fi
 
+# udev rule so systemd materializes dev-dri-cardN.device units. Debian's
+# systemd tags DRM cards only seat/master-of-seat/uaccess, so the units'
+# Wants=dev-dri-card0.device otherwise stalls 90s (DefaultDeviceTimeoutSec)
+# on EVERY start -- boot and systemctl alike -- before starting anyway.
+# Package-owned path, refreshed on every configure; the reload+trigger makes
+# it take effect immediately so first install doesn't need a reboot.
+if [ -f /usr/local/stim2/systemd/99-drm-systemd-tag.rules ]; then
+    mkdir -p /usr/lib/udev/rules.d
+    cp /usr/local/stim2/systemd/99-drm-systemd-tag.rules \
+       /usr/lib/udev/rules.d/99-drm-systemd-tag.rules
+    if [ -d /run/systemd/system ] && command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload || true
+        udevadm trigger --action=change --subsystem-match=drm || true
+    fi
+fi
+
 # Install stim2 service on first install only (never clobber existing config)
 if [ ! -f /etc/systemd/system/stim2.service ] && [ ! -f /etc/systemd/system/stim2-x11.service ]; then
     cp /usr/local/stim2/systemd/$STIM2_SVC /etc/systemd/system/$STIM2_SVC_NAME.service

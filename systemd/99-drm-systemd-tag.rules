@@ -1,0 +1,5 @@
+# Tag DRM card devices so systemd materializes dev-dri-cardN.device units.
+# Debian's systemd tags DRM cards only seat/master-of-seat/uaccess, so any
+# unit with Wants=dev-dri-card0.device (stim2.service Weston kiosk) otherwise
+# waits the full 90s DefaultDeviceTimeoutSec on every start.
+ACTION=="add|change", SUBSYSTEM=="drm", KERNEL=="card[0-9]*", TAG+="systemd"
