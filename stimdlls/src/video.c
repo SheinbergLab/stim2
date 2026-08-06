@@ -537,7 +537,24 @@ static ma_device_id *find_audio_device(const char *name_pattern, char *found_nam
   if (!name_pattern || strlen(name_pattern) == 0) {
     return NULL;  // Use default
   }
-  
+
+#ifdef __linux__
+  // A pattern containing ':' (or "default") is a literal ALSA device id rather
+  // than a name to search for, so a config can name an exact card:
+  // "plughw:CARD=Katana,DEV=0". Same rule as dserv's sound module, so both
+  // sides of a rig accept identical device strings.
+  if (strchr(name_pattern, ':') || strcmp(name_pattern, "default") == 0) {
+    ma_device_id *did = (ma_device_id *)calloc(1, sizeof(ma_device_id));
+    if (!did) return NULL;
+    strncpy(did->alsa, name_pattern, sizeof(did->alsa) - 1);
+    if (found_name && name_size > 0) {
+      strncpy(found_name, name_pattern, name_size - 1);
+      found_name[name_size - 1] = '\0';
+    }
+    return did;
+  }
+#endif
+
   ma_context context;
   ma_device_id *result = NULL;
   
@@ -1134,15 +1151,39 @@ int videoCreate(OBJ_LIST *objlist, char *filename) {
                     // ALSA-specific: disable mmap for better USB audio compatibility
                     config.alsa.noMMap = MA_TRUE;
 #endif
-                    
-		    if (ma_device_init(NULL, &config, &v->audio_device) == MA_SUCCESS) {
-		      v->audio_device_initialized = 1;
-		    } else {
-		      fprintf(getConsoleFP(), "warning: failed to initialize audio device\n");
-		      free(v->audio_buffer);
-		      v->audio_buffer = NULL;
-		      v->has_audio = 0;
-		    }
+
+                    // Aim the stream at a specific card. Without this it lands
+                    // on whatever the backend calls the default, which on a Pi
+                    // is an HDMI card -- the stimulus display -- so the
+                    // soundtrack plays out of the subject's monitor. A device
+                    // asked for by name but not found is a configuration
+                    // error, not a reason to quietly use the default.
+                    char found_name[256] = "";
+                    ma_device_id *did = find_audio_device(DefaultAudioDevice,
+                                                          found_name,
+                                                          sizeof(found_name));
+                    if (did) config.playback.pDeviceID = did;
+
+                    if (DefaultAudioDevice && !did) {
+                      fprintf(getConsoleFP(),
+                              "warning: no audio device matching \"%s\"; "
+                              "audio disabled for this video\n",
+                              DefaultAudioDevice);
+                      free(v->audio_buffer);
+                      v->audio_buffer = NULL;
+                      v->has_audio = 0;
+                    } else if (ma_device_init(NULL, &config,
+                                              &v->audio_device) == MA_SUCCESS) {
+                      v->audio_device_initialized = 1;
+                    } else {
+                      fprintf(getConsoleFP(),
+                              "warning: failed to initialize audio device%s%s\n",
+                              *found_name ? " " : "", found_name);
+                      free(v->audio_buffer);
+                      v->audio_buffer = NULL;
+                      v->has_audio = 0;
+                    }
+                    free(did);
                 }
             }
         }
@@ -1920,12 +1961,11 @@ static int audiodeviceCmd(ClientData clientData, Tcl_Interp *interp,
   }
   
   // Set new default
-  // Set new default
   if (DefaultAudioDevice) {
     free(DefaultAudioDevice);
     DefaultAudioDevice = NULL;
   }
-  
+
   if (strlen(argv[1]) == 0 || strcmp(argv[1], "default") == 0) {
     DefaultAudioDevice = NULL;
     Tcl_SetResult(interp, "default", TCL_STATIC);
@@ -1933,15 +1973,7 @@ static int audiodeviceCmd(ClientData clientData, Tcl_Interp *interp,
     DefaultAudioDevice = strdup(argv[1]);
     Tcl_SetResult(interp, DefaultAudioDevice, TCL_VOLATILE);
   }
-  
-  if (strlen(argv[1]) == 0 || strcmp(argv[1], "default") == 0) {
-    DefaultAudioDevice = NULL;
-    Tcl_SetResult(interp, "default", TCL_STATIC);
-  } else {
-    DefaultAudioDevice = strdup(argv[1]);
-    Tcl_SetResult(interp, DefaultAudioDevice, TCL_VOLATILE);
-  }
-  
+
   return TCL_OK;
 }
 
