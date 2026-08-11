@@ -48,6 +48,7 @@ typedef struct polygon {
   int circ;                     /* treat poly as circ */
   float mouth_half;		/* sector half-mouth, radians (0 = no wedge) */
   float inner_rad;		/* annulus inner radius, uv units 0..0.5 (0 = solid) */
+  float aa_width;		/* edge softness, uv units (quad is 1 wide) */
   int nverts;			/* number of x,y,xs */
   float *verts;			/* x,y,z triplets   */
   int ntexcoords;		/* number of u,vs   */
@@ -59,6 +60,7 @@ typedef struct polygon {
   UNIFORM_INFO *circle;
   UNIFORM_INFO *mouthHalf;
   UNIFORM_INFO *innerRad;
+  UNIFORM_INFO *aaWidth;
   UNIFORM_INFO *pointSize;
   SHADER_PROG *program;
   VAO_INFO *vao_info;		/* to track vertex attributes */
@@ -149,6 +151,10 @@ void polygonDraw(GR_OBJ *g)
     memcpy(p->innerRad->val, &p->inner_rad, sizeof(float));
   }
 
+  if (p->aaWidth) {
+    memcpy(p->aaWidth->val, &p->aa_width, sizeof(float));
+  }
+
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -234,6 +240,14 @@ int polygonCreate(OBJ_LIST *objlist, SHADER_PROG *sp)
   p->type = GL_TRIANGLES;
 
   p->linewidth = 1.0;
+
+  /* Edge softness for the round masks, in uv units. Because it is expressed
+     on the unit quad it scales with the object, which is right when the
+     feature size is comparable to the quad (disc, pac-man) but far too soft
+     for a THIN ring at large radius: there the quad may be tens of times the
+     band thickness and the default feather can swallow the band entirely.
+     Tighten it per object with polyaa in that case. */
+  p->aa_width = 0.012;
   
   /* Default polygon has no verts, no texcoords... They must be added! */
   p->nverts = 0;
@@ -294,6 +308,11 @@ int polygonCreate(OBJ_LIST *objlist, SHADER_PROG *sp)
   if ((entryPtr = Tcl_FindHashEntry(&p->uniformTable, "innerRad"))) {
     p->innerRad = Tcl_GetHashValue(entryPtr);
     p->innerRad->val = calloc(1,sizeof(float));
+  }
+
+  if ((entryPtr = Tcl_FindHashEntry(&p->uniformTable, "aaWidth"))) {
+    p->aaWidth = Tcl_GetHashValue(entryPtr);
+    p->aaWidth->val = calloc(1,sizeof(float));
   }
 
   if ((entryPtr = Tcl_FindHashEntry(&p->uniformTable, "pointSize"))) {
@@ -447,6 +466,52 @@ static int polyannulusCmd(ClientData clientData, Tcl_Interp *interp,
   p->inner_rad = frac * 0.5;   /* outer radius is 0.5 in uv units */
   p->circ = 1;
   p->filled = 1;
+  return TCL_OK;
+}
+
+
+/*
+ * polyaa polygon ?uvWidth?
+ *   Edge softness of the anti-aliased round masks (disc / annulus / sector),
+ *   in uv units on the unit quad. Default 0.012.
+ *
+ *   Because it is a uv quantity it scales with the object, which is what you
+ *   want when the feature size is comparable to the quad. It is NOT what you
+ *   want for a thin ring at a large radius: scaling the quad to the outer
+ *   diameter can make it tens of times the band thickness, and the default
+ *   feather then swallows the band completely (the shape never reaches full
+ *   opacity anywhere and reads as a blur). Set a smaller value there, e.g.
+ *   a band 0.55 units thick on a 20 unit quad wants ~0.0015.
+ */
+static int polyaaCmd(ClientData clientData, Tcl_Interp *interp,
+		     int argc, char *argv[])
+{
+  OBJ_LIST *olist = (OBJ_LIST *) clientData;
+  POLYGON *p;
+  int id;
+  double aa;
+
+  if (argc < 2) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " polygon ?uvWidth?", NULL);
+    return TCL_ERROR;
+  }
+
+  if ((id = resolveObjId(interp, OL_NAMEINFO(olist), argv[1], PolygonID, "polygon")) < 0)
+    return TCL_ERROR;
+  p = GR_CLIENTDATA(OL_OBJ(olist,id));
+
+  /* Getter */
+  if (argc == 2) {
+    char result[32];
+    snprintf(result, sizeof(result), "%.6g", p->aa_width);
+    Tcl_SetResult(interp, result, TCL_VOLATILE);
+    return TCL_OK;
+  }
+
+  if (Tcl_GetDouble(interp, argv[2], &aa) != TCL_OK) return TCL_ERROR;
+  if (aa < 0.0)  aa = 0.0;
+  if (aa > 0.25) aa = 0.25;
+  p->aa_width = aa;
   return TCL_OK;
 }
 
@@ -947,6 +1012,7 @@ int polygonShaderCreate(Tcl_Interp *interp)
     "uniform int circle;"
     "uniform float mouthHalf;"   /* sector half-mouth, radians; <=0 => no wedge */
     "uniform float innerRad;"    /* annulus inner radius, uv units; <=0 => solid */
+    "uniform float aaWidth;"     /* edge softness, uv units; see polyaa */
     "in vec2 texcoord;"
     "out vec4 frag_color;"
     "void main () {"
@@ -964,11 +1030,14 @@ int polygonShaderCreate(Tcl_Interp *interp)
        -- the unit quad is two triangles and the texcoord gradient differs across
        their shared diagonal, so fwidth() jumps there and paints a faint diagonal
        seam through the shape. A constant width is scale-proportional and seam-free. */
-    " float aa = 0.012;"
+    " float aa = max(aaWidth, 0.0);"
     " vec2 uv = texcoord - vec2(0.5);"
     " float r = length(uv);"
     " float alpha = 1.0 - smoothstep(0.5 - aa, 0.5, r);"           /* outer rim */
-    " if (innerRad > 0.0) alpha *= smoothstep(innerRad - aa, innerRad + aa, r);"
+    /* Inner edge feathers INWARD-to-OUTWARD over the same width as the outer
+       rim. It used to span innerRad +/- aa, i.e. twice the outer edge's
+       softness, which made rings visibly softer on the inside than the out. */
+    " if (innerRad > 0.0) alpha *= smoothstep(innerRad, innerRad + aa, r);"
     " if (mouthHalf > 0.0) {"                                       /* cut wedge */
     "   float ang = atan(uv.y, uv.x);"
     "   float aaA = aa / max(r, aa);"      /* ~constant linear softness on the wedge edges */
@@ -1032,6 +1101,8 @@ int Polygon_Init(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "polycirc", (Tcl_CmdProc *) polycircCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "polysector", (Tcl_CmdProc *) polysectorCmd,
+		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "polyaa", (Tcl_CmdProc *) polyaaCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "polyannulus", (Tcl_CmdProc *) polyannulusCmd,
 		    (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);

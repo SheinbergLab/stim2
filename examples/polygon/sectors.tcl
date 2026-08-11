@@ -4,10 +4,19 @@
 #   polycirc   $p 1          -- solid anti-aliased disc
 #   polysector $p mouthDeg   -- disc with a wedge ("mouth") removed (pac-man)
 #   polyannulus $p innerFrac -- ring (hole = innerFrac of the outer radius)
+#   polyaa     $p uvWidth    -- edge softness, uv units (default 0.012)
 # Combine polysector + polyannulus for an arc band. All are drawn on the unit
 # quad (scale it to the diameter) and masked in the fragment shader, so the
 # edges are anti-aliased and the mouth/inner-radius change live (just uniforms,
 # no vertex work). The mouth is centred on +X -- aim it by rotating the object.
+#
+# EDGE SOFTNESS is a uv quantity, so it scales with the OBJECT. That is right
+# when the feature size is comparable to the quad (a disc, a pac-man), and
+# wrong for a THIN ring at a large radius: the quad is the outer diameter, so
+# it can be tens of times the band thickness and the default feather swallows
+# the band completely -- see the "Thin arc (AA trap)" variant, where the shape
+# never reaches full opacity until you pull the softness down. polyaa is a
+# plain uniform, so it adjusts live like mouth/inner.
 #
 # Requires modules: polygon, metagroup.
 
@@ -51,6 +60,11 @@ proc ring_setup   {} { sect_setup 0   0.6 }   ;# annulus
 proc arc_setup    {} { sect_setup 120 0.5 }   ;# annular sector (arc band)
 proc disc_setup   {} { sect_setup 0   0.0 }   ;# plain AA disc
 
+# The AA trap: a thin band on a big quad. At the default softness the feather
+# is wider than the band itself. Drag "Edge softness" down to ~0.002 to get a
+# crisp arc -- that is the setting a response ring or dial wants.
+proc thinarc_setup {} { sect_setup 300 0.95 }
+
 # ============================================================
 # Kanizsa square -- four sectors aimed inward (the reason polysector exists)
 # ============================================================
@@ -92,6 +106,15 @@ proc sect_set_inner { inner } { foreach p $sect::shapes { polyannulus $p $inner 
 proc sect_get_inner { {target {}} } {
     dict create inner [polyannulus [lindex $sect::shapes 0]]
 }
+# Guarded: polyaa only exists in a stim2 built after edge softness was exposed.
+proc sect_set_aa { aa } {
+    if { [info commands polyaa] eq "" } return
+    foreach p $sect::shapes { polyaa $p $aa } ; redraw
+}
+proc sect_get_aa { {target {}} } {
+    if { [info commands polyaa] eq "" } { return [dict create aa 0.012] }
+    dict create aa [polyaa [lindex $sect::shapes 0]]
+}
 
 # ============================================================
 # WORKSPACE INTERFACE
@@ -99,17 +122,21 @@ proc sect_get_inner { {target {}} } {
 workspace::reset
 
 workspace::setup pacman_setup {} \
-    -adjusters {sect_mouth sect_inner shape_scale shape_rotation shape_color} \
+    -adjusters {sect_mouth sect_inner sect_aa shape_scale shape_rotation shape_color} \
     -label "Pac-man (sector)"
 
 workspace::variant ring {} -proc ring_setup \
-    -adjusters {sect_mouth sect_inner shape_scale shape_rotation shape_color} -label "Ring (annulus)"
+    -adjusters {sect_mouth sect_inner sect_aa shape_scale shape_rotation shape_color} -label "Ring (annulus)"
 
 workspace::variant arc {} -proc arc_setup \
-    -adjusters {sect_mouth sect_inner shape_scale shape_rotation shape_color} -label "Arc band"
+    -adjusters {sect_mouth sect_inner sect_aa shape_scale shape_rotation shape_color} -label "Arc band"
 
 workspace::variant disc {} -proc disc_setup \
-    -adjusters {sect_mouth sect_inner shape_scale shape_rotation shape_color} -label "Disc (AA)"
+    -adjusters {sect_mouth sect_inner sect_aa shape_scale shape_rotation shape_color} -label "Disc (AA)"
+
+workspace::variant thin_arc {} -proc thinarc_setup \
+    -adjusters {sect_mouth sect_inner sect_aa shape_scale shape_rotation shape_color} \
+    -label "Thin arc (AA trap)"
 
 workspace::variant kanizsa {} -proc kanizsa_setup \
     -adjusters {sect_mouth shape_scale shape_rotation} -label "Kanizsa square"
@@ -121,6 +148,10 @@ workspace::adjuster sect_mouth {
 workspace::adjuster sect_inner {
     inner {float 0.0 0.95 0.05 0.0 "Inner radius" frac}
 } -target {} -proc sect_set_inner -getter sect_get_inner -label "Inner radius"
+
+workspace::adjuster sect_aa {
+    aa {float 0.0 0.05 0.001 0.012 "Edge softness" uv}
+} -target {} -proc sect_set_aa -getter sect_get_aa -label "Edge softness"
 
 workspace::adjuster shape_scale    -template scale    -target shape_mg
 workspace::adjuster shape_rotation -template rotation -target shape_mg
