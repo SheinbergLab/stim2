@@ -245,17 +245,39 @@ else()
     
     add_link_options("-rdynamic")
     
-    target_link_libraries(stim2 
-        ${GLFW_LIB} 
-        ${TCLLIB} 
-        ${OPENGL_LIBRARIES} 
-        ${LIBDL} 
-        ${LIBPTHREAD} 
+    target_link_libraries(stim2
+        ${GLFW_LIB}
+        ${TCLLIB}
+        ${OPENGL_LIBRARIES}
+        ${LIBDL}
+        ${LIBPTHREAD}
         z
         usockets
         ${USOCKETS_LIBS}
         nlohmann_json::nlohmann_json
     )
+
+    # Prefer the Tcl in /usr/local/lib, fall back to the distro's.
+    #
+    # Which libtcl9.0.so stim2 loaded was never deterministic: the ld cache is
+    # built by globbing /etc/ld.so.conf.d/*.conf ALPHABETICALLY, and
+    # /usr/local/lib comes from libc.conf while the system dir comes from the
+    # arch-named file. `a` < `l` < `x`, so aarch64-linux-gnu.conf wins on a Pi
+    # (apt's Tcl) and libc.conf wins on x86_64 (/usr/local/lib). Measured
+    # 2026-08-12: hm-0 resolved to apt, office-stim to /usr/local/lib -- the
+    # same package silently running a different Tcl depending on the arch.
+    #
+    # DT_RUNPATH is searched before the cache, so this pins the ORDER on every
+    # arch: if /usr/local/lib has a libtcl9.0.so -- today that means dserv's
+    # deb installed one, built from the core-9-0-N tag deps/tcl is pinned to --
+    # stim2 uses it and matches what it was compiled against. If not, the
+    # lookup falls through to the cache and finds apt's, which is why
+    # Depends: libtcl9.0 stays for stim2-only boxes.
+    #
+    # Deliberately NOT shipping our own copy at that path: dserv's deb owns
+    # /usr/local/lib/libtcl9.0.so, and two packages claiming one file is a hard
+    # dpkg unpack conflict on any rig that has both.
+    set_target_properties(stim2 PROPERTIES INSTALL_RPATH "/usr/local/lib")
 endif()
 
 # =============================================================================
@@ -489,6 +511,10 @@ else()
     # GA (Noble), omit it from Depends -- admins must provide Tcl 9 some
     # other way (the CI build does this from source). Extend the list below
     # as upstream distros add the package (forky, plucky, oracular, ...).
+    #
+    # This stays even though the binary prefers /usr/local/lib (see RUNPATH
+    # above): that preference is a fallback chain, not a replacement. apt's copy
+    # is what stim2 loads on a box without dserv.
     set(_STIM2_DISTROS_WITH_TCL9 "trixie" "")
     list(FIND _STIM2_DISTROS_WITH_TCL9 "${DISTRO_SUFFIX}" _STIM2_TCL9_IDX)
     if(_STIM2_TCL9_IDX GREATER_EQUAL 0)
