@@ -2062,6 +2062,11 @@ proc screen_config {} {
       req = ds_queue.front();
       ds_queue.pop_front();
       char *dsstring = strdup(req->datapoint_string.c_str());
+      /* The request is ours now (ds_client_process allocates one per
+         datapoint) and the string is already copied out, so release it
+         HERE -- that covers every exit below, including the early
+         continue, without repeating the delete on each path. */
+      delete req;
       const int dslen = strlen(dsstring);
       const char *p, *cmd;
       static char varname[128];
@@ -2070,10 +2075,10 @@ proc screen_config {} {
       if (dsstring[dslen-1] == '\n') dsstring[dslen-1] = '\0';
 
       //std::cout << "processDSCommands: " << dsstring << std::endl;
-      
+
       /* Parse dataserver string and process */
       p = strchr(dsstring, ' ');
-      if (!p) continue;
+      if (!p) { free(dsstring); continue; }
       
       memcpy(varname, dsstring, p-dsstring);
       varname[p-dsstring] = '\0';
@@ -2579,11 +2584,31 @@ Application::ds_client_process(int sockfd,
         //std::cout << "received ds input" << std::endl;
 
     if (dpoint_str.length() > 0) {
-      client_request.datapoint_string = std::string(dpoint_str);
-      
+      /* One request PER DATAPOINT, owned by the queue and freed by the
+         consumer (processDSCommands).
+
+         This used to reuse a single per-connection struct and push its
+         address for every datapoint. Whenever two arrived before the main
+         loop drained the queue -- which is what any two datapoints
+         published back-to-back produce, whether or not they share a TCP
+         segment -- the second assignment overwrote the first, both queued
+         pointers then read the same latest string, and the FIRST datapoint
+         was silently lost while the second was processed twice.
+
+         It was also a data race: this thread reassigned that std::string
+         while the main thread could be reading it.
+
+         Symptom it caused: a publisher writing two datapoints in
+         succession would see one of them intermittently never reach the
+         stim -- no error anywhere, since dserv's table and the match
+         registration were both correct. */
+      ds_client_request_t *req = new ds_client_request_t;
+      req->datapoint_string = dpoint_str;
+      req->rqueue = nullptr;    /* unused on the datapoint path */
+
       /* push request onto queue for main thread to retrieve */
-      queue->push_back(&client_request);
-      
+      queue->push_back(req);
+
       /* get lock and wake up main thread to process */
       do_wakeup();
     }
