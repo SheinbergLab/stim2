@@ -25,12 +25,6 @@ else
     STIM2_SVC_NAME=stim2
 fi
 
-# Detect first install vs upgrade (postinst is called as `postinst configure <old-version>`)
-FIRST_INSTALL=0
-if [ "$1" = "configure" ] && [ -z "$2" ]; then
-    FIRST_INSTALL=1
-fi
-
 # Migrate legacy installs where the unit was named stim2-x11.service: the
 # unit name is now 'stim2' on every platform. Preserves enabled/active
 # state (brief stop/start if it was running).
@@ -110,40 +104,73 @@ if [ "$STIM2_SVC" = "stim2-x11.service" ]; then
 fi
 
 # Configure Xwrapper so the non-console 'stim' user can start the X server.
-# Trixie ships allowed_users=console which blocks systemd-launched xinit.
-# First install only -- never clobber admin edits on upgrade.
+# Trixie ships allowed_users=console, and Xorg's setuid wrapper then refuses
+# every start of a systemd-launched xinit -- User=stim owns no VT, so it is not
+# a "console user". On the X11 flavor this is a REQUIREMENT of the package, not
+# a preference: without it stim2.service does nothing but exit 1 and restart.
 #
-# We use debconf preseeding so xserver-xorg-legacy's own postinst writes
-# allowed_users=Anybody. That value is package-owned and survives future
-# xserver-xorg-legacy upgrades cleanly. needs_root_rights isn't exposed via
-# debconf, so we sed-ensure it ourselves after dpkg-reconfigure runs.
-if [ "$FIRST_INSTALL" = "1" ] && [ "$STIM2_SVC" = "stim2-x11.service" ]; then
+# The FILE is written first, deliberately. The obvious route -- preseed
+# xserver-xorg-legacy/xwrapper/allowed_users, then dpkg-reconfigure -- quietly
+# does nothing whenever /etc/X11/Xwrapper.config already exists, which on a box
+# that just pulled xserver-xorg-legacy in as our dependency is ALWAYS. That
+# package's own .config script reads the existing file and db_set's the question
+# from it BEFORE asking, so it overwrites the preseed with the very value we are
+# trying to change, and its postinst then writes 'console' straight back. The
+# old code reported "Set Xwrapper allowed_users=anybody via debconf" and left
+# allowed_users=console behind (dserv-dev, amd64/trixie, 2026-08-24). Writing
+# the file and syncing debconf afterwards works WITH that read-back instead of
+# against it: a later dpkg-reconfigure now derives "Anybody" from our own file.
+#
+# Runs on EVERY configure, not first install only. The write is idempotent and
+# skipped once the values are right, so the guard it replaces bought nothing --
+# while a box already sitting in the broken state had no way to heal but hands.
+# The only "admin edit" this overrides is one that stops stim2 starting at all.
+if [ "$STIM2_SVC" = "stim2-x11.service" ]; then
     XWRAPPER=/etc/X11/Xwrapper.config
-    mkdir -p /etc/X11
-    if [ -f "$XWRAPPER" ] && [ ! -f "$XWRAPPER.stim2-bak" ]; then
-        cp "$XWRAPPER" "$XWRAPPER.stim2-bak"
-        echo "Backed up existing $XWRAPPER to $XWRAPPER.stim2-bak"
+
+    XW_ALLOWED=""
+    if [ -f "$XWRAPPER" ]; then
+        XW_ALLOWED=$(sed -n 's/^allowed_users=//p' "$XWRAPPER" | head -n 1)
     fi
 
-    if dpkg -s xserver-xorg-legacy >/dev/null 2>&1 \
-       && command -v debconf-set-selections >/dev/null 2>&1; then
-        echo "xserver-xorg-legacy xserver-xorg-legacy/xwrapper/allowed_users select Anybody" \
-            | debconf-set-selections
-        DEBIAN_FRONTEND=noninteractive dpkg-reconfigure -f noninteractive xserver-xorg-legacy
-        echo "Set Xwrapper allowed_users=anybody via debconf"
-    else
-        # Fallback: write the file directly (xserver-xorg-legacy missing/old)
-        printf 'allowed_users=anybody\n' > "$XWRAPPER"
-        echo "Wrote allowed_users=anybody to $XWRAPPER (debconf path unavailable)"
-    fi
+    if [ "$XW_ALLOWED" != "anybody" ] || \
+       ! grep -q '^needs_root_rights=yes' "$XWRAPPER" 2>/dev/null; then
+        mkdir -p /etc/X11
+        if [ -f "$XWRAPPER" ] && [ ! -f "$XWRAPPER.stim2-bak" ]; then
+            cp "$XWRAPPER" "$XWRAPPER.stim2-bak"
+            echo "Backed up existing $XWRAPPER to $XWRAPPER.stim2-bak"
+        fi
 
-    # Ensure needs_root_rights=yes is set. Append if missing, replace if present.
-    if [ -f "$XWRAPPER" ] && grep -q '^needs_root_rights=' "$XWRAPPER"; then
-        sed -i 's/^needs_root_rights=.*/needs_root_rights=yes/' "$XWRAPPER"
-    else
-        printf 'needs_root_rights=yes\n' >> "$XWRAPPER"
+        if [ -f "$XWRAPPER" ]; then
+            # Replace if present, append if missing -- keeps the comment header
+            # and any other keys the file carries.
+            if grep -q '^allowed_users=' "$XWRAPPER"; then
+                sed -i 's/^allowed_users=.*/allowed_users=anybody/' "$XWRAPPER"
+            else
+                printf 'allowed_users=anybody\n' >> "$XWRAPPER"
+            fi
+            if grep -q '^needs_root_rights=' "$XWRAPPER"; then
+                sed -i 's/^needs_root_rights=.*/needs_root_rights=yes/' "$XWRAPPER"
+            else
+                printf 'needs_root_rights=yes\n' >> "$XWRAPPER"
+            fi
+        else
+            printf 'allowed_users=anybody\nneeds_root_rights=yes\n' > "$XWRAPPER"
+        fi
+        chmod 644 "$XWRAPPER"
+        echo "Set allowed_users=anybody, needs_root_rights=yes in $XWRAPPER"
+
+        # Sync debconf to what we just wrote. Not required for the running box
+        # -- Xorg reads the file, not the database -- but it keeps the next
+        # xserver-xorg-legacy upgrade from having an opinion of its own.
+        if dpkg -s xserver-xorg-legacy >/dev/null 2>&1 \
+           && command -v debconf-set-selections >/dev/null 2>&1; then
+            printf '%s\n%s\n' \
+"xserver-xorg-legacy xserver-xorg-legacy/xwrapper/allowed_users select Anybody" \
+"xserver-xorg-legacy xserver-xorg-legacy/xwrapper/actual_allowed_users string anybody" \
+                | debconf-set-selections 2>/dev/null || true
+        fi
     fi
-    echo "Ensured needs_root_rights=yes in $XWRAPPER"
 fi
 
 # Weston-kiosk variant needs its compositor config; seed it if absent
