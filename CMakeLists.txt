@@ -162,6 +162,7 @@ set(STIM2_SOURCES
     src/tclproc.c
     src/prmutil.c
     src/timer.cpp
+    src/swapsync.cpp
     src/glad.c
     src/rawapi.c
     src/diagnostics.cpp
@@ -186,6 +187,55 @@ endif()
 
 # Export symbols for shared objects loaded at runtime
 set_property(TARGET stim2 PROPERTY ENABLE_EXPORTS ON)
+
+# =============================================================================
+# Wayland presentation-time protocol (swapsync's ground-truth flip timestamps
+# under cage/Weston/labwc).  Optional: without wayland dev files the build
+# still succeeds and swapsync falls back to glFinish at runtime.
+# =============================================================================
+if(CMAKE_SYSTEM_NAME MATCHES "Linux")
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(WAYLAND_CLIENT QUIET wayland-client)
+        pkg_get_variable(WAYLAND_PROTOCOLS_DIR wayland-protocols pkgdatadir)
+        find_program(WAYLAND_SCANNER wayland-scanner)
+    endif()
+    if(WAYLAND_CLIENT_FOUND AND WAYLAND_SCANNER)
+        # Prefer the system's copy; fall back to the vendored one (Debian's
+        # wayland-protocols 1.47) so builds without the wayland-protocols
+        # package -- including the release CI containers -- still get flip
+        # feedback support.
+        set(PRESENTATION_TIME_XML
+            ${WAYLAND_PROTOCOLS_DIR}/stable/presentation-time/presentation-time.xml)
+        if(NOT WAYLAND_PROTOCOLS_DIR OR NOT EXISTS ${PRESENTATION_TIME_XML})
+            set(PRESENTATION_TIME_XML
+                ${CMAKE_CURRENT_SOURCE_DIR}/deps/wayland-protocols/presentation-time.xml)
+        endif()
+        if(EXISTS ${PRESENTATION_TIME_XML})
+            set(WLGEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/wayland-gen)
+            file(MAKE_DIRECTORY ${WLGEN_DIR})
+            add_custom_command(
+                OUTPUT ${WLGEN_DIR}/presentation-time-client-protocol.h
+                       ${WLGEN_DIR}/presentation-time-protocol.c
+                COMMAND ${WAYLAND_SCANNER} client-header ${PRESENTATION_TIME_XML}
+                        ${WLGEN_DIR}/presentation-time-client-protocol.h
+                COMMAND ${WAYLAND_SCANNER} private-code ${PRESENTATION_TIME_XML}
+                        ${WLGEN_DIR}/presentation-time-protocol.c
+                DEPENDS ${PRESENTATION_TIME_XML}
+                COMMENT "Generating wayland presentation-time protocol code")
+            target_sources(stim2 PRIVATE ${WLGEN_DIR}/presentation-time-protocol.c)
+            target_include_directories(stim2 PRIVATE ${WLGEN_DIR}
+                ${WAYLAND_CLIENT_INCLUDE_DIRS})
+            target_compile_definitions(stim2 PRIVATE STIM2_HAVE_WAYLAND_PRESENTATION)
+            target_link_libraries(stim2 ${WAYLAND_CLIENT_LIBRARIES})
+            message(STATUS "swapsync: wayland presentation-time enabled")
+        else()
+            message(STATUS "swapsync: presentation-time.xml not found; wayland flip feedback disabled")
+        endif()
+    else()
+        message(STATUS "swapsync: wayland-client/protocols/scanner not found; wayland flip feedback disabled")
+    endif()
+endif()
 
 # =============================================================================
 # Dependencies

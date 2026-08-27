@@ -27,6 +27,7 @@
 #include "stim2.h"
 #include "objname.h"
 #include "diagnostics.h"
+#include "swapsync.h"
 
 /* Global asset search paths - Tcl list stored as string */
 static Tcl_Obj *assetSearchPaths = NULL;
@@ -672,6 +673,35 @@ static int reshapeCmd(ClientData clientData, Tcl_Interp *interp,
 		      int argc, char *argv[])
 {
   reshape();
+  return TCL_OK;
+}
+
+static int swapStatsCmd(ClientData clientData, Tcl_Interp *interp,
+			int argc, char *argv[])
+{
+  extern double StimStart;	/* glfwGetTime() at last resetStimTime */
+  Tcl_Obj *d = Tcl_NewDictObj();
+  double flip = swapsyncLastFlipTime();
+
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("strategy", -1),
+		 Tcl_NewStringObj(swapsyncStrategyName(), -1));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("swapcount", -1),
+		 Tcl_NewIntObj(SwapCount));
+  /* last confirmed flip in the StimTimeF domain (ms), -1 if unavailable */
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("lastflip", -1),
+		 Tcl_NewDoubleObj(flip > 0.0 ? 1000.0 * (flip - StimStart)
+			                     : -1.0));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("counter", -1),
+		 Tcl_NewWideIntObj((Tcl_WideInt) swapsyncLastCounter()));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("refresh", -1),
+		 Tcl_NewDoubleObj(swapsyncLastRefreshMs()));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("missed", -1),
+		 Tcl_NewLongObj(swapsyncMissedFrames()));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("discarded", -1),
+		 Tcl_NewLongObj(swapsyncDiscardedFrames()));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("timeouts", -1),
+		 Tcl_NewLongObj(swapsyncTimeouts()));
+  Tcl_SetObjResult(interp, d);
   return TCL_OK;
 }
 
@@ -2750,9 +2780,11 @@ void addTclCommands(Tcl_Interp *interp)
   
   /* General commands */
   
-  Tcl_CreateCommand(interp, "redraw", (Tcl_CmdProc *) redrawCmd, 
+  Tcl_CreateCommand(interp, "redraw", (Tcl_CmdProc *) redrawCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateCommand(interp, "reshape", (Tcl_CmdProc *) reshapeCmd, 
+  Tcl_CreateCommand(interp, "reshape", (Tcl_CmdProc *) reshapeCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "swapStats", (Tcl_CmdProc *) swapStatsCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
 
   /* Misc commands */

@@ -68,6 +68,7 @@
 #include "rawapi.h"
 #include "objname.h"
 #include "animate.h"
+#include "swapsync.h"
 
 static int MainWin = 0;
 
@@ -1042,6 +1043,7 @@ typedef struct client_request_s {
   std::string script;
   SharedQueue<std::string> *rqueue;
   bool wait_for_swap;       // do we want swap ack?
+  int swap_at_queue;        // SwapCount when the reply was deferred
 } client_request_t;
 
 typedef struct ds_client_request_s {
@@ -1311,8 +1313,6 @@ class Application
   SleepWakeHandler sleepWakeHandler;
 #endif
   std::atomic<bool> systemIsSleeping{false};  
-  
-  GLsync swap_sync;
   
   // for GPIO swap acknowledge
   int output_pin;
@@ -1653,17 +1653,12 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
 
   void waitForSwap()
   {
-    // Graphics drivers on different hardware will wait for the buffer
-    // swap in different ways.  On the Jetson, using glfw3, the
-    //   glfwSwapBuffers() will block, so we don't need to do anything
-#ifdef JETSON_XAVIER
-    // use a Sync Object to wait for the buffer swap
-    // https://www.khronos.org/opengl/wiki/Sync_Object
-    swap_sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-    glClientWaitSync(swap_sync, GL_SYNC_FLUSH_COMMANDS_BIT, 10000000);
-#else
-    glFinish();
-#endif
+    // Strategy chosen at startup by swapsyncInit(): presentation feedback
+    // (X11 OML sync control / Wayland wp_presentation) where the platform
+    // can report the actual flip, glFinish() otherwise.  The old
+    // JETSON_XAVIER fence variant is gone: it leaked one GLsync per frame
+    // and, like glFinish, only proved GPU completion -- not the flip.
+    swapsyncAfterSwap();
   }
 
 private:  
@@ -2023,6 +2018,7 @@ proc screen_config {} {
     else {
       // put result back into the request and queue for after swap
       req->script = std::string(rcstr);
+      req->swap_at_queue = SwapCount;
       reply_queue.push_back(req);
     }
       }
@@ -2040,6 +2036,7 @@ proc screen_config {} {
     else {
       // put result back into the request and queue for after swap
       req->script = std::string("!TCL_ERROR "+std::string(rcstr));
+      req->swap_at_queue = SwapCount;
       reply_queue.push_back(req);
     }
       }
@@ -2110,6 +2107,12 @@ proc screen_config {} {
       n++;
       req = reply_queue.front();
       reply_queue.pop_front();
+      /* A '!' request promises "ack after the swap this command caused".
+         If no swap happened this pass, that promise is broken -- the ack
+         means only "end of loop pass".  Surface it when logging is on. */
+      if (log_level && req->swap_at_queue == SwapCount)
+	log.AddLog("[%.3f]: warning: swap-ack released with no intervening "
+		   "swap: %s\n", glfwGetTime(), req->script.c_str());
       req->rqueue->push_back(req->script);
       if (log_level) log.AddLog("[%.3f]: %s\n", glfwGetTime(), req->script.c_str());
 #ifdef JETSON_NANO
@@ -2720,6 +2723,7 @@ void Application::updateDisplay(bool log_events)
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());  
 
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PreSwap");
+    swapsyncBeforeSwap();
     glfwSwapBuffers(window);
     waitForSwap();
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PostSwap");
@@ -2751,6 +2755,7 @@ void Application::updateDisplay(bool log_events)
 
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PreSwap");
     /* Swap front and back buffers */
+    swapsyncBeforeSwap();
     glfwSwapBuffers(window);
     /* Wait for swap */
     waitForSwap();
@@ -2780,6 +2785,7 @@ void Application::updateDisplay(bool log_events)
     break;
   case SWAP_ONLY:
     /* Only swap and acknowledge -- no clear, no draw */
+    swapsyncBeforeSwap();
     glfwSwapBuffers(window);
     SwapCount++;
     waitForSwap();
@@ -3374,6 +3380,9 @@ main(int argc, char *argv[]) {
   else {
     Reshape(&app, winWidth, winHeight);
   }
+
+  // Choose how waitForSwap() blocks (and timestamps) on this platform
+  swapsyncInit(app.window, RefreshRate, verbose);
 
   // Initialize WebSocket server
   app.init_websocket();
