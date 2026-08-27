@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <math.h>
+#include <time.h>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -30,13 +31,14 @@ static struct {
   double frame_period;          /* seconds, from the video mode */
 
   double last_flip_glfw;        /* glfwGetTime() domain, 0 = none */
+  long long last_flip_wall_us;  /* CLOCK_REALTIME us, -1 = none */
   double last_refresh_ms;
   long long last_counter;       /* MSC / presentation seq, -1 = none */
   long missed;
   long discarded;
   long timeouts;
   double last_return;           /* glfwGetTime() when afterSwap last returned */
-} ss = { NULL, STRAT_GLFINISH, 0, 1.0 / 60.0, 0.0, 0.0, -1, 0, 0, 0, 0.0 };
+} ss = { NULL, STRAT_GLFINISH, 0, 1.0 / 60.0, 0.0, -1, 0.0, -1, 0, 0, 0, 0.0 };
 
 /* Update flip bookkeeping shared by the OML and Wayland paths.  A counter
    jump only counts as missed frames when the previous swap was recent enough
@@ -49,7 +51,20 @@ static void record_flip(double flip_glfw, long long counter, double refresh_ms)
       counter > ss.last_counter + 1)
     ss.missed += (long) (counter - ss.last_counter - 1);
   if (counter >= 0) ss.last_counter = counter;
-  if (flip_glfw > 0.0) ss.last_flip_glfw = flip_glfw;
+  if (flip_glfw > 0.0) {
+    ss.last_flip_glfw = flip_glfw;
+    /* Place the flip on the wall clock: sample (wall, glfw) together NOW --
+       the flip was at most a frame ago, so slew-induced offset drift since
+       then is microseconds at worst -- and project back.  glfwGetTime() and
+       the flip source share CLOCK_MONOTONIC on Linux, so the difference is
+       exact. */
+    struct timespec ts;
+    if (timespec_get(&ts, TIME_UTC) == TIME_UTC) {
+      double wall_now_us = ts.tv_sec * 1e6 + ts.tv_nsec * 1e-3;
+      ss.last_flip_wall_us = (long long)
+        (wall_now_us - (glfwGetTime() - flip_glfw) * 1e6);
+    }
+  }
   if (refresh_ms > 0.0) ss.last_refresh_ms = refresh_ms;
 }
 
@@ -410,6 +425,7 @@ const char *swapsyncStrategyName(void)
 }
 
 double swapsyncLastFlipTime(void)     { return ss.last_flip_glfw; }
+long long swapsyncLastFlipWallUs(void) { return ss.last_flip_wall_us; }
 double swapsyncLastRefreshMs(void)    { return ss.last_refresh_ms; }
 long long swapsyncLastCounter(void)   { return ss.last_counter; }
 long swapsyncMissedFrames(void)       { return ss.missed; }

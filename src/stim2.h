@@ -223,6 +223,13 @@ void logMessage(char *message);
 void doToggleImgui(void);
 int isImguiVisible(void);
   
+/* Frame tagging: bind a payload to the next completed swap; on that flip
+   stim2 invokes the registered callback (or stores in ::swapTagLast) with
+   the flip's wall-clock/counter data.  See swapTag in tclproc.c. */
+void swapTagAdd(const char *payload);
+void swapTagCallbackSet(const char *proc);
+const char *swapTagCallbackGet(void);
+
 int  toggleAnimation(void);
 int  startAnimation(void);
 int  stopAnimation(void);

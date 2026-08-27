@@ -40,6 +40,12 @@ const char *swapsyncStrategyName(void);
    0 if the strategy has no flip timestamps (glfinish) or none seen yet. */
 double swapsyncLastFlipTime(void);
 
+/* The same flip on the wall clock (CLOCK_REALTIME microseconds since the
+   epoch), for placing frames on a chrony/PTP-disciplined lab timeline.  The
+   monotonic-to-wall offset is sampled as each flip is recorded, so NTP slews
+   don't accumulate.  -1 if no flip timestamp is available. */
+long long swapsyncLastFlipWallUs(void);
+
 /* Refresh period reported with the last flip (ms); 0 if unknown. */
 double swapsyncLastRefreshMs(void);
 

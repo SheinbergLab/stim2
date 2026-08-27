@@ -691,6 +691,9 @@ static int swapStatsCmd(ClientData clientData, Tcl_Interp *interp,
   Tcl_DictObjPut(interp, d, Tcl_NewStringObj("lastflip", -1),
 		 Tcl_NewDoubleObj(flip > 0.0 ? 1000.0 * (flip - StimStart)
 			                     : -1.0));
+  /* the same flip on the wall clock (CLOCK_REALTIME us), -1 if unknown */
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("flipwall", -1),
+		 Tcl_NewWideIntObj((Tcl_WideInt) swapsyncLastFlipWallUs()));
   Tcl_DictObjPut(interp, d, Tcl_NewStringObj("counter", -1),
 		 Tcl_NewWideIntObj((Tcl_WideInt) swapsyncLastCounter()));
   Tcl_DictObjPut(interp, d, Tcl_NewStringObj("refresh", -1),
@@ -702,6 +705,40 @@ static int swapStatsCmd(ClientData clientData, Tcl_Interp *interp,
   Tcl_DictObjPut(interp, d, Tcl_NewStringObj("timeouts", -1),
 		 Tcl_NewLongObj(swapsyncTimeouts()));
   Tcl_SetObjResult(interp, d);
+  return TCL_OK;
+}
+
+/*
+ * swapTag payload
+ *   Bind a payload to the NEXT completed swap -- from a pre script this is
+ *   the frame being drawn.  When that frame's flip is confirmed, stim2
+ *   invokes the swapTagCallback proc as
+ *       $proc payload flipwall_us counter swapcount flip_stimtimef_ms
+ *   (flipwall_us: flip on CLOCK_REALTIME in microseconds, for pushing
+ *   datapoints onto a chrony/PTP-synced lab timeline).  With no callback
+ *   registered the same values are left in ::swapTagLast.  Multiple tags
+ *   before one swap are delivered in order.
+ */
+static int swapTagCmd(ClientData clientData, Tcl_Interp *interp,
+		      int argc, char *argv[])
+{
+  if (argc != 2) {
+    Tcl_SetResult(interp, "usage: swapTag payload", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  swapTagAdd(argv[1]);
+  return TCL_OK;
+}
+
+static int swapTagCallbackCmd(ClientData clientData, Tcl_Interp *interp,
+			      int argc, char *argv[])
+{
+  if (argc > 2) {
+    Tcl_SetResult(interp, "usage: swapTagCallback [proc]", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  if (argc == 2) swapTagCallbackSet(argv[1]);   /* "" clears */
+  Tcl_SetResult(interp, (char *) swapTagCallbackGet(), TCL_VOLATILE);
   return TCL_OK;
 }
 
@@ -2785,6 +2822,11 @@ void addTclCommands(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "reshape", (Tcl_CmdProc *) reshapeCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "swapStats", (Tcl_CmdProc *) swapStatsCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "swapTag", (Tcl_CmdProc *) swapTagCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "swapTagCallback",
+		    (Tcl_CmdProc *) swapTagCallbackCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
 
   /* Misc commands */

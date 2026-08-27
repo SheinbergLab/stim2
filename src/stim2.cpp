@@ -1395,6 +1395,12 @@ public:
   
   bool show_imgui = false;
   AppLog log;
+
+  // frame tagging: payloads bound to the next completed swap (main thread
+  // only -- swapTag runs from Tcl, delivery from updateDisplay)
+  std::vector<std::string> swap_tags;
+  std::string swap_tag_callback;
+  void deliverSwapTags(void);
   
   const char *title;
   int tcpport = 4610;
@@ -2194,6 +2200,22 @@ proc screen_config {} {
 // Allow other functions to access
 Application app;
 
+/* C-linkage frame-tag glue for tclproc.c (declared in stim2.h) */
+void swapTagAdd(const char *payload)
+{
+  app.swap_tags.push_back(payload ? payload : "");
+}
+
+void swapTagCallbackSet(const char *proc)
+{
+  app.swap_tag_callback = proc ? proc : "";
+}
+
+const char *swapTagCallbackGet(void)
+{
+  return app.swap_tag_callback.c_str();
+}
+
 
 // Global logging helper
 void log_message(const char* level, const char* fmt, ...) {
@@ -2702,6 +2724,46 @@ void Application::processImgui(void)
 }
 
 
+/* Deliver any pending frame tags for the swap that just completed.  Each
+   tag becomes a callback invocation:
+       $callback payload flipwall_us counter swapcount flip_stimtimef_ms
+   built as a Tcl list, so payloads pass through verbatim.  With no
+   callback registered the same list is stored in ::swapTagLast. */
+void Application::deliverSwapTags(void)
+{
+  if (swap_tags.empty()) return;
+  std::vector<std::string> tags = std::move(swap_tags);
+  swap_tags.clear();            /* callbacks may tag the next frame */
+
+  double flip = swapsyncLastFlipTime();
+  double flip_ms = flip > 0.0 ? 1000.0 * (flip - StimStart) : -1.0;
+
+  for (auto &payload : tags) {
+    Tcl_Obj *items[6];
+    int n = 0;
+    if (!swap_tag_callback.empty())
+      items[n++] = Tcl_NewStringObj(swap_tag_callback.c_str(), -1);
+    items[n++] = Tcl_NewStringObj(payload.c_str(), -1);
+    items[n++] = Tcl_NewWideIntObj((Tcl_WideInt) swapsyncLastFlipWallUs());
+    items[n++] = Tcl_NewWideIntObj((Tcl_WideInt) swapsyncLastCounter());
+    items[n++] = Tcl_NewIntObj(SwapCount);
+    items[n++] = Tcl_NewDoubleObj(flip_ms);
+    Tcl_Obj *cmd = Tcl_NewListObj(n, items);
+    Tcl_IncrRefCount(cmd);
+    if (!swap_tag_callback.empty()) {
+      if (Tcl_EvalObjEx(interp, cmd, TCL_EVAL_GLOBAL) != TCL_OK) {
+	log.AddLog("[error]: swapTag callback: %s\n",
+		   Tcl_GetStringResult(interp));
+	Tcl_ResetResult(interp);
+      }
+    }
+    else {
+      Tcl_SetVar2Ex(interp, "swapTagLast", NULL, cmd, TCL_GLOBAL_ONLY);
+    }
+    Tcl_DecrRefCount(cmd);
+  }
+}
+
 void Application::updateDisplay(bool log_events)
 {
   OBJ_GROUP *g = NULL;
@@ -2728,6 +2790,7 @@ void Application::updateDisplay(bool log_events)
     waitForSwap();
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PostSwap");
     SwapCount++;
+    deliverSwapTags();
     return;
   }
 
@@ -2774,6 +2837,7 @@ void Application::updateDisplay(bool log_events)
 
     /* Call any installed post frame command */
     updateTimes();
+    deliverSwapTags();
     executePostFrameScripts(g);
     executeThisFrameScripts(g);
     glistPostFrameCmd(g);
@@ -2792,6 +2856,7 @@ void Application::updateDisplay(bool log_events)
 
     /* Call any installed post frame command */
     updateTimes();
+    deliverSwapTags();
     executePostFrameScripts(g);
     executeThisFrameScripts(g);
     glistPostFrameCmd(g);
