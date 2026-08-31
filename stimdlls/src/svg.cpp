@@ -33,42 +33,56 @@
 #include <stim2.h>
 #include <prmutil.h>
 #include "objname.h"
+#include "texfilter.h"
 
-/* Cache multiple resolutions for efficient scaling */
-#define SVG_CACHE_SIZES 4
-static const int CacheSizes[SVG_CACHE_SIZES] = { 64, 128, 256, 512 };
-
-typedef struct _cached_raster {
-    int width;
-    int height;
-    GLuint texture;
-    int valid;
-} CACHED_RASTER;
+/*
+ * Rasterization size.
+ *
+ * This used to be a four-level cache, { 64, 128, 256, 512 }, all four levels
+ * rasterized on every load and select_best_cache() carrying a TODO about
+ * picking among them from the modelview scale.  It never did: it returned the
+ * highest valid level unconditionally, so 512 was the only level ever bound
+ * and the other three were rasterized, uploaded and kept resident for nothing.
+ *
+ * Mipmapping is the answer that cache was reaching for, and it is a better
+ * one -- the level is chosen per-fragment from the actual screen-space
+ * derivatives instead of once per object, and trilinear blends between levels
+ * instead of popping.  So there is one raster now, at what was the top level,
+ * and the chain below it comes from glGenerateMipmap when a caller asks for
+ * it.  Nothing on screen changes: 512 is what was being drawn before.
+ */
+#define SVG_RASTER_SIZE 512
 
 typedef struct _svg_obj {
     /* Original SVG dimensions */
     int svg_width;
     int svg_height;
     float aspect_ratio;
-    
+
     /* Display state */
     int visible;
-    
+
     /* OpenGL resources */
     GLuint vertex_buffer;
     GLuint vao;
-    
+
     /* LunaSVG document - kept for re-rasterization and stylesheet changes */
     lunasvg::Document* document;
-    
-    /* Multi-resolution cache */
-    CACHED_RASTER cache[SVG_CACHE_SIZES];
-    int current_cache_idx;  /* Which cache level is currently bound */
-    
+
+    /* Rasterized texture */
+    GLuint texture;
+    int tex_width;
+    int tex_height;
+    int tex_valid;
+
+    /* GL *minification* filter; mag filter and mip chain derive from it.
+       GL_LINEAR (no mip chain) is the historical behavior and the default. */
+    int filter;
+
     /* Explicit size override (-1 = auto) */
     int requested_width;
     int requested_height;
-    
+
     /* Rendering parameters */
     float opacity;
     float color[4];         /* Tint color (RGBA) */
@@ -252,43 +266,62 @@ static int init_svg_gl_resources(SVG_OBJ *svg) {
     return 0;
 }
 
-/* Rasterize SVG at specific size and upload to texture */
-static int rasterize_to_cache(SVG_OBJ *svg, int cache_idx) {
-    if (!svg->document || cache_idx < 0 || cache_idx >= SVG_CACHE_SIZES)
-        return -1;
-    
-    int target_size = CacheSizes[cache_idx];
+/*
+ * Apply this object's filter to the currently bound GL_TEXTURE_2D, building
+ * the mip chain if the filter samples one.  Separate from rasterize() so
+ * svgFilter can change the filter without re-running LunaSVG.
+ *
+ * Caller must have GL_TEXTURE_2D bound to svg->texture with level 0 uploaded.
+ */
+static void apply_filter(SVG_OBJ *svg) {
+    int minfilter = svg->filter;
+
+    /* MAG never takes a *_MIPMAP_* enum - that is GL_INVALID_ENUM */
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minfilter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                    texMagFilterFor(minfilter));
+
+    if (texNeedsMipmap(minfilter)) {
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL,
+                        texMipLevelCount(svg->tex_width, svg->tex_height) - 1);
+        glGenerateMipmap(GL_TEXTURE_2D);
+    } else {
+        /* only level 0 exists; say so rather than leaving the default 1000 */
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    }
+}
+
+/* Rasterize the SVG and upload it */
+static int rasterize(SVG_OBJ *svg) {
+    if (!svg->document) return -1;
+
     int width, height;
-    
+
     /* Maintain aspect ratio */
     if (svg->aspect_ratio >= 1.0f) {
-        width = target_size;
-        height = (int)(target_size / svg->aspect_ratio);
+        width = SVG_RASTER_SIZE;
+        height = (int)(SVG_RASTER_SIZE / svg->aspect_ratio);
     } else {
-        height = target_size;
-        width = (int)(target_size * svg->aspect_ratio);
+        height = SVG_RASTER_SIZE;
+        width = (int)(SVG_RASTER_SIZE * svg->aspect_ratio);
     }
-    
+
     if (width < 1) width = 1;
     if (height < 1) height = 1;
-    
+
     /* Render using LunaSVG */
     lunasvg::Bitmap bitmap = svg->document->renderToBitmap(width, height);
     if (bitmap.isNull()) {
         fprintf(getConsoleFP(), "SVG: Failed to render to bitmap at %dx%d\n", width, height);
         return -1;
     }
-    
-    /* Create/update texture */
-    CACHED_RASTER *cache = &svg->cache[cache_idx];
-    
-    if (!cache->texture) {
-        glGenTextures(1, &cache->texture);
+
+    if (!svg->texture) {
+        glGenTextures(1, &svg->texture);
     }
-    
-    glBindTexture(GL_TEXTURE_2D, cache->texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    glBindTexture(GL_TEXTURE_2D, svg->texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
@@ -296,7 +329,7 @@ static int rasterize_to_cache(SVG_OBJ *svg, int cache_idx) {
     unsigned char* rgba = (unsigned char*)malloc(width * height * 4);
     const unsigned char* src = bitmap.data();
     uint32_t stride = bitmap.stride();
-    
+
     for (int y = 0; y < height; y++) {
       const unsigned char* srcRow = src + y * stride;
       unsigned char* dstRow = rgba + y * width * 4;
@@ -307,42 +340,22 @@ static int rasterize_to_cache(SVG_OBJ *svg, int cache_idx) {
         dstRow[x*4 + 3] = srcRow[x*4 + 3];  // A
       }
     }
-    
+
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);    
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
-		 GL_RGBA, GL_UNSIGNED_BYTE, rgba);    
-    
+		 GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+
     free(rgba);
+
+    svg->tex_width = width;
+    svg->tex_height = height;
+    svg->tex_valid = 1;
+
+    apply_filter(svg);          /* needs tex_width/height, so set them first */
+
     glBindTexture(GL_TEXTURE_2D, 0);
-    
-    cache->width = width;
-    cache->height = height;
-    cache->valid = 1;
-    
-    return 0;
-}
 
-/* Pre-rasterize all cache levels */
-static int rasterize_all_cache_levels(SVG_OBJ *svg) {
-    for (int i = 0; i < SVG_CACHE_SIZES; i++) {
-        if (rasterize_to_cache(svg, i) < 0) {
-            fprintf(getConsoleFP(), "SVG: Warning - failed to cache at size %d\n", CacheSizes[i]);
-        }
-    }
-    svg->current_cache_idx = SVG_CACHE_SIZES / 2;  /* Start with medium resolution */
-    return 0;
-}
-
-/* Select best cache level based on current transform scale */
-static int select_best_cache(SVG_OBJ *svg) {
-    /* For now, just use the highest resolution that's valid */
-    /* TODO: Could query current modelview scale to pick optimal */
-    for (int i = SVG_CACHE_SIZES - 1; i >= 0; i--) {
-        if (svg->cache[i].valid) {
-            return i;
-        }
-    }
     return 0;
 }
 
@@ -365,8 +378,7 @@ static int load_svg_from_file(SVG_OBJ *svg, const char *filename) {
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     
-    /* Pre-rasterize all cache levels */
-    return rasterize_all_cache_levels(svg);
+    return rasterize(svg);
 }
 
 /* Load SVG from string */
@@ -386,8 +398,8 @@ static int load_svg_from_string(SVG_OBJ *svg, const char *svg_data) {
     glBindBuffer(GL_ARRAY_BUFFER, svg->vertex_buffer);
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
-    
-    return rasterize_all_cache_levels(svg);
+
+    return rasterize(svg);
 }
 
 /* Drawing function */
@@ -395,10 +407,9 @@ void svgShow(GR_OBJ *gobj) {
     SVG_OBJ *svg = (SVG_OBJ *) GR_CLIENTDATA(gobj);
     
     if (!svg->visible) return;
-    
-    int cache_idx = select_best_cache(svg);
-    if (!svg->cache[cache_idx].valid) return;
-    
+
+    if (!svg->tex_valid) return;
+
     float modelview[16], projection[16];
     stimGetMatrix(STIM_MODELVIEW_MATRIX, modelview);
     stimGetMatrix(STIM_PROJECTION_MATRIX, projection);
@@ -415,7 +426,7 @@ void svgShow(GR_OBJ *gobj) {
     glUniform1i(SvgUniformColorOverride, svg->color_override);
     
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, svg->cache[cache_idx].texture);
+    glBindTexture(GL_TEXTURE_2D, svg->texture);
     glUniform1i(SvgUniformTexture, 0);
     
     glBindVertexArray(svg->vao);
@@ -435,13 +446,8 @@ void svgDelete(GR_OBJ *gobj) {
         delete svg->document;
     }
     
-    /* Free cached textures */
-    for (int i = 0; i < SVG_CACHE_SIZES; i++) {
-        if (svg->cache[i].texture) {
-            glDeleteTextures(1, &svg->cache[i].texture);
-        }
-    }
-    
+    if (svg->texture) glDeleteTextures(1, &svg->texture);
+
     /* Free OpenGL resources */
     if (svg->vertex_buffer) glDeleteBuffers(1, &svg->vertex_buffer);
     if (svg->vao) glDeleteVertexArrays(1, &svg->vao);
@@ -453,7 +459,7 @@ void svgReset(GR_OBJ *gobj) {
     /* Nothing to reset */
 }
 
-int svgCreate(OBJ_LIST *objlist, const char *source, int is_file) {
+int svgCreate(OBJ_LIST *objlist, const char *source, int is_file, int filter) {
     const char *name = "SVG";
     GR_OBJ *obj;
     SVG_OBJ *svg;
@@ -481,7 +487,8 @@ int svgCreate(OBJ_LIST *objlist, const char *source, int is_file) {
     svg->color_override = 0;
     svg->requested_width = -1;
     svg->requested_height = -1;
-    
+    svg->filter = filter;
+
     if (init_svg_gl_resources(svg) < 0) {
         fprintf(getConsoleFP(), "SVG: error initializing OpenGL resources\n");
         svgDelete(obj);
@@ -512,17 +519,27 @@ static int svgCmd(ClientData clientData, Tcl_Interp *interp,
                   int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *) clientData;
     int id;
+    int filter = GL_LINEAR;     /* historical behavior; mipmapping is opt-in */
 
     if (argc < 2) {
-        Tcl_AppendResult(interp, "usage: ", argv[0], " svgfile_or_data", NULL);
+        Tcl_AppendResult(interp, "usage: ", argv[0],
+                         " svgfile_or_data [filter]", NULL);
         return TCL_ERROR;
+    }
+
+    if (argc > 2) {
+        if ((filter = texParseFilterName(argv[2])) < 0) {
+            Tcl_AppendResult(interp, argv[0], ": unknown filter type: \"",
+                             argv[2], "\"", NULL);
+            return TCL_ERROR;
+        }
     }
 
     /* Detect if it's SVG data or filename */
     const char *input = argv[1];
     int is_svg_data = (strncmp(input, "<svg", 4) == 0 || strstr(input, "<svg") != NULL);
-    
-    if ((id = svgCreate(olist, input, !is_svg_data)) < 0) {
+
+    if ((id = svgCreate(olist, input, !is_svg_data, filter)) < 0) {
         Tcl_SetResult(interp, (char*)"error loading SVG", TCL_STATIC);
         return TCL_ERROR;
     }
@@ -554,10 +571,65 @@ static int svginfoCmd(ClientData clientData, Tcl_Interp *interp,
                    Tcl_NewIntObj(svg->svg_height));
     Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("aspect_ratio", -1), 
                    Tcl_NewDoubleObj(svg->aspect_ratio));
-    Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("visible", -1), 
+    Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("visible", -1),
                    Tcl_NewIntObj(svg->visible));
+    Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("filter", -1),
+                   Tcl_NewStringObj(texFilterName(svg->filter), -1));
+    Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("raster_width", -1),
+                   Tcl_NewIntObj(svg->tex_width));
+    Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("raster_height", -1),
+                   Tcl_NewIntObj(svg->tex_height));
 
     Tcl_SetObjResult(interp, dictObj);
+    return TCL_OK;
+}
+
+/*
+ * svgFilter id [filter]
+ *
+ * Query or set the texture filter.  "linear" (the default) and "nearest" are
+ * unchanged.  "mipmap" builds a mip chain and samples it trilinearly, which
+ * is what a heavily MINIFIED svg wants: a 512-wide raster drawn onto a quad
+ * ~60 screen pixels across is an 8x reduction, and plain GL_LINEAR takes a
+ * 2x2 tap out of that ~8x8 texel footprint and throws the rest away.  Thin
+ * strokes are where it shows first.
+ */
+static int svgfilterCmd(ClientData clientData, Tcl_Interp *interp,
+                        int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *) clientData;
+    SVG_OBJ *svg;
+    int id, filter;
+
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " id [filter]", NULL);
+        return TCL_ERROR;
+    }
+
+    if ((id = resolveObjId(interp, ((ObjNameInfo*)OL_NAMEINFO(olist)), argv[1], SvgID, "svg")) < 0)
+        return TCL_ERROR;
+
+    svg = (SVG_OBJ*)GR_CLIENTDATA(OL_OBJ(olist, id));
+
+    if (argc == 2) {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj(texFilterName(svg->filter), -1));
+        return TCL_OK;
+    }
+
+    if ((filter = texParseFilterName(argv[2])) < 0) {
+        Tcl_AppendResult(interp, argv[0], ": unknown filter type: \"",
+                         argv[2], "\"", NULL);
+        return TCL_ERROR;
+    }
+
+    svg->filter = filter;
+
+    /* level 0 is already uploaded, so just re-apply - no re-rasterization */
+    if (svg->tex_valid) {
+        glBindTexture(GL_TEXTURE_2D, svg->texture);
+        apply_filter(svg);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
     return TCL_OK;
 }
 
@@ -688,10 +760,9 @@ static int svgstylesheetCmd(ClientData clientData, Tcl_Interp *interp,
     
     /* Apply stylesheet */
     svg->document->applyStyleSheet(argv[2]);
-    
-    /* Re-rasterize all cache levels */
-    rasterize_all_cache_levels(svg);
-    
+
+    rasterize(svg);
+
     return TCL_OK;
 }
 
@@ -718,11 +789,8 @@ static int svgreloadCmd(ClientData clientData, Tcl_Interp *interp,
         svg->document = NULL;
     }
     
-    /* Invalidate cache */
-    for (int i = 0; i < SVG_CACHE_SIZES; i++) {
-        svg->cache[i].valid = 0;
-    }
-    
+    svg->tex_valid = 0;
+
     /* Reload */
     if (load_svg_from_file(svg, argv[2]) < 0) {
         Tcl_AppendResult(interp, argv[0], ": failed to reload SVG", NULL);
@@ -771,6 +839,8 @@ extern "C" int Svg_Init(Tcl_Interp *interp)
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
     Tcl_CreateCommand(interp, "svgVisible", (Tcl_CmdProc *) svgvisibleCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+    Tcl_CreateCommand(interp, "svgFilter", (Tcl_CmdProc *) svgfilterCmd,
+                      (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
     Tcl_CreateCommand(interp, "svgOpacity", (Tcl_CmdProc *) svgopacityCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
     Tcl_CreateCommand(interp, "svgColor", (Tcl_CmdProc *) svgcolorCmd,
@@ -781,8 +851,8 @@ extern "C" int Svg_Init(Tcl_Interp *interp)
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
 
     const char *script = R"(
-proc svgAsset {filename} {
-    return [svg [assetFind $filename]]
+proc svgAsset {filename args} {
+    return [svg [assetFind $filename] {*}$args]
 }
 )";
     Tcl_Eval(interp, script);

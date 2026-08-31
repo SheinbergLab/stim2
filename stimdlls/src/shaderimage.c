@@ -43,6 +43,7 @@
 
 #include <stim2.h>
 #include "targa.h"
+#include "texfilter.h"
 
 /****************************************************************/
 /*                      Local Datatypes                         */
@@ -59,7 +60,7 @@ typedef struct _imagedata {
   int nlayers;			/* if > 0, 3D texture          */
   int format;			/* RGB, RGBA, ALPHA, LUMINANCE */
   int datatype;			/* UNSIGNED_CHAR, FLOAT, ...   */
-  int filter;			/* NEAREST or LINEAR           */
+  int filter;			/* GL *minification* filter    */
   float contrast;		/* adjust SCALE/BIAS upon load */
   int wrap;			/* GL_CLAMP or GL_REPEAT       */
   void *pixels;                 /* actual pixels for reloading */
@@ -104,8 +105,13 @@ static void imageAddTexture(IMAGE_DATA *idata)
 {
   IMAGE_LIST *imagelist;
   int id;
+  int minfilter, magfilter, mipmap;
   id = idata->id;
   imagelist = idata->imagelist;
+
+  minfilter = idata->filter;
+  magfilter = texMagFilterFor(minfilter);
+  mipmap = texNeedsMipmap(minfilter);
 
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
   glPixelStorei(GL_UNPACK_ROW_LENGTH, idata->w);
@@ -114,28 +120,50 @@ static void imageAddTexture(IMAGE_DATA *idata)
 
   if (idata->nlayers <= 1) {
     glBindTexture(GL_TEXTURE_2D, imagelist->texids[id]);
-    
+
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, idata->wrap);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, idata->wrap);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, idata->filter);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, idata->filter);
-    
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magfilter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minfilter);
+
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
-		 idata->w, idata->h, 0, 
-		 idata->format, idata->datatype, 
+		 idata->w, idata->h, 0,
+		 idata->format, idata->datatype,
 		 idata->pixels);
+
+    if (mipmap) {
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL,
+		      texMipLevelCount(idata->w, idata->h) - 1);
+      glGenerateMipmap(GL_TEXTURE_2D);
+    }
+    else {
+      /* only level 0 exists; say so rather than leaving the default 1000 */
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    }
   }
   else {
     glBindTexture(GL_TEXTURE_2D_ARRAY, imagelist->texids[id]);
 
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, idata->wrap);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, idata->wrap);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, idata->filter);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, idata->filter);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, magfilter);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, minfilter);
 
     glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA,
 		 idata->w, idata->h, idata->nlayers, 0,
 		 idata->format, idata->datatype, idata->pixels);
+
+    /* mips each layer independently -- layers are never blended together */
+    if (mipmap) {
+      glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BASE_LEVEL, 0);
+      glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL,
+		      texMipLevelCount(idata->w, idata->h) - 1);
+      glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+    }
+    else {
+      glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL, 0);
+    }
   }
   idata->imageid = id;
 }
@@ -197,16 +225,12 @@ int imageLoadCmd(ClientData clientData, Tcl_Interp *interp,
     if (Tcl_GetInt(interp, argv[3], &h) != TCL_OK) return TCL_ERROR;
   }
   if (argc > 4) {
-    if (!strcmp(argv[4], "NEAREST") || !strcmp(argv[4], "nearest")) 
-      filter = GL_NEAREST;
-    else if (!strcmp(argv[4], "LINEAR") || !strcmp(argv[4], "linear")) 
-      filter = GL_LINEAR;
-    else {
+    if ((filter = texParseFilterName(argv[4])) < 0) {
       Tcl_AppendResult(interp, "unknown filter type: \"", argv[4], "\"", NULL);
       return TCL_ERROR;
     }
   }
-  
+
   if ((id = imageLoad(argv[1], w, h, filter, wrap,
 		      contrast, format, grayscale, listid)) < 0) {
     char buf[128];
@@ -235,16 +259,14 @@ int imageSetFilterType(ClientData cdata, Tcl_Interp * interp,
     return TCL_ERROR;
   }
   const char *filter = Tcl_GetString(objv[1]);
-  
-  if (!strcmp(filter, "NEAREST") || !strcmp(filter, "nearest")) 
-    FilterType = GL_NEAREST;
-  else if (!strcmp(filter, "LINEAR") || !strcmp(filter, "linear")) 
-    FilterType = GL_LINEAR;
-  else {
+  int f;
+
+  if ((f = texParseFilterName(filter)) < 0) {
     Tcl_AppendResult(interp, "unknown filter type: \"", filter, "\"", NULL);
     return TCL_ERROR;
   }
-  
+  FilterType = f;
+
   return TCL_OK;
 }
 
@@ -514,10 +536,9 @@ int imageCreateCmd(ClientData clientData, Tcl_Interp *interp,
   }
   
   if (argc > 4) {
-    if (!strcmp(argv[4], "NEAREST") || !strcmp(argv[4], "nearest")) 
-      filter = GL_NEAREST;
-    else if (!strcmp(argv[4], "LINEAR") || !strcmp(argv[4], "linear")) 
-      filter = GL_LINEAR;
+    /* unknown names have always been silently ignored here -- keep that */
+    int f = texParseFilterName(argv[4]);
+    if (f >= 0) filter = f;
   }
 
   if ((id = imageCreate(dl, w, h, nlayers,
@@ -561,10 +582,9 @@ int imageCreateFromStringCmd(ClientData cdata, Tcl_Interp * interp,
 
   if (objc > 4) {
     char *filtername = Tcl_GetString(objv[4]);
-    if (!strcmp(filtername, "NEAREST") || !strcmp(filtername, "nearest")) 
-      filter = GL_NEAREST;
-    else if (!strcmp(filtername, "LINEAR") || !strcmp(filtername, "linear")) 
-      filter = GL_LINEAR;
+    /* unknown names have always been silently ignored here -- keep that */
+    int f = texParseFilterName(filtername);
+    if (f >= 0) filter = f;
   }
   if (objc > 5) {
     char *formatname = Tcl_GetString(objv[5]);
