@@ -26,8 +26,21 @@
 
 #include <glad/glad.h>
 
+/*
+ * MSVC only guarantees C-mode `inline` under /std:c11 or later, and stimdlls
+ * sets no CMAKE_C_STANDARD, so .c files compile at the compiler default.
+ * __inline is MSVC's own C spelling and has always been accepted there.
+ * (Plain `static` would work everywhere too, but warns -Wunused-function in
+ * every translation unit that doesn't call all of these.)
+ */
+#if defined(_MSC_VER) && !defined(__cplusplus)
+#define TEXFILTER_INLINE static __inline
+#else
+#define TEXFILTER_INLINE static inline
+#endif
+
 /* case-insensitive compare, no strcasecmp/_stricmp portability dance */
-static inline int texFilterNameEq(const char *a, const char *b)
+TEXFILTER_INLINE int texFilterNameEq(const char *a, const char *b)
 {
   for (; *a && *b; a++, b++) {
     int ca = *a, cb = *b;
@@ -43,7 +56,7 @@ static inline int texFilterNameEq(const char *a, const char *b)
  * Returns -1 for an unrecognized name, so callers keep their own error
  * behavior (some sites report it, some have always ignored it).
  */
-static inline int texParseFilterName(const char *name)
+TEXFILTER_INLINE int texParseFilterName(const char *name)
 {
   if (texFilterNameEq(name, "nearest"))        return GL_NEAREST;
   if (texFilterNameEq(name, "linear"))         return GL_LINEAR;
@@ -56,7 +69,7 @@ static inline int texParseFilterName(const char *name)
 }
 
 /* Name for a minification filter, for round-tripping back to Tcl. */
-static inline const char *texFilterName(int minfilter)
+TEXFILTER_INLINE const char *texFilterName(int minfilter)
 {
   switch (minfilter) {
   case GL_NEAREST:                return "nearest";
@@ -68,7 +81,7 @@ static inline const char *texFilterName(int minfilter)
 }
 
 /* The magnification filter that goes with a given minification filter. */
-static inline int texMagFilterFor(int minfilter)
+TEXFILTER_INLINE int texMagFilterFor(int minfilter)
 {
   switch (minfilter) {
   case GL_NEAREST:
@@ -80,7 +93,7 @@ static inline int texMagFilterFor(int minfilter)
   }
 }
 
-static inline int texNeedsMipmap(int minfilter)
+TEXFILTER_INLINE int texNeedsMipmap(int minfilter)
 {
   switch (minfilter) {
   case GL_NEAREST_MIPMAP_NEAREST:
@@ -99,7 +112,7 @@ static inline int texNeedsMipmap(int minfilter)
  * texture whose min filter samples mip levels is INCOMPLETE, and samples as
  * undefined (typically black), unless the chain reaches MAX_LEVEL.
  */
-static inline int texMipLevelCount(int w, int h)
+TEXFILTER_INLINE int texMipLevelCount(int w, int h)
 {
   int levels = 1;
   int m = (w > h) ? w : h;
