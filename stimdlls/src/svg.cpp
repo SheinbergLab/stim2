@@ -128,14 +128,23 @@ static const char* svg_fragment_shader_source =
 "uniform int colorOverride;\n"
 "\n"
 "void main() {\n"
+"    // The texture holds PREMULTIPLIED alpha: LunaSVG renders ARGB32\n"
+"    // premultiplied and rasterize() uploads it as-is.  We blend with\n"
+"    // GL_ONE/GL_ONE_MINUS_SRC_ALPHA to match, so every operation below has\n"
+"    // to keep rgb == alpha * straight_rgb.  Staying premultiplied is also\n"
+"    // what makes the mip chain correct -- box-filtering premultiplied\n"
+"    // texels is the right operation, filtering straight alpha bleeds.\n"
 "    vec4 color = texture(ourTexture, TexCoord);\n"
 "    if (colorOverride == 1) {\n"
-"        color.rgb = colorTint.rgb;\n"
-"        color.a *= colorTint.a;\n"
+"        // replace rgb, scale alpha: rebuild premultiplied from the tint\n"
+"        float a = color.a * colorTint.a;\n"
+"        color = vec4(colorTint.rgb * a, a);\n"
 "    } else if (colorOverride == 2) {\n"
+"        // multiply: rgb by tint.rgb, and rgb and alpha both by tint.a\n"
 "        color *= colorTint;\n"
+"        color.rgb *= colorTint.a;\n"
 "    }\n"
-"    color.a *= opacity;\n"
+"    color *= opacity;   // premultiplied: scales rgb and alpha together\n"
 "    FragColor = color;\n"
 "}\n";
 
@@ -162,14 +171,23 @@ static const char* svg_fragment_shader_source =
 "uniform int colorOverride;\n"
 "\n"
 "void main() {\n"
+"    // The texture holds PREMULTIPLIED alpha: LunaSVG renders ARGB32\n"
+"    // premultiplied and rasterize() uploads it as-is.  We blend with\n"
+"    // GL_ONE/GL_ONE_MINUS_SRC_ALPHA to match, so every operation below has\n"
+"    // to keep rgb == alpha * straight_rgb.  Staying premultiplied is also\n"
+"    // what makes the mip chain correct -- box-filtering premultiplied\n"
+"    // texels is the right operation, filtering straight alpha bleeds.\n"
 "    vec4 color = texture(ourTexture, TexCoord);\n"
 "    if (colorOverride == 1) {\n"
-"        color.rgb = colorTint.rgb;\n"
-"        color.a *= colorTint.a;\n"
+"        // replace rgb, scale alpha: rebuild premultiplied from the tint\n"
+"        float a = color.a * colorTint.a;\n"
+"        color = vec4(colorTint.rgb * a, a);\n"
 "    } else if (colorOverride == 2) {\n"
+"        // multiply: rgb by tint.rgb, and rgb and alpha both by tint.a\n"
 "        color *= colorTint;\n"
+"        color.rgb *= colorTint.a;\n"
 "    }\n"
-"    color.a *= opacity;\n"
+"    color *= opacity;   // premultiplied: scales rgb and alpha together\n"
 "    FragColor = color;\n"
 "}\n";
 #endif
@@ -415,7 +433,11 @@ void svgShow(GR_OBJ *gobj) {
     stimGetMatrix(STIM_PROJECTION_MATRIX, projection);
     
     glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    /* premultiplied source -- see the fragment shader.  This used to be
+       GL_SRC_ALPHA, which applied alpha a second time and squared it: a
+       50%-opacity fill composited at 25%, and every antialiased edge came
+       out darker than it was drawn. */
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     
     glUseProgram(SvgShaderProgram);
     glUniformMatrix4fv(SvgUniformModelview, 1, GL_FALSE, modelview);
