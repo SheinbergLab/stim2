@@ -3487,9 +3487,24 @@ main(int argc, char *argv[]) {
     }
 #endif
   
+  /* Detach at birth, not at the bottom of main.
+   *
+   * These are while(1) accept() loops with no exit condition, so they can
+   * never be joined and holding them joinable buys nothing.  It cost
+   * something, though: `app` is a global, and the Tcl "exit"/"quit" command
+   * calls exit(0) from inside Tcl_DoOneEvent, which never reaches the bottom
+   * of main.  Static destruction then ran ~Application() on three STILL
+   * JOINABLE std::threads, and destroying a joinable thread calls
+   * std::terminate -- so every scripted exit aborted with a crash dialog,
+   * while closing the window quit cleanly.  Detaching here makes the
+   * invariant hold on every exit path rather than on one of them.
+   */
   app.net_thread = std::thread(&Application::start_tcp_server, &app);
+  app.net_thread.detach();
   app.ds_net_thread = std::thread(&Application::start_dstcp_server, &app);
+  app.ds_net_thread.detach();
   app.msg_thread = std::thread(&Application::start_msg_server, &app);
+  app.msg_thread.detach();
 
   redraw();
 
@@ -3545,10 +3560,7 @@ main(int argc, char *argv[]) {
   /* shutdown timer thread */
   app.stopTimer();
 
-  /* detach from TCP/IP threads */
-  app.net_thread.detach();
-  app.ds_net_thread.detach();
-  app.msg_thread.detach();
+  /* TCP/IP threads were detached at creation -- nothing to do here */
 
 #ifdef _MSC_VER
     WSACleanup();
