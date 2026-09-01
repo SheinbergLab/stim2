@@ -608,6 +608,45 @@ static int svgfilterCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_OK;
 }
 
+/*
+ * svgTextureID id
+ *
+ * The object's GL texture name, for handing to something that samples a
+ * texture itself -- motionpatch's aperture and world-map samplers, or
+ * shaderObjSetSampler -- rather than drawing the object.  The analogue of
+ * shaderImageID for a shape.
+ *
+ * The texture belongs to the object: it is freed when the object is, so keep
+ * the object alive for as long as the id is in use.  The usual pattern is to
+ * build the shape, take its id, and simply never glistAddObject it -- it then
+ * lives in the object list, undrawn, until the next resetObjList, which is
+ * the same lifetime shaderImageCreate textures had.
+ */
+static int svgtextureidCmd(ClientData clientData, Tcl_Interp *interp,
+                           int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *) clientData;
+    SVG_OBJ *svg;
+    int id;
+
+    if (argc < 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " id", NULL);
+        return TCL_ERROR;
+    }
+
+    if ((id = resolveObjId(interp, ((ObjNameInfo*)OL_NAMEINFO(olist)), argv[1], SvgID, "svg")) < 0)
+        return TCL_ERROR;
+
+    svg = (SVG_OBJ*)GR_CLIENTDATA(OL_OBJ(olist, id));
+
+    if (!svg->tex_valid || !svg->texture) {
+        Tcl_AppendResult(interp, argv[0], ": object has no texture", NULL);
+        return TCL_ERROR;
+    }
+
+    Tcl_SetObjResult(interp, Tcl_NewIntObj((int) svg->texture));
+    return TCL_OK;
+}
+
 static int svgvisibleCmd(ClientData clientData, Tcl_Interp *interp,
                          int argc, char *argv[]) {
     OBJ_LIST *olist = (OBJ_LIST *) clientData;
@@ -821,6 +860,8 @@ extern "C" int Svg_Init(Tcl_Interp *interp)
     Tcl_CreateCommand(interp, "svgInfo", (Tcl_CmdProc *) svginfoCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
     Tcl_CreateCommand(interp, "svgVisible", (Tcl_CmdProc *) svgvisibleCmd,
+                      (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+    Tcl_CreateCommand(interp, "svgTextureID", (Tcl_CmdProc *) svgtextureidCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
     Tcl_CreateCommand(interp, "svgFilter", (Tcl_CmdProc *) svgfilterCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
