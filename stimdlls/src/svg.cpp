@@ -24,8 +24,11 @@
 #include <string.h>
 
 #include <lunasvg.h>
+#include <plutovg.h>
 
 #include <tcl.h>
+#include <df.h>
+#include <tcl_dl.h>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -78,6 +81,12 @@ typedef struct _svg_obj {
     /* GL *minification* filter; mag filter and mip chain derive from it.
        GL_LINEAR (no mip chain) is the historical behavior and the default. */
     int filter;
+
+    /* Set for objects built by `shape` (plutovg path) rather than `svg`
+       (parsed document).  A shape has no lunasvg::Document, so the commands
+       that re-render from one refuse rather than crash. */
+    int is_shape;
+    float shape_span;       /* half-extent in the caller's coordinates */
 
     /* Explicit size override (-1 = auto) */
     int requested_width;
@@ -310,6 +319,48 @@ static void apply_filter(SVG_OBJ *svg) {
     }
 }
 
+/*
+ * Upload one premultiplied-ARGB32 buffer as the object's level-0 texture and
+ * apply its filter.  Both producers hand us the same format: LunaSVG's Bitmap
+ * and plutovg's surface are both ARGB32 premultiplied, which on a
+ * little-endian machine is B,G,R,A in memory -- and premultiplied is exactly
+ * what the shader and the mip chain want (see the fragment shader).
+ */
+static void upload_argb32(SVG_OBJ *svg, const unsigned char* src,
+                          int width, int height, int stride) {
+    if (!svg->texture) glGenTextures(1, &svg->texture);
+
+    glBindTexture(GL_TEXTURE_2D, svg->texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    unsigned char* rgba = (unsigned char*)malloc((size_t)width * height * 4);
+    for (int y = 0; y < height; y++) {
+        const unsigned char* srcRow = src + (size_t)y * stride;
+        unsigned char* dstRow = rgba + (size_t)y * width * 4;
+        for (int x = 0; x < width; x++) {
+            dstRow[x*4 + 0] = srcRow[x*4 + 2];  // R
+            dstRow[x*4 + 1] = srcRow[x*4 + 1];  // G
+            dstRow[x*4 + 2] = srcRow[x*4 + 0];  // B
+            dstRow[x*4 + 3] = srcRow[x*4 + 3];  // A
+        }
+    }
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    free(rgba);
+
+    svg->tex_width = width;
+    svg->tex_height = height;
+    svg->tex_valid = 1;
+
+    apply_filter(svg);          /* needs tex_width/height, so set them first */
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
 /* Rasterize the SVG and upload it */
 static int rasterize(SVG_OBJ *svg) {
     if (!svg->document) return -1;
@@ -335,46 +386,100 @@ static int rasterize(SVG_OBJ *svg) {
         return -1;
     }
 
-    if (!svg->texture) {
-        glGenTextures(1, &svg->texture);
-    }
-
-    glBindTexture(GL_TEXTURE_2D, svg->texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    /* LunaSVG outputs BGRA */
-    unsigned char* rgba = (unsigned char*)malloc(width * height * 4);
-    const unsigned char* src = bitmap.data();
-    uint32_t stride = bitmap.stride();
-
-    for (int y = 0; y < height; y++) {
-      const unsigned char* srcRow = src + y * stride;
-      unsigned char* dstRow = rgba + y * width * 4;
-      for (int x = 0; x < width; x++) {
-        dstRow[x*4 + 0] = srcRow[x*4 + 2];  // R
-        dstRow[x*4 + 1] = srcRow[x*4 + 1];  // G
-        dstRow[x*4 + 2] = srcRow[x*4 + 0];  // B
-        dstRow[x*4 + 3] = srcRow[x*4 + 3];  // A
-      }
-    }
-
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
-		 GL_RGBA, GL_UNSIGNED_BYTE, rgba);
-
-    free(rgba);
-
-    svg->tex_width = width;
-    svg->tex_height = height;
-    svg->tex_valid = 1;
-
-    apply_filter(svg);          /* needs tex_width/height, so set them first */
-
-    glBindTexture(GL_TEXTURE_2D, 0);
+    upload_argb32(svg, bitmap.data(), width, height, (int)bitmap.stride());
 
     return 0;
+}
+
+/****************************************************************/
+/*        Direct path rasterization (no SVG document)           */
+/****************************************************************/
+
+/*
+ * `shape` rasterizes a polygon given as two dynlists straight through
+ * plutovg -- the same rasterizer LunaSVG uses, reached without building and
+ * reparsing an SVG string.  plutovg is already linked here, so this costs no
+ * new dependency.
+ *
+ * The quad is sized in the CALLER'S coordinates rather than normalized to a
+ * unit square: the raster covers exactly [-span,+span] and the vertices span
+ * the same, so one unit of outline coordinate is one unit of scaleObj.  A
+ * caller scales by the size it wants and is done -- no 2*span factor to
+ * remember, which is the part of the SVG route that was easy to get wrong.
+ */
+
+static double dl_elt(DYN_LIST *dl, int i) {
+    switch (DYN_LIST_DATATYPE(dl)) {
+    case DF_FLOAT: return ((float *)DYN_LIST_VALS(dl))[i];
+    case DF_LONG:  return ((int *)DYN_LIST_VALS(dl))[i];
+    case DF_SHORT: return ((short *)DYN_LIST_VALS(dl))[i];
+    case DF_CHAR:  return ((char *)DYN_LIST_VALS(dl))[i];
+    default:       return 0.0;
+    }
+}
+
+static int dl_numeric(DYN_LIST *dl) {
+    switch (DYN_LIST_DATATYPE(dl)) {
+    case DF_FLOAT: case DF_LONG: case DF_SHORT: case DF_CHAR: return 1;
+    default: return 0;
+    }
+}
+
+struct ShapeSpec {
+    float fill[3]    = { 1.f, 1.f, 1.f };
+    float stroke_w   = 0.f;         /* in outline units; 0 = filled */
+    float pad        = 0.f;
+    int   size       = SVG_RASTER_SIZE;
+    int   filter     = GL_LINEAR;
+    plutovg_line_join_t join = PLUTOVG_LINE_JOIN_ROUND;
+};
+
+/* Returns the fitted half-extent, or -1 on failure. */
+static float shape_rasterize(SVG_OBJ *svg, DYN_LIST *xs, DYN_LIST *ys,
+                             const ShapeSpec& spec) {
+    int n = DYN_LIST_N(xs);
+
+    /* Fit: the box has to hold the outline plus half the stroke, since a
+       stroke straddles the path -- exactly the span rule the SVG route used. */
+    double m = 0.0;
+    for (int i = 0; i < n; i++) {
+        double ax = fabs(dl_elt(xs, i)), ay = fabs(dl_elt(ys, i));
+        if (ax > m) m = ax;
+        if (ay > m) m = ay;
+    }
+    float span = (float)(m + spec.stroke_w/2.0 + spec.pad);
+    if (span <= 0.f) return -1.f;
+
+    int size = spec.size;
+    plutovg_surface_t* surface = plutovg_surface_create(size, size);
+    if (!surface) return -1.f;
+    plutovg_canvas_t* canvas = plutovg_canvas_create(surface);
+
+    /* outline units -> raster pixels, y flipped (texture rows run downward) */
+    double k = size / (2.0 * span);
+    for (int i = 0; i < n; i++) {
+        float px = (float)((dl_elt(xs, i) + span) * k);
+        float py = (float)((span - dl_elt(ys, i)) * k);
+        if (i == 0) plutovg_canvas_move_to(canvas, px, py);
+        else        plutovg_canvas_line_to(canvas, px, py);
+    }
+    plutovg_canvas_close_path(canvas);
+
+    plutovg_canvas_set_rgba(canvas, spec.fill[0], spec.fill[1], spec.fill[2], 1.f);
+    if (spec.stroke_w > 0.f) {
+        plutovg_canvas_set_line_width(canvas, (float)(spec.stroke_w * k));
+        plutovg_canvas_set_line_join(canvas, spec.join);
+        plutovg_canvas_stroke(canvas);
+    } else {
+        plutovg_canvas_fill(canvas);
+    }
+
+    upload_argb32(svg, plutovg_surface_get_data(surface), size, size,
+                  plutovg_surface_get_stride(surface));
+
+    plutovg_canvas_destroy(canvas);
+    plutovg_surface_destroy(surface);
+    return span;
 }
 
 /* Load SVG from file */
@@ -533,9 +638,168 @@ int svgCreate(OBJ_LIST *objlist, const char *source, int is_file, int filter) {
     return gobjAddObj(objlist, obj);
 }
 
+int shapeCreate(OBJ_LIST *objlist, DYN_LIST *xs, DYN_LIST *ys,
+                const ShapeSpec& spec) {
+    GR_OBJ *obj = gobjCreateObj();
+    if (!obj) return -1;
+
+    strcpy(GR_NAME(obj), "SVG");
+    GR_OBJTYPE(obj) = SvgID;
+    GR_DELETEFUNCP(obj) = svgDelete;
+    GR_RESETFUNCP(obj) = svgReset;
+    GR_ACTIONFUNCP(obj) = svgShow;
+
+    SVG_OBJ *svg = (SVG_OBJ *) calloc(1, sizeof(SVG_OBJ));
+    GR_CLIENTDATA(obj) = svg;
+
+    svg->visible = 1;
+    svg->opacity = 1.0f;
+    svg->color[0] = svg->color[1] = svg->color[2] = svg->color[3] = 1.0f;
+    svg->color_override = 0;
+    svg->requested_width = -1;
+    svg->requested_height = -1;
+    svg->filter = spec.filter;
+    svg->is_shape = 1;
+    svg->aspect_ratio = 1.0f;
+
+    if (init_svg_gl_resources(svg) < 0) {
+        fprintf(getConsoleFP(), "shape: error initializing OpenGL resources\n");
+        svgDelete(obj);
+        return -1;
+    }
+
+    float span = shape_rasterize(svg, xs, ys, spec);
+    if (span < 0.f) {
+        fprintf(getConsoleFP(), "shape: error rasterizing path\n");
+        svgDelete(obj);
+        return -1;
+    }
+    svg->shape_span = span;
+    svg->svg_width = svg->svg_height = spec.size;
+
+    /* Quad in the CALLER'S units: the unit quad is +/-0.5, so widening it to
+       +/-span makes one outline unit equal one unit of scaleObj. */
+    float vertices[30];
+    generate_svg_vertices(vertices, 1.0f);
+    for (int i = 0; i < 6; i++) {
+        vertices[i*5 + 0] *= 2.0f * span;
+        vertices[i*5 + 1] *= 2.0f * span;
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, svg->vertex_buffer);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    return gobjAddObj(objlist, obj);
+}
+
 /****************************************************************/
 /*                    Tcl Commands                              */
 /****************************************************************/
+
+/*
+ * shape xs ys ?-fill {r g b}? ?-stroke w? ?-linejoin round|miter|bevel?
+ *             ?-size n? ?-filter name? ?-pad f?
+ *
+ * -stroke and -pad are in the caller's coordinates, not pixels, so they stay
+ * meaningful however the object is later scaled.
+ */
+static int shapeCmd(ClientData clientData, Tcl_Interp *interp,
+                    int argc, char *argv[]) {
+    OBJ_LIST *olist = (OBJ_LIST *) clientData;
+    DYN_LIST *xs, *ys;
+    ShapeSpec spec;
+    int id;
+
+    if (argc < 3) {
+        Tcl_AppendResult(interp, "usage: ", argv[0],
+                         " xs ys ?-fill {r g b}? ?-stroke w? ?-linejoin j?"
+                         " ?-size n? ?-filter f? ?-pad p?", NULL);
+        return TCL_ERROR;
+    }
+
+    if (tclFindDynList(interp, argv[1], &xs) != TCL_OK) return TCL_ERROR;
+    if (tclFindDynList(interp, argv[2], &ys) != TCL_OK) return TCL_ERROR;
+
+    if (!dl_numeric(xs) || !dl_numeric(ys)) {
+        Tcl_AppendResult(interp, argv[0], ": xs and ys must be numeric lists",
+                         NULL);
+        return TCL_ERROR;
+    }
+    if (DYN_LIST_N(xs) != DYN_LIST_N(ys)) {
+        Tcl_AppendResult(interp, argv[0], ": xs and ys differ in length", NULL);
+        return TCL_ERROR;
+    }
+    if (DYN_LIST_N(xs) < 3) {
+        Tcl_AppendResult(interp, argv[0], ": need at least 3 points", NULL);
+        return TCL_ERROR;
+    }
+
+    for (int i = 3; i < argc; i += 2) {
+        if (i + 1 >= argc) {
+            Tcl_AppendResult(interp, argv[0], ": option \"", argv[i],
+                             "\" needs a value", NULL);
+            return TCL_ERROR;
+        }
+        const char *opt = argv[i], *val = argv[i+1];
+        double d;
+        if (!strcmp(opt, "-fill")) {
+            Tcl_Size nc; const char **cv;
+            if (Tcl_SplitList(interp, val, &nc, &cv) != TCL_OK) return TCL_ERROR;
+            if (nc != 3) {
+                Tcl_Free((char *) cv);
+                Tcl_AppendResult(interp, argv[0], ": -fill needs {r g b}", NULL);
+                return TCL_ERROR;
+            }
+            for (int c = 0; c < 3; c++) {
+                if (Tcl_GetDouble(interp, cv[c], &d) != TCL_OK) {
+                    Tcl_Free((char *) cv); return TCL_ERROR;
+                }
+                spec.fill[c] = (float) d;
+            }
+            Tcl_Free((char *) cv);
+        } else if (!strcmp(opt, "-stroke")) {
+            if (Tcl_GetDouble(interp, val, &d) != TCL_OK) return TCL_ERROR;
+            spec.stroke_w = (float) d;
+        } else if (!strcmp(opt, "-pad")) {
+            if (Tcl_GetDouble(interp, val, &d) != TCL_OK) return TCL_ERROR;
+            spec.pad = (float) d;
+        } else if (!strcmp(opt, "-size")) {
+            if (Tcl_GetInt(interp, val, &spec.size) != TCL_OK) return TCL_ERROR;
+            if (spec.size < 4 || spec.size > 4096) {
+                Tcl_AppendResult(interp, argv[0], ": -size out of range 4..4096",
+                                 NULL);
+                return TCL_ERROR;
+            }
+        } else if (!strcmp(opt, "-filter")) {
+            if ((spec.filter = texParseFilterName(val)) < 0) {
+                Tcl_AppendResult(interp, argv[0], ": unknown filter type: \"",
+                                 val, "\"", NULL);
+                return TCL_ERROR;
+            }
+        } else if (!strcmp(opt, "-linejoin")) {
+            if (!strcmp(val, "round"))       spec.join = PLUTOVG_LINE_JOIN_ROUND;
+            else if (!strcmp(val, "miter"))  spec.join = PLUTOVG_LINE_JOIN_MITER;
+            else if (!strcmp(val, "bevel"))  spec.join = PLUTOVG_LINE_JOIN_BEVEL;
+            else {
+                Tcl_AppendResult(interp, argv[0], ": -linejoin must be round,"
+                                 " miter or bevel", NULL);
+                return TCL_ERROR;
+            }
+        } else {
+            Tcl_AppendResult(interp, argv[0], ": unknown option \"", opt, "\"",
+                             NULL);
+            return TCL_ERROR;
+        }
+    }
+
+    if ((id = shapeCreate(olist, xs, ys, spec)) < 0) {
+        Tcl_AppendResult(interp, argv[0], ": error creating shape", NULL);
+        return TCL_ERROR;
+    }
+
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
+    return TCL_OK;
+}
 
 static int svgCmd(ClientData clientData, Tcl_Interp *interp,
                   int argc, char *argv[]) {
@@ -601,6 +865,11 @@ static int svginfoCmd(ClientData clientData, Tcl_Interp *interp,
                    Tcl_NewIntObj(svg->tex_width));
     Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("raster_height", -1),
                    Tcl_NewIntObj(svg->tex_height));
+    Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("kind", -1),
+                   Tcl_NewStringObj(svg->is_shape ? "shape" : "svg", -1));
+    if (svg->is_shape)
+        Tcl_DictObjPut(interp, dictObj, Tcl_NewStringObj("span", -1),
+                       Tcl_NewDoubleObj(svg->shape_span));
 
     Tcl_SetObjResult(interp, dictObj);
     return TCL_OK;
@@ -775,8 +1044,10 @@ static int svgstylesheetCmd(ClientData clientData, Tcl_Interp *interp,
 
     svg = (SVG_OBJ*)GR_CLIENTDATA(OL_OBJ(olist, id));
     
-    if (!svg->document) {
-        Tcl_AppendResult(interp, argv[0], ": no SVG document loaded", NULL);
+    if (svg->is_shape || !svg->document) {
+        Tcl_AppendResult(interp, argv[0],
+                         ": no SVG document loaded (shape objects have no"
+                         " document to restyle)", NULL);
         return TCL_ERROR;
     }
     
@@ -804,7 +1075,13 @@ static int svgreloadCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
 
     svg = (SVG_OBJ*)GR_CLIENTDATA(OL_OBJ(olist, id));
-    
+
+    if (svg->is_shape) {
+        Tcl_AppendResult(interp, argv[0],
+                         ": object was built by `shape`, not from a file", NULL);
+        return TCL_ERROR;
+    }
+
     /* Delete old document */
     if (svg->document) {
         delete svg->document;
@@ -862,6 +1139,8 @@ extern "C" int Svg_Init(Tcl_Interp *interp)
     Tcl_CreateCommand(interp, "svgVisible", (Tcl_CmdProc *) svgvisibleCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
     Tcl_CreateCommand(interp, "svgFilter", (Tcl_CmdProc *) svgfilterCmd,
+                      (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+    Tcl_CreateCommand(interp, "shape", (Tcl_CmdProc *) shapeCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
     Tcl_CreateCommand(interp, "svgOpacity", (Tcl_CmdProc *) svgopacityCmd,
                       (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);

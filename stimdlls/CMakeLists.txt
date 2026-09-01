@@ -202,8 +202,12 @@ set(LUNASVG_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(lunasvg)
 
-# SVG module 
-add_stim_module(svg SOURCES ${SRC_DIR}/svg.cpp LIBS lunasvg::lunasvg)
+# SVG module.
+# plutovg is lunasvg's own rasterizer and is already built as part of it, but
+# lunasvg links it PRIVATE, so name it here too: the `shape` command drives
+# plutovg's canvas API directly to rasterize a polygon from dynlists without
+# going through an SVG document.
+add_stim_module(svg SOURCES ${SRC_DIR}/svg.cpp LIBS lunasvg::lunasvg plutovg::plutovg)
 
 # Metagroup module
 add_stim_module(metagroup SOURCES ${SRC_DIR}/metagroup.c)
