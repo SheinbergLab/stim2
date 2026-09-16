@@ -3081,17 +3081,22 @@ void mouse_button_callback(GLFWwindow *window, int button, int action, int mods)
 }
 
 /*
- * Cursor motion -> the Tcl onMouseMove hook (tclproc.c's
- * sendTclMouseMoveCommand, which is a no-op unless a script defines the
- * proc). Same window-coordinate space as the press/release handlers
- * above (glfwGetCursorPos), so a script can pair the three. This is what
- * lets the stim window's mouse stand in for a touchscreen's DRAG events
+ * Cursor motion -> the Tcl onMouseMove hook: `onMouseMove x y`, only if a
+ * script has defined the proc (one Tcl_FindCommand per motion event
+ * otherwise). Dispatched inline like the press/release handlers above --
+ * tclproc.c's sendTclMouseMoveCommand is inside an #if 0 block along with
+ * the rest of that dead dispatcher family. Same window-coordinate space
+ * as glfwGetCursorPos, so a script can pair the three. This is what lets
+ * the stim window's mouse stand in for a touchscreen's DRAG events
  * (ess-2.0.tm's configure_stim bridge) on a machine with no input module.
  */
 void cursor_pos_callback(GLFWwindow *window, double x, double y)
 {
+  static char cmd[64];
   MouseXPos = (int) x;  MouseYPos = (int) y;
-  sendTclMouseMoveCommand((int) x, (int) y);
+  if (!Tcl_FindCommand(OurInterp, "onMouseMove", NULL, 0)) return;
+  snprintf(cmd, sizeof(cmd), "onMouseMove %d %d", (int) x, (int) y);
+  sendTclCommand(cmd);
 }
 
 /*
