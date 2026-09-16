@@ -3081,6 +3081,20 @@ void mouse_button_callback(GLFWwindow *window, int button, int action, int mods)
 }
 
 /*
+ * Cursor motion -> the Tcl onMouseMove hook (tclproc.c's
+ * sendTclMouseMoveCommand, which is a no-op unless a script defines the
+ * proc). Same window-coordinate space as the press/release handlers
+ * above (glfwGetCursorPos), so a script can pair the three. This is what
+ * lets the stim window's mouse stand in for a touchscreen's DRAG events
+ * (ess-2.0.tm's configure_stim bridge) on a machine with no input module.
+ */
+void cursor_pos_callback(GLFWwindow *window, double x, double y)
+{
+  MouseXPos = (int) x;  MouseYPos = (int) y;
+  sendTclMouseMoveCommand((int) x, (int) y);
+}
+
+/*
  * getMouseWorld
  *
  * Tcl command. Returns the current cursor position mapped to world
@@ -3401,6 +3415,7 @@ main(int argc, char *argv[]) {
   glfwSetWindowRefreshCallback(app.window, window_refresh_callback);
   glfwSetKeyCallback(app.window, key_callback);
   glfwSetMouseButtonCallback(app.window, mouse_button_callback);
+  glfwSetCursorPosCallback(app.window, cursor_pos_callback);
   glfwSetWindowPosCallback(app.window, window_pos_callback);
 
   app.verbose = verbose;
