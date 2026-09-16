@@ -265,128 +265,156 @@ proc tpred_plank_geom {} {
 }
 
 # ============================================================
-# SHARED CORE -- trajectory simulation
+# SHARED CORE -- trajectory simulation (on the b2world engine)
 # ============================================================
+#
+# One world builder, one run. The world is DATA for b2world (dlsh): the
+# ball as `projectile`, the optional inverted-V plank arms, blockers, a
+# wind zone (a sensor box with a force), and for solvability checks the
+# catcher (floor = `hit`). The stop rules do the rest:
+#   crossed  the ball crossed the catch line going DOWN (cross rule)
+#   caught   the ball touched the catcher floor (contact rule)
+#   out      it left the field (bounds)      timeout   sim_max_time
+# The wrappers below keep the names and return shapes the samplers use.
+# Live physics (the stim2 Box2D objects) is unchanged; this is the sandbox
+# the samplers and solvability checks run in.
 
-# Simulate one launch in a throwaway world and report what happened.
-#   with_plank : 1 to include the inverted-V plank (from the current
-#                tpred::plank_apex_* values); 0 for the free trajectory.
-# Returns a dict:
-#   ok        - 0 if the ball left the visible field
-#   crossed   - 1 if the ball crossed the catch line going DOWN
-#   land_x/y/t- crossing point and time (valid when crossed)
-#   hit_plank - 1 if the ball contacted a plank arm (with_plank only)
-#   path_x/y  - per-step ball position lists (used to anchor the plank)
-proc tpred_sim_trajectory { sx sy vx vy line_y step with_plank } {
+package require b2world 1.0
+
+# b2world spec for the current tpred:: geometry.
+#   -plank 0|1            inverted-V arms from tpred::plank_apex_*
+#   -blockers {{cx cy}..} vertical walls (tpred::blocker_w/h)
+#   -wind {zx zy zw zh fx} a force zone
+#   -catcher {cx line_y}  the open-faced catcher (floor role `hit`)
+proc tpred_world_spec { sx sy args } {
+    set opts [dict create -plank 0 -blockers {} -wind {} -catcher {}]
+    foreach { k v } $args { dict set opts $k $v }
     set xr2 [expr {$tpred::xrange / 2.0}]
     set yr2 [expr {$tpred::yrange / 2.0}]
-    set rest_y [expr {$line_y + $tpred::catcher_floor_h/2.0 + $tpred::ball_radius}]
 
-    set world [box2d::createWorld]
+    set w [b2world::default_spec]
+    dict set w gravity -10.0
+    dict set w max_t   $tpred::sim_max_time
+    dict set w bounds  [list [expr {-$xr2}] $xr2 [expr {-$yr2}] $yr2]
 
-    # Plank built BEFORE the ball so it exists when the sim steps.
-    if { $with_plank && $tpred::plank_enabled } {
+    if { [dict get $opts -plank] && $tpred::plank_enabled } {
         lassign [tpred_plank_geom] r_cx r_cy r_ang l_cx l_cy l_ang arm_L arm_T
-        set rb [box2d::createBox $world plank_r 0 $r_cx $r_cy $arm_L $arm_T $r_ang]
-        set lb [box2d::createBox $world plank_l 0 $l_cx $l_cy $arm_L $arm_T $l_ang]
-        box2d::setRestitution $world $rb $tpred::plank_restitution
-        box2d::setRestitution $world $lb $tpred::plank_restitution
+        set deg [expr {180.0 / $::pi}]
+        b2world::add_body w [b2world::body plank_r box static $r_cx $r_cy \
+            w $arm_L h $arm_T angle [expr {$r_ang*$deg}] \
+            restitution $tpred::plank_restitution roles {plank}]
+        b2world::add_body w [b2world::body plank_l box static $l_cx $l_cy \
+            w $arm_L h $arm_T angle [expr {$l_ang*$deg}] \
+            restitution $tpred::plank_restitution roles {plank}]
     }
-
-    set body [box2d::createCircle $world ball 2 $sx $sy $tpred::ball_radius]
-    box2d::setLinearVelocity $world $body $vx $vy
-
-    set ok 1
-    set crossed 0
-    set hit_plank 0
-    set land_x 0.0; set land_y 0.0; set land_t 0.0
-    set path_x {}; set path_y {}
-    set prev_by $sy
-    for { set t 0.0 } { $t < $tpred::sim_max_time } { set t [expr {$t + $step}] } {
-        box2d::step $world $step
-        if { $with_plank && !$hit_plank } {
-            if { [box2d::getContactBeginEventCount $world] > 0 } {
-                foreach c [box2d::getContactBeginEvents $world] {
-                    if { [lsearch $c plank_r] >= 0 || [lsearch $c plank_l] >= 0 } {
-                        set hit_plank 1
-                        break
-                    }
-                }
-            }
-        }
-        lassign [box2d::getBodyInfo $world $body] bx by _
-        lappend path_x $bx
-        lappend path_y $by
-
-        # Reject if the ball leaves the visible field.
-        if { $bx < -$xr2 || $bx > $xr2 || $by > $yr2 || $by < -$yr2 } {
-            set ok 0
-            break
-        }
-        # First DOWNWARD crossing of the catch line.
-        if { !$crossed && $prev_by > $rest_y && $by <= $rest_y } {
-            set crossed 1
-            set land_x $bx; set land_y $by; set land_t $t
-            break
-        }
-        set prev_by $by
+    set i 0
+    foreach bl [dict get $opts -blockers] {
+        lassign $bl cx cy
+        b2world::add_body w [b2world::body blocker_$i box static $cx $cy \
+            w $tpred::blocker_w h $tpred::blocker_h \
+            restitution $tpred::blocker_restitution roles {blocker}]
+        incr i
     }
-    box2d::destroy $world
-
-    return [dict create ok $ok crossed $crossed \
-                land_x $land_x land_y $land_y land_t $land_t \
-                hit_plank $hit_plank path_x $path_x path_y $path_y]
+    if { [llength [dict get $opts -wind]] } {
+        lassign [dict get $opts -wind] zx zy zw zh fx
+        b2world::add_body w [b2world::body wind box static $zx $zy w $zw h $zh \
+            sensor 1 force [list $fx 0.0] roles {zone}]
+    }
+    if { [llength [dict get $opts -catcher]] } {
+        lassign [dict get $opts -catcher] cx line_y
+        lassign [tpred_catcher_geom $cx $line_y] fx fy fw fh  lx ly lw lh  rx ry rw rh
+        foreach { name geom roles } [list catcher_b [list $fx $fy $fw $fh] {catcher hit} \
+                                          catcher_l [list $lx $ly $lw $lh] {catcher} \
+                                          catcher_r [list $rx $ry $rw $rh] {catcher}] {
+            lassign $geom bx by bw bh
+            b2world::add_body w [b2world::body $name box static $bx $by w $bw h $bh \
+                restitution $tpred::catcher_restitution roles $roles]
+        }
+    }
+    b2world::add_body w [b2world::body ball circle dynamic $sx $sy \
+        r $tpred::ball_radius roles {projectile}]
+    return $w
 }
 
-# Solvability check: re-simulate the trajectory with a catcher centered
-# at cx on catch line line_y, and confirm the ball gets a clean floor
-# (catcher_b) contact. Identical catcher geometry/restitution to the
-# live world. Returns 1 if catchable, 0 otherwise.
-proc tpred_sim_catch_test { sx sy vx vy cx line_y step with_plank } {
-    set xr2 [expr {$tpred::xrange / 2.0}]
-    set yr2 [expr {$tpred::yrange / 2.0}]
-
-    set world [box2d::createWorld]
-
-    if { $with_plank && $tpred::plank_enabled } {
-        lassign [tpred_plank_geom] r_cx r_cy r_ang l_cx l_cy l_ang arm_L arm_T
-        set rb [box2d::createBox $world plank_r 0 $r_cx $r_cy $arm_L $arm_T $r_ang]
-        set lb [box2d::createBox $world plank_l 0 $l_cx $l_cy $arm_L $arm_T $l_ang]
-        box2d::setRestitution $world $rb $tpred::plank_restitution
-        box2d::setRestitution $world $lb $tpred::plank_restitution
+# The free-flight run: stop at the first DOWNWARD crossing of the catch
+# line (rest_y = line_y + floor/2 + ball radius, where the ball would come
+# to rest on a catcher floor). Returns the dict the samplers read:
+#   ok        0 if the ball left the field
+#   crossed   1 if it crossed the line going down
+#   land_x/y/t  the crossing point and time (valid when crossed)
+#   hit_plank / hit_names / n_contacts / time_in_zone   as applicable
+#   path_x/y  per-step ball position
+proc tpred_sim_run { sx sy vx vy line_y step wspec } {
+    set rest_y [expr {$line_y + $tpred::catcher_floor_h/2.0 + $tpred::ball_radius}]
+    set r [b2world::simulate $wspec -launch [list ball $vx $vy] \
+               -stop [list [list cross projectile y $rest_y down crossed]] \
+               -record ball -dt $step]
+    set oc [dict get $r outcome]
+    lassign [dict get $r final ball] bx by
+    set contacts [b2world::contacts_of $r ball]
+    set hit_names {}
+    set hit_plank 0
+    foreach c $contacts {
+        set other [lindex $c 1]
+        if { [string match "blocker_*" $other] && $other ni $hit_names } { lappend hit_names $other }
+        if { [string match "plank_*" $other] } { set hit_plank 1 }
     }
-
-    lassign [tpred_catcher_geom $cx $line_y] \
-        fx fy fw fh  lx ly lw lh  rx ry rw rh
-    set fb [box2d::createBox $world catcher_b 0 $fx $fy $fw $fh 0]
-    set cl [box2d::createBox $world catcher_l 0 $lx $ly $lw $lh 0]
-    set cr [box2d::createBox $world catcher_r 0 $rx $ry $rw $rh 0]
-    foreach b [list $fb $cl $cr] {
-        box2d::setRestitution $world $b $tpred::catcher_restitution
-    }
-
-    set body [box2d::createCircle $world ball 2 $sx $sy $tpred::ball_radius]
-    box2d::setLinearVelocity $world $body $vx $vy
-
-    set caught 0
-    set prev_by $sy
-    for { set t 0.0 } { $t < $tpred::sim_max_time } { set t [expr {$t + $step}] } {
-        box2d::step $world $step
-        if { [box2d::getContactBeginEventCount $world] > 0 } {
-            foreach c [box2d::getContactBeginEvents $world] {
-                if { [lsearch $c catcher_b] >= 0 } { set caught 1; break }
-            }
+    set p [dict get $r paths ball]
+    set res [dict create ok [expr {$oc ne "out"}] crossed [expr {$oc eq "crossed"}] \
+                 land_x [expr {$oc eq "crossed" ? $bx : 0.0}] \
+                 land_y [expr {$oc eq "crossed" ? $by : 0.0}] \
+                 land_t [expr {$oc eq "crossed" ? [dict get $r t_end] : 0.0}] \
+                 hit_plank $hit_plank hit_names $hit_names n_contacts [llength $hit_names] \
+                 path_x [dict get $p x] path_y [dict get $p y]]
+    # time in the wind zone: pre-step positions inside the zone's AABB
+    set zone [b2world::find_body $wspec wind]
+    if { $zone ne "" } {
+        set hw [expr {[dict get $zone w]/2.0}]; set hh [expr {[dict get $zone h]/2.0}]
+        set zx [dict get $zone x]; set zy [dict get $zone y]
+        set n 0
+        set xs [dict get $p x]; set ys [dict get $p y]
+        for { set i 0 } { $i < [dict get $r n_steps] } { incr i } {
+            if { abs([lindex $xs $i] - $zx) <= $hw && abs([lindex $ys $i] - $zy) <= $hh } { incr n }
         }
-        if { $caught } break
-        lassign [box2d::getBodyInfo $world $body] bx by _
-        # Bail on out-of-bounds, or once the ball has fallen past the
-        # catch line (a miss -- no catcher_b contact will follow).
-        if { $bx < -$xr2 || $bx > $xr2 || $by < -$yr2 || $by > $yr2 } break
-        if { $prev_by > $line_y && $by <= $line_y } break
-        set prev_by $by
+        dict set res time_in_zone [expr {$n*$step}]
     }
-    box2d::destroy $world
-    return $caught
+    return $res
+}
+
+# The solvability run: a catcher at cx on the catch line; 1 iff the ball
+# touches the catcher floor before crossing the line going down or leaving.
+proc tpred_sim_catch { sx sy vx vy cx line_y step wspec } {
+    set r [b2world::simulate $wspec -launch [list ball $vx $vy] \
+               -stop [list {contact projectile hit caught} \
+                          [list cross projectile y $line_y down missed]] \
+               -track ball -dt $step]
+    return [expr {[dict get $r outcome] eq "caught"}]
+}
+
+# --- the samplers' entry points (names and return shapes unchanged) --------
+proc tpred_sim_trajectory { sx sy vx vy line_y step with_plank } {
+    tpred_sim_run $sx $sy $vx $vy $line_y $step \
+        [tpred_world_spec $sx $sy -plank $with_plank]
+}
+proc tpred_sim_catch_test { sx sy vx vy cx line_y step with_plank } {
+    tpred_sim_catch $sx $sy $vx $vy $cx $line_y $step \
+        [tpred_world_spec $sx $sy -plank $with_plank -catcher [list $cx $line_y]]
+}
+proc tpred_sim_trajectory_wind { sx sy vx vy line_y step zx zy zw zh fx } {
+    tpred_sim_run $sx $sy $vx $vy $line_y $step \
+        [tpred_world_spec $sx $sy -wind [list $zx $zy $zw $zh $fx]]
+}
+proc tpred_sim_catch_test_wind { sx sy vx vy cx line_y step zx zy zw zh fx } {
+    tpred_sim_catch $sx $sy $vx $vy $cx $line_y $step \
+        [tpred_world_spec $sx $sy -wind [list $zx $zy $zw $zh $fx] -catcher [list $cx $line_y]]
+}
+proc tpred_sim_trajectory_blockers { sx sy vx vy line_y step blockers } {
+    tpred_sim_run $sx $sy $vx $vy $line_y $step \
+        [tpred_world_spec $sx $sy -blockers $blockers]
+}
+proc tpred_sim_catch_test_blockers { sx sy vx vy cx line_y step blockers } {
+    tpred_sim_catch $sx $sy $vx $vy $cx $line_y $step \
+        [tpred_world_spec $sx $sy -blockers $blockers -catcher [list $cx $line_y]]
 }
 
 # Launch-centric sampler (used by 2AFC + Catch). Fills tpred:: state and
@@ -1508,95 +1536,6 @@ proc tpred_sample_wind_position { sx sy } {
     return ""
 }
 
-# Sandbox sim: integrate the ball through the world with the wind force
-# applied whenever the ball is inside the zone AABB. Mirrors
-# tpred_sim_trajectory_blockers in shape.
-proc tpred_sim_trajectory_wind { sx sy vx vy line_y step zx zy zw zh fx } {
-    set xr2 [expr {$tpred::xrange / 2.0}]
-    set yr2 [expr {$tpred::yrange / 2.0}]
-    set rest_y [expr {$line_y + $tpred::catcher_floor_h/2.0 + $tpred::ball_radius}]
-    set hw [expr {$zw / 2.0}]
-    set hh [expr {$zh / 2.0}]
-
-    set world [box2d::createWorld]
-    set body  [box2d::createCircle $world ball 2 $sx $sy $tpred::ball_radius]
-    box2d::setLinearVelocity $world $body $vx $vy
-
-    set ok 1
-    set crossed 0
-    set time_in_zone 0.0
-    set land_x 0.0; set land_y 0.0; set land_t 0.0
-    set prev_by $sy
-    for { set t 0.0 } { $t < $tpred::sim_max_time } { set t [expr {$t + $step}] } {
-        lassign [box2d::getBodyInfo $world $body] bx by _
-        if { abs($bx - $zx) <= $hw && abs($by - $zy) <= $hh } {
-            box2d::applyForce $world $body $fx 0.0
-            set time_in_zone [expr {$time_in_zone + $step}]
-        }
-        box2d::step $world $step
-        lassign [box2d::getBodyInfo $world $body] bx by _
-        if { $bx < -$xr2 || $bx > $xr2 || $by > $yr2 || $by < -$yr2 } {
-            set ok 0
-            break
-        }
-        if { !$crossed && $prev_by > $rest_y && $by <= $rest_y } {
-            set crossed 1
-            set land_x $bx; set land_y $by; set land_t $t
-            break
-        }
-        set prev_by $by
-    }
-    box2d::destroy $world
-
-    return [dict create ok $ok crossed $crossed \
-                land_x $land_x land_y $land_y land_t $land_t \
-                time_in_zone $time_in_zone]
-}
-
-# Solvability check: catcher at cx on catch line, plus wind zone.
-proc tpred_sim_catch_test_wind { sx sy vx vy cx line_y step zx zy zw zh fx } {
-    set xr2 [expr {$tpred::xrange / 2.0}]
-    set yr2 [expr {$tpred::yrange / 2.0}]
-    set hw [expr {$zw / 2.0}]
-    set hh [expr {$zh / 2.0}]
-
-    set world [box2d::createWorld]
-
-    lassign [tpred_catcher_geom $cx $line_y] \
-        fx_c fy_c fw_c fh_c  lx ly lw lh  rx ry rw rh
-    set fb [box2d::createBox $world catcher_b 0 $fx_c $fy_c $fw_c $fh_c 0]
-    set cl [box2d::createBox $world catcher_l 0 $lx $ly $lw $lh 0]
-    set cr [box2d::createBox $world catcher_r 0 $rx $ry $rw $rh 0]
-    foreach b [list $fb $cl $cr] {
-        box2d::setRestitution $world $b $tpred::catcher_restitution
-    }
-
-    set body [box2d::createCircle $world ball 2 $sx $sy $tpred::ball_radius]
-    box2d::setLinearVelocity $world $body $vx $vy
-
-    set caught 0
-    set prev_by $sy
-    for { set t 0.0 } { $t < $tpred::sim_max_time } { set t [expr {$t + $step}] } {
-        lassign [box2d::getBodyInfo $world $body] bx by _
-        if { abs($bx - $zx) <= $hw && abs($by - $zy) <= $hh } {
-            box2d::applyForce $world $body $fx 0.0
-        }
-        box2d::step $world $step
-        if { [box2d::getContactBeginEventCount $world] > 0 } {
-            foreach c [box2d::getContactBeginEvents $world] {
-                if { [lsearch $c catcher_b] >= 0 } { set caught 1; break }
-            }
-        }
-        if { $caught } break
-        lassign [box2d::getBodyInfo $world $body] bx by _
-        if { $bx < -$xr2 || $bx > $xr2 || $by < -$yr2 || $by > $yr2 } break
-        if { $prev_by > $line_y && $by <= $line_y } break
-        set prev_by $by
-    }
-    box2d::destroy $world
-    return $caught
-}
-
 # Full wind-mode sampler. Picks launch params, samples a wind zone and
 # wind force, simulates, accepts iff the ball lands cleanly in a catcher.
 proc tpred_sample_wind_trial {} {
@@ -1721,117 +1660,6 @@ proc tpred_sample_blocker_positions { n sx sy } {
     return $blockers
 }
 
-# Sandbox-world simulation of the ball through a given set of blockers.
-# Returns a dict with the same shape as tpred_sim_trajectory plus
-# n_contacts/hit_names so the sampler can cap chained deflections.
-proc tpred_sim_trajectory_blockers { sx sy vx vy line_y step blockers } {
-    set xr2 [expr {$tpred::xrange / 2.0}]
-    set yr2 [expr {$tpred::yrange / 2.0}]
-    set rest_y [expr {$line_y + $tpred::catcher_floor_h/2.0 + $tpred::ball_radius}]
-
-    set world [box2d::createWorld]
-
-    set i 0
-    foreach b $blockers {
-        lassign $b cx cy
-        set bb [box2d::createBox $world "blocker_$i" 0 \
-                    $cx $cy $tpred::blocker_w $tpred::blocker_h 0]
-        box2d::setRestitution $world $bb $tpred::blocker_restitution
-        incr i
-    }
-
-    set body [box2d::createCircle $world ball 2 $sx $sy $tpred::ball_radius]
-    box2d::setLinearVelocity $world $body $vx $vy
-
-    set ok 1
-    set crossed 0
-    set hit_names {}
-    set land_x 0.0; set land_y 0.0; set land_t 0.0
-    set prev_by $sy
-    for { set t 0.0 } { $t < $tpred::sim_max_time } { set t [expr {$t + $step}] } {
-        box2d::step $world $step
-        if { [box2d::getContactBeginEventCount $world] > 0 } {
-            foreach c [box2d::getContactBeginEvents $world] {
-                foreach name $c {
-                    if { [string match "blocker_*" $name] && \
-                         [lsearch $hit_names $name] < 0 } {
-                        lappend hit_names $name
-                    }
-                }
-            }
-        }
-        lassign [box2d::getBodyInfo $world $body] bx by _
-        if { $bx < -$xr2 || $bx > $xr2 || $by > $yr2 || $by < -$yr2 } {
-            set ok 0
-            break
-        }
-        if { !$crossed && $prev_by > $rest_y && $by <= $rest_y } {
-            set crossed 1
-            set land_x $bx; set land_y $by; set land_t $t
-            break
-        }
-        set prev_by $by
-    }
-    box2d::destroy $world
-
-    return [dict create ok $ok crossed $crossed \
-                land_x $land_x land_y $land_y land_t $land_t \
-                n_contacts [llength $hit_names] hit_names $hit_names]
-}
-
-# Solvability check: simulate the bounced trajectory with both the
-# blockers AND a catcher centered at cx on catch line line_y; return 1
-# iff the ball lands cleanly on the catcher floor.
-proc tpred_sim_catch_test_blockers { sx sy vx vy cx line_y step blockers } {
-    set xr2 [expr {$tpred::xrange / 2.0}]
-    set yr2 [expr {$tpred::yrange / 2.0}]
-
-    set world [box2d::createWorld]
-
-    set i 0
-    foreach b $blockers {
-        lassign $b bcx bcy
-        set bb [box2d::createBox $world "blocker_$i" 0 \
-                    $bcx $bcy $tpred::blocker_w $tpred::blocker_h 0]
-        box2d::setRestitution $world $bb $tpred::blocker_restitution
-        incr i
-    }
-
-    lassign [tpred_catcher_geom $cx $line_y] \
-        fx fy fw fh  lx ly lw lh  rx ry rw rh
-    set fb [box2d::createBox $world catcher_b 0 $fx $fy $fw $fh 0]
-    set cl [box2d::createBox $world catcher_l 0 $lx $ly $lw $lh 0]
-    set cr [box2d::createBox $world catcher_r 0 $rx $ry $rw $rh 0]
-    foreach b [list $fb $cl $cr] {
-        box2d::setRestitution $world $b $tpred::catcher_restitution
-    }
-
-    set body [box2d::createCircle $world ball 2 $sx $sy $tpred::ball_radius]
-    box2d::setLinearVelocity $world $body $vx $vy
-
-    set caught 0
-    set prev_by $sy
-    for { set t 0.0 } { $t < $tpred::sim_max_time } { set t [expr {$t + $step}] } {
-        box2d::step $world $step
-        if { [box2d::getContactBeginEventCount $world] > 0 } {
-            foreach c [box2d::getContactBeginEvents $world] {
-                if { [lsearch $c catcher_b] >= 0 } { set caught 1; break }
-            }
-        }
-        if { $caught } break
-        lassign [box2d::getBodyInfo $world $body] bx by _
-        if { $bx < -$xr2 || $bx > $xr2 || $by < -$yr2 || $by > $yr2 } break
-        if { $prev_by > $line_y && $by <= $line_y } break
-        set prev_by $by
-    }
-    box2d::destroy $world
-    return $caught
-}
-
-# Blockers-mode sampler. Mirrors tpred_sample_launch_trial but for the
-# vertical-wall world. No "relevant" blocker is enforced: blockers are
-# random in the field and the catcher is placed at whatever x the ball
-# crosses the catch line at. Relevance is emergent, which is the point.
 proc tpred_sample_blockers_trial {} {
     set step [expr {[screen_set FrameDuration] / 1000.0}]
     if { $step <= 0 } { set step 0.01667 }
