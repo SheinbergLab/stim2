@@ -324,6 +324,17 @@ typedef struct _grobj {
   int drawcount;		/* number of draws since reset      */
   void *anim_state;             /* animation state pointer          */
   float priority;               /* z-order priority (higher=front)  */
+  /* Opt-in colour hooks for the core animation module. A module whose
+     objects carry a colour installs these at creation (polygon does) so
+     the core can read and write it without knowing the module's data --
+     what animateColor/animateOpacity could not do, hence their detours
+     through svgColor/svgOpacity. rgba is 4 floats in 0..1. NULL for
+     modules that have not opted in (calloc-zeroed), in which case
+     colour animations such as animateLuminance are inert on that
+     object. Appended last so modules built against the older struct
+     keep their offsets. */
+  void (*getcolorfunc)(struct _grobj *, float *rgba);
+  void (*setcolorfunc)(struct _grobj *, const float *rgba);
 } GR_OBJ;
 
 #define GR_NAME(o)         ((o)->name)
@@ -367,6 +378,8 @@ typedef struct _grobj {
 #define GR_OFFFUNCP(o)     ((o)->offfunc)
 #define GR_FRAMESCRIPTFUNC(o)  (*((o)->framescriptfunc))
 #define GR_FRAMESCRIPTFUNCP(o) ((o)->framescriptfunc)
+#define GR_GETCOLORFUNCP(o) ((o)->getcolorfunc)
+#define GR_SETCOLORFUNCP(o) ((o)->setcolorfunc)
 #define GR_CLIENTDATA(o)   ((o)->clientData)
 
 #define GR_N_PRE_SCRIPTS(o) ((o)->n_pre_scripts)

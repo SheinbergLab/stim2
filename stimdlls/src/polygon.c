@@ -197,6 +197,24 @@ void polygonUpdate(GR_OBJ *g)
 #endif
 
 
+/* Colour hooks for the core animation module (stim2.h): read and write
+ * the polygon's colour without the core knowing POLYGON. */
+static void polygonGetColor(GR_OBJ *g, float *rgba)
+{
+  POLYGON *p = (POLYGON *) GR_CLIENTDATA(g);
+  int c;
+  if (!p || !rgba) return;
+  for (c = 0; c < 4; c++) rgba[c] = p->color[c];
+}
+
+static void polygonSetColor(GR_OBJ *g, const float *rgba)
+{
+  POLYGON *p = (POLYGON *) GR_CLIENTDATA(g);
+  int c;
+  if (!p || !rgba) return;
+  for (c = 0; c < 4; c++) p->color[c] = rgba[c];
+}
+
 int polygonCreate(OBJ_LIST *objlist, SHADER_PROG *sp)
 {
   const char *name = "Polygon";
@@ -226,6 +244,10 @@ int polygonCreate(OBJ_LIST *objlist, SHADER_PROG *sp)
 
   GR_ACTIONFUNCP(obj) = polygonDraw;
   GR_DELETEFUNCP(obj) = polygonDelete;
+  /* opt in to the core's colour animations (animateLuminance): the
+     draw reads p->color every frame, so writing it is all it takes */
+  GR_GETCOLORFUNCP(obj) = polygonGetColor;
+  GR_SETCOLORFUNCP(obj) = polygonSetColor;
 
   p = (POLYGON *) calloc(1, sizeof(POLYGON));
   GR_CLIENTDATA(obj) = p;

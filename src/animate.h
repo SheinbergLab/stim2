@@ -10,6 +10,12 @@
  *   animateOpacity $obj -pulse 1.0 -min 0.3    ;# pulse opacity at 1Hz
  *   animateColor $obj -cycle 0.5               ;# cycle hue at 0.5Hz
  *   animateCustom $obj { rotateObj $obj [expr {sin($t) * 30}] }
+ *   animateLuminance $obj -freq 8 -phase 1.2 -depth 0.25
+ *                                              ;# steady-state luminance
+ *                                              ;# flicker about the
+ *                                              ;# object's own colour;
+ *                                              ;# needs the module's
+ *                                              ;# colour hooks (stim2.h)
  *
  * Frame-based for psychophysics:
  *   animateRotation $obj -speed 0.5 -perframe  ;# 0.5 deg/frame
@@ -37,7 +43,8 @@ typedef enum {
     ANIM_COLOR,
     ANIM_BLINK,
     ANIM_SEQUENCE,
-    ANIM_CUSTOM
+    ANIM_CUSTOM,
+    ANIM_LUMINANCE          /* colour * (1 + depth*sin(2 pi f t + phase)) */
 } AnimType;
 
 /*
@@ -69,6 +76,13 @@ typedef struct _anim_property {
     
     /* For color cycling */
     int color_mode;         /* 0=off, 1=replace, 2=multiply */
+
+    /* For luminance flicker: the colour the modulation is applied to,
+       captured from the object's getcolorfunc on the first tick unless
+       given with -base, and restored when the animation is removed.
+       The depth rides in `amplitude`. */
+    float base_rgba[4];
+    int   base_set;
     
     /* For sequences */
     float *sequence;

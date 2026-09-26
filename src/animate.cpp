@@ -37,6 +37,7 @@ static int animatePositionCmd(ClientData, Tcl_Interp *, int, const char **);
 static int animateColorCmd(ClientData, Tcl_Interp *, int, const char **);
 static int animateSequenceCmd(ClientData, Tcl_Interp *, int, const char **);
 static int animateCustomCmd(ClientData, Tcl_Interp *, int, const char **);
+static int animateLuminanceCmd(ClientData, Tcl_Interp *, int, const char **);
 static int animatePauseCmd(ClientData, Tcl_Interp *, int, const char **);
 static int animateResumeCmd(ClientData, Tcl_Interp *, int, const char **);
 static int animateResetCmd(ClientData, Tcl_Interp *, int, const char **);
@@ -214,15 +215,26 @@ static AnimProperty *getOrAddAnimProperty(AnimState *state, AnimType type, int *
     return prop;
 }
 
+/* A luminance animation leaves the object at whatever brightness the
+ * last frame chose; put the base colour back when it goes away. */
+static void restoreLuminanceBase(GR_OBJ *obj, AnimProperty *prop)
+{
+    if (!obj || !prop || prop->type != ANIM_LUMINANCE) return;
+    if (prop->base_set && GR_SETCOLORFUNCP(obj)) {
+        GR_SETCOLORFUNCP(obj)(obj, prop->base_rgba);
+    }
+}
+
 static void removeAnimProperty(AnimState *state, AnimType type)
 {
     if (!state) return;
-    
+
     AnimProperty **pp = &state->properties;
     while (*pp) {
         if ((*pp)->type == type) {
             AnimProperty *to_free = *pp;
             *pp = (*pp)->next;
+            restoreLuminanceBase(state->obj, to_free);
             freeAnimProperty(to_free);
             return;
         }
@@ -449,14 +461,38 @@ void animateUpdateObj(GR_OBJ *obj, double ticks_ms, double dt_ms)
                 Tcl_DStringFree(&cmd);
             }
             break;
-            
+
+        case ANIM_LUMINANCE:
+            {
+                /* Steady-state luminance flicker about the object's own
+                 * colour, entirely in C: no Tcl per frame, and the clock
+                 * is this object's (ticks since attach, never reset).
+                 * Inert unless the module installed the colour hooks. */
+                if (!GR_SETCOLORFUNCP(obj)) break;
+                if (!prop->base_set) {
+                    if (!GR_GETCOLORFUNCP(obj)) break;
+                    GR_GETCOLORFUNCP(obj)(obj, prop->base_rgba);
+                    prop->base_set = 1;
+                }
+                float l = 1.0f + prop->amplitude *
+                    sinf(t * prop->freq * 2.0f * (float)M_PI + prop->phase);
+                float rgba[4];
+                for (int c = 0; c < 3; c++) {
+                    float v = prop->base_rgba[c] * l;
+                    rgba[c] = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+                }
+                rgba[3] = prop->base_rgba[3];
+                GR_SETCOLORFUNCP(obj)(obj, rgba);
+            }
+            break;
+
         default:
             break;
         }
-        
+
         prop = prop->next;
     }
-    
+
     /* Increment frame count for next call */
     state->frame_count++;
 }
@@ -472,6 +508,7 @@ void animateClearObj(GR_OBJ *obj)
     AnimProperty *p = state->properties;
     while (p) {
         AnimProperty *next = p->next;
+        restoreLuminanceBase(obj, p);
         freeAnimProperty(p);
         p = next;
     }
@@ -1074,6 +1111,116 @@ static int animateCustomCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 /*
+ * Helper to build result dict for luminance animation
+ */
+static void luminanceToResult(Tcl_Interp *interp, AnimProperty *prop)
+{
+    Tcl_Obj *dict = Tcl_NewDictObj();
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("type", -1),
+                   Tcl_NewStringObj("luminance", -1));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("freq", -1),
+                   Tcl_NewDoubleObj(prop->freq));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("phase", -1),
+                   Tcl_NewDoubleObj(prop->phase));
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("depth", -1),
+                   Tcl_NewDoubleObj(prop->amplitude));
+    Tcl_Obj *base = Tcl_NewListObj(0, NULL);
+    if (prop->base_set) {
+        for (int c = 0; c < 4; c++) {
+            Tcl_ListObjAppendElement(interp, base, Tcl_NewDoubleObj(prop->base_rgba[c]));
+        }
+    }
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("base", -1), base);
+    Tcl_DictObjPut(interp, dict, Tcl_NewStringObj("active", -1),
+                   Tcl_NewIntObj(prop->active));
+    Tcl_SetObjResult(interp, dict);
+}
+
+/*
+ * animateLuminance obj ?-freq hz? ?-phase rad? ?-depth 0..1? ?-base {r g b ?a?}?
+ *
+ * Multiplies the object's colour by 1 + depth*sin(2 pi freq t + phase),
+ * clamped to 0..1, every frame, in C. The base colour is read from the
+ * object through its module's getcolorfunc on the first tick (or given
+ * with -base) and restored when the animation is cleared. An object whose
+ * module has not installed the colour hooks (stim2.h) is left untouched.
+ *
+ * Re-issuing the command updates the given options in place -- the
+ * property is not reset, so changing -depth mid-run does not jump the
+ * phase. Without options it returns the current state as a dict.
+ * Defaults: freq 8, phase 0, depth 0 (a no-op until a depth is set).
+ */
+static int animateLuminanceCmd(ClientData clientData, Tcl_Interp *interp,
+                               int argc, const char **argv)
+{
+    if (argc < 2) {
+        Tcl_SetResult(interp, (char *)"usage: animateLuminance obj ?-freq hz? ?-phase rad? ?-depth d? ?-base {r g b ?a?}?", TCL_STATIC);
+        return TCL_ERROR;
+    }
+
+    GR_OBJ *obj = getObjFromArg(interp, argv[1]);
+    if (!obj) return TCL_ERROR;
+
+    AnimState *state = GR_ANIM_STATE(obj);
+    AnimProperty *prop = state ? findAnimProperty(state, ANIM_LUMINANCE) : NULL;
+
+    /* Getter mode */
+    if (argc == 2) {
+        if (!prop) {
+            Tcl_SetObjResult(interp, Tcl_NewDictObj());
+            return TCL_OK;
+        }
+        luminanceToResult(interp, prop);
+        return TCL_OK;
+    }
+
+    /* Setter mode: update in place, never reset */
+    state = getOrCreateAnimState(obj);
+    int is_new = 0;
+    prop = getOrAddAnimProperty(state, ANIM_LUMINANCE, &is_new);
+    if (!prop) {
+        Tcl_SetResult(interp, (char *)"animateLuminance: out of memory", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    if (is_new) {
+        prop->freq = 8.0f;
+        prop->phase = 0.0f;
+        prop->amplitude = 0.0f;
+        prop->base_set = 0;
+    }
+
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "-freq") == 0 && i+1 < argc) {
+            prop->freq = atof(argv[++i]);
+        } else if (strcmp(argv[i], "-phase") == 0 && i+1 < argc) {
+            prop->phase = atof(argv[++i]);
+        } else if (strcmp(argv[i], "-depth") == 0 && i+1 < argc) {
+            float d = atof(argv[++i]);
+            prop->amplitude = d < 0.0f ? 0.0f : (d > 1.0f ? 1.0f : d);
+        } else if (strcmp(argv[i], "-base") == 0 && i+1 < argc) {
+            Tcl_Size n = 0;
+            const char **elems = NULL;
+            if (Tcl_SplitList(interp, argv[++i], &n, &elems) != TCL_OK) return TCL_ERROR;
+            if (n < 3 || n > 4) {
+                Tcl_Free((char *)elems);
+                Tcl_SetResult(interp, (char *)"animateLuminance: -base wants {r g b ?a?}", TCL_STATIC);
+                return TCL_ERROR;
+            }
+            for (int c = 0; c < 3; c++) prop->base_rgba[c] = atof(elems[c]);
+            prop->base_rgba[3] = (n == 4) ? atof(elems[3]) : 1.0f;
+            prop->base_set = 1;
+            Tcl_Free((char *)elems);
+        } else {
+            Tcl_AppendResult(interp, "animateLuminance: unknown option ", argv[i], NULL);
+            return TCL_ERROR;
+        }
+    }
+
+    luminanceToResult(interp, prop);
+    return TCL_OK;
+}
+
+/*
  * animateClear obj ?property?
  */
 static int animateClearCmd(ClientData clientData, Tcl_Interp *interp,
@@ -1099,6 +1246,7 @@ static int animateClearCmd(ClientData clientData, Tcl_Interp *interp,
             else if (strcmp(prop_name, "position") == 0) type = ANIM_POSITION;
             else if (strcmp(prop_name, "color") == 0) type = ANIM_COLOR;
             else if (strcmp(prop_name, "custom") == 0) type = ANIM_CUSTOM;
+            else if (strcmp(prop_name, "luminance") == 0) type = ANIM_LUMINANCE;
             
             if (type != ANIM_NONE) {
                 removeAnimProperty(state, type);
@@ -1278,6 +1426,11 @@ extern "C" int Animate_Init(Tcl_Interp *interp)
     /* Custom script-based animation (for module-specific properties) */
     Tcl_CreateCommand(interp, "animateCustom",
                       (Tcl_CmdProc *)animateCustomCmd, (ClientData)olist, NULL);
+
+    /* Luminance flicker, in C, on any object whose module installed the
+       colour hooks (GR_GETCOLORFUNCP / GR_SETCOLORFUNCP in stim2.h) */
+    Tcl_CreateCommand(interp, "animateLuminance",
+                      (Tcl_CmdProc *)animateLuminanceCmd, (ClientData)olist, NULL);
     
     /* Control commands */
     Tcl_CreateCommand(interp, "animatePause",
