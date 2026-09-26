@@ -132,7 +132,7 @@ endif()
 # Platform-specific include and link directories
 # =============================================================================
 if(WIN32)
-    include_directories(c:/usr/local/include ${IMGUI_DIR} ${IMGUI_DIR}/backends)
+    include_directories(c:/usr/local/include)
     link_directories(c:/usr/local/lib/$ENV{VSCMD_ARG_TGT_ARCH})
     add_definitions(-DNOMINMAX -D_WIN32)
 elseif(APPLE)
@@ -140,12 +140,10 @@ elseif(APPLE)
         "/usr/local/include" 
         "/opt/homebrew/include" 
         "/opt/homebrew/include/tcl-tk" 
-        ${IMGUI_DIR} 
-        ${IMGUI_DIR}/backends
     )
     link_directories("/usr/local/lib" "/opt/homebrew/lib")
 else()
-    include_directories(/usr/local/include ${IMGUI_DIR} ${IMGUI_DIR}/backends)
+    include_directories(/usr/local/include)
     link_directories(/usr/local/lib)
     set(LIBDL dl)
 endif()
@@ -183,6 +181,28 @@ if(APPLE)
     add_executable(stim2 MACOSX_BUNDLE ${STIM2_SOURCES})
 else()
     add_executable(stim2 ${STIM2_SOURCES})
+endif()
+
+# The vendored imgui (1.84-era) zeroes its own structs with memset inside
+# inline constructors; clang 17+ flags that (-Wnontrivial-memcall) in every
+# unit that includes imgui.h. Upstream cast it away years later, and the
+# API churn between 1.84 and current is not worth taking for a GUI we
+# barely use. So: imgui's headers are SYSTEM headers for stim2 (silences
+# the warning in our own units), and imgui's own units drop that one
+# warning, guarded on the compiler knowing the flag.
+target_include_directories(stim2 SYSTEM PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends)
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag(-Wno-nontrivial-memcall HAVE_WNO_NONTRIVIAL_MEMCALL)
+if(HAVE_WNO_NONTRIVIAL_MEMCALL)
+    set_source_files_properties(
+        ${IMGUI_DIR}/imgui.cpp
+        ${IMGUI_DIR}/imgui_demo.cpp
+        ${IMGUI_DIR}/imgui_draw.cpp
+        ${IMGUI_DIR}/imgui_tables.cpp
+        ${IMGUI_DIR}/imgui_widgets.cpp
+        ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+        ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+        PROPERTIES COMPILE_OPTIONS "-Wno-nontrivial-memcall")
 endif()
 
 # Export symbols for shared objects loaded at runtime
