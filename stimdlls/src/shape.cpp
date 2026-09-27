@@ -29,6 +29,7 @@
 #include <tcl.h>
 #include <df.h>
 #include <tcl_dl.h>
+#include "dlnumeric.h"
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -55,22 +56,9 @@
  * remember, which is the part of the SVG route that was easy to get wrong.
  */
 
-static double dl_elt(DYN_LIST *dl, int i) {
-    switch (DYN_LIST_DATATYPE(dl)) {
-    case DF_FLOAT: return ((float *)DYN_LIST_VALS(dl))[i];
-    case DF_LONG:  return ((int *)DYN_LIST_VALS(dl))[i];
-    case DF_SHORT: return ((short *)DYN_LIST_VALS(dl))[i];
-    case DF_CHAR:  return ((char *)DYN_LIST_VALS(dl))[i];
-    default:       return 0.0;
-    }
-}
-
-static int dl_numeric(DYN_LIST *dl) {
-    switch (DYN_LIST_DATATYPE(dl)) {
-    case DF_FLOAT: case DF_LONG: case DF_SHORT: case DF_CHAR: return 1;
-    default: return 0;
-    }
-}
+/* any numeric dynlist, including int64 and double (dlnumeric.h) */
+static double dl_elt(DYN_LIST *dl, int i) { return dlnGet(dl, i); }
+static int dl_numeric(DYN_LIST *dl) { return dlnIsNumeric(DYN_LIST_DATATYPE(dl)); }
 
 /*
  * Paint follows SVG's model rather than inventing one: a shape is FILLED

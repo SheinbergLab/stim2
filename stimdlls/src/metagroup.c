@@ -27,6 +27,7 @@
 /* If you want access to dlsh connectivity, include these */
 #include "df.h"
 #include "tcl_dl.h"
+#include "dlnumeric.h"
 
 #include <stim2.h>		/* Stim header      */
 
@@ -293,7 +294,7 @@ static int metagroupAddCmd(ClientData clientData, Tcl_Interp *interp,
   OBJ_LIST *olist = (OBJ_LIST *) clientData;
   METAGROUP *mg;
   DYN_LIST *objs;
-  int i, id, *objids;
+  int i, id;
 
   if (argc < 3) {
     Tcl_AppendResult(interp, "usage: ", argv[0], " metagroup idlist", NULL);
@@ -310,12 +311,13 @@ static int metagroupAddCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
   
-  if (DYN_LIST_DATATYPE(objs) != DF_LONG) {
-    Tcl_AppendResult(interp, argv[0], ": object list must be ints", NULL);
+  /* object ids: any integer list (char, short, long or int64) */
+  if (!dlnIsInteger(DYN_LIST_DATATYPE(objs))) {
+    Tcl_AppendResult(interp, argv[0],
+		     ": object list must be integer ids", NULL);
     return TCL_ERROR;
   }
 
-  objids = (int *) DYN_LIST_VALS(objs);
   for (i = 0; i < DYN_LIST_N(objs); i++) {
     /* Realloc if out of space */
     if (mg->nobjs  >= mg->maxobjs) {
@@ -323,7 +325,7 @@ static int metagroupAddCmd(ClientData clientData, Tcl_Interp *interp,
       mg->objects = (int *) realloc(mg->objects, sizeof(int)*mg->maxobjs);
     }
     /* Add the id */
-    mg->objects[mg->nobjs] = objids[i];
+    mg->objects[mg->nobjs] = (int) dlnGet(objs, i);
     mg->nobjs++;
   }
 
@@ -336,7 +338,7 @@ static int metagroupRemoveCmd(ClientData clientData, Tcl_Interp *interp,
   OBJ_LIST *olist = (OBJ_LIST *) clientData;
   METAGROUP *mg;
   DYN_LIST *objs;
-  int i, j, id, *objids;
+  int i, j, id;
   
   if (argc < 3) {
     Tcl_AppendResult(interp, "usage: ", argv[0], " metagroup idlist", NULL);
@@ -353,18 +355,19 @@ static int metagroupRemoveCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
   
-  if (DYN_LIST_DATATYPE(objs) != DF_LONG) {
-    Tcl_AppendResult(interp, argv[0], ": object list must be ints", NULL);
+  /* object ids: any integer list (char, short, long or int64) */
+  if (!dlnIsInteger(DYN_LIST_DATATYPE(objs))) {
+    Tcl_AppendResult(interp, argv[0],
+		     ": object list must be integer ids", NULL);
     return TCL_ERROR;
   }
   
-  objids = (int *) DYN_LIST_VALS(objs);
-  
   /* For each object to remove */
   for (i = 0; i < DYN_LIST_N(objs); i++) {
+    int objid = (int) dlnGet(objs, i);
     /* Find and remove from metagroup's object list */
     for (j = 0; j < mg->nobjs; j++) {
-      if (mg->objects[j] == objids[i]) {
+      if (mg->objects[j] == objid) {
         /* Shift remaining objects down */
         memmove(&mg->objects[j], &mg->objects[j+1], 
                 sizeof(int) * (mg->nobjs - j - 1));

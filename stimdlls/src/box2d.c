@@ -17,6 +17,7 @@
 #include <df.h>
 #include <dfana.h>
 #include <tcl_dl.h>
+#include "dlnumeric.h"
 
 #include <stim2.h>
 #include <objname.h>
@@ -118,58 +119,37 @@ static BOX2D_WORLD *find_Box2D(Tcl_Interp *interp,
     return (BOX2D_WORLD *) GR_CLIENTDATA(OL_OBJ(olist, id));
 }
 
-static int find_vec_3(Tcl_Interp *interp, char *name, float *m)
+/* a numeric dynlist of exactly n elements, any type (dlnumeric.h), read as
+   floats into m (if non-NULL); `what` names it in the error */
+static int find_floats(Tcl_Interp *interp, char *name, int n, float *m,
+		       const char *what)
 {
   DYN_LIST *dl;
   if (tclFindDynList(interp, name, &dl) != TCL_OK) {
     return TCL_ERROR;
   }
-  if (DYN_LIST_DATATYPE(dl) == DF_FLOAT && 
-      DYN_LIST_N(dl) == 3) {
-    if (m) memcpy(m, (float *) DYN_LIST_VALS(dl), sizeof(float)*3);
+  if (dlnIsNumeric(DYN_LIST_DATATYPE(dl)) && DYN_LIST_N(dl) == n) {
+    if (m) dlnToFloats(dl, m);
     return TCL_OK;
   }
-  else {
-      Tcl_AppendResult(interp, "\"", name, "\" not a valid vec3", 
-		       (char *) NULL);
-      return TCL_ERROR;
-  }
+  Tcl_AppendResult(interp, "\"", name, "\" not a valid ", what,
+		   (char *) NULL);
+  return TCL_ERROR;
+}
+
+static int find_vec_3(Tcl_Interp *interp, char *name, float *m)
+{
+  return find_floats(interp, name, 3, m, "vec3");
 }
 
 static int find_vec_4(Tcl_Interp *interp, char *name, float *m)
 {
-  DYN_LIST *dl;
-  if (tclFindDynList(interp, name, &dl) != TCL_OK) {
-    return TCL_ERROR;
-  }
-  if (DYN_LIST_DATATYPE(dl) == DF_FLOAT && 
-      DYN_LIST_N(dl) == 4) {
-    if (m) memcpy(m, (float *) DYN_LIST_VALS(dl), sizeof(float)*4);
-    return TCL_OK;
-  }
-  else {
-      Tcl_AppendResult(interp, "\"", name, "\" not a valid vec4", 
-		       (char *) NULL);
-      return TCL_ERROR;
-  }
+  return find_floats(interp, name, 4, m, "vec4");
 }
 
 static int find_matrix4(Tcl_Interp *interp, char *name, float *m)
 {
-  DYN_LIST *dl;
-  if (tclFindDynList(interp, name, &dl) != TCL_OK) {
-    return TCL_ERROR;
-  }
-  if (DYN_LIST_DATATYPE(dl) == DF_FLOAT && 
-      DYN_LIST_N(dl) == 16) {
-    if (m) memcpy(m, (float *) DYN_LIST_VALS(dl), sizeof(float)*16);
-    return TCL_OK;
-  }
-  else {
-      Tcl_AppendResult(interp, "\"", name, "\" not a valid matrix", 
-		       (char *) NULL);
-      return TCL_ERROR;
-  }
+  return find_floats(interp, name, 16, m, "matrix");
 }
 
 

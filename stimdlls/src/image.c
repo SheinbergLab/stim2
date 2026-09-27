@@ -38,6 +38,7 @@
 #include "objname.h"
 #include <df.h>
 #include <tcl_dl.h>
+#include "dlnumeric.h"
 
 /****************************************************************/
 /*                   Texture Pool Structures                    */
@@ -516,35 +517,23 @@ static int texture_load_from_dynlist(DYN_LIST *dl, int width, int height, int fi
         pixels = (unsigned char *)DYN_LIST_VALS(dl);
         texture_pool_upload(slot, width, height, channels, pixels, filter);
     }
-    else if (datatype == DF_FLOAT) {
-        // Convert float (0.0-1.0) to unsigned byte (0-255)
-        float *fvals = (float *)DYN_LIST_VALS(dl);
+    else if (dlnIsNumeric(datatype)) {
+        // float and double are 0.0-1.0 intensities; short, long and int64
+        // are 0-255 levels. Either way clamped into a byte. (DF_LONG is
+        // 32-bit: it used to be read through `long *`, 8 bytes on macOS and
+        // Linux, which merged pairs of values and read past the list.)
+        int is_real = (datatype == DF_FLOAT || datatype == DLN_DOUBLE);
         pixels = (unsigned char *)malloc(n);
         if (!pixels) return -1;
-        
+
         for (int i = 0; i < n; i++) {
-            float v = fvals[i];
-            if (v < 0.0f) v = 0.0f;
-            if (v > 1.0f) v = 1.0f;
-            pixels[i] = (unsigned char)(v * 255.0f);
-        }
-        
-        texture_pool_upload(slot, width, height, channels, pixels, filter);
-        free(pixels);
-    }
-    else if (datatype == DF_LONG) {
-        // Clamp long to 0-255
-        long *lvals = (long *)DYN_LIST_VALS(dl);
-        pixels = (unsigned char *)malloc(n);
-        if (!pixels) return -1;
-        
-        for (int i = 0; i < n; i++) {
-            long v = lvals[i];
-            if (v < 0) v = 0;
-            if (v > 255) v = 255;
+            double v = dlnGet(dl, i);
+            if (is_real) v *= 255.0;
+            if (v < 0.0) v = 0.0;
+            if (v > 255.0) v = 255.0;
             pixels[i] = (unsigned char)v;
         }
-        
+
         texture_pool_upload(slot, width, height, channels, pixels, filter);
         free(pixels);
     }
