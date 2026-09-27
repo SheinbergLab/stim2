@@ -1,0 +1,33 @@
+# Line endings: LF in the repository and in every checkout (as in dlsh).
+# text=auto leaves anything git detects as binary alone; the common binary
+# types are listed explicitly so they never go through that heuristic.
+* text=auto eol=lf
+
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.bmp   binary
+*.tga   binary
+*.ico   binary
+*.icns  binary
+*.ttf   binary
+*.otf   binary
+*.pdf   binary
+*.wav   binary
+*.mp3   binary
+*.mp4   binary
+*.bk2   binary
+*.zip   binary
+*.dg    binary
+*.dgz   binary
+*.o     binary
+*.a     binary
+*.lib   binary
+*.so    binary
+*.dylib binary
+*.dll   binary
+
+# Windows command scripts must keep CRLF
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
