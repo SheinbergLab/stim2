@@ -35,6 +35,7 @@
 
 #include <df.h>
 #include <tcl_dl.h>
+#include "dlnumeric.h"
 #include <rawapi.h>
 
 /****************************************************************/
@@ -318,6 +319,21 @@ int imageResetCmd(ClientData clientData, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/* GL format from the number of values per pixel (1, 3 or 4), unless the
+   caller already chose one. 0 if the count does not fit -- which used to
+   leave the format unset and upload anyway. */
+static int pixelFormat(int n, int size, IMAGE_DATA *idata)
+{
+  if (idata->format >= 0) return 1;
+  if (size <= 0 || n % size) return 0;
+  switch (n / size) {
+  case 1: idata->format = GL_R8;   return 1;
+  case 3: idata->format = GL_RGB;  return 1;
+  case 4: idata->format = GL_RGBA; return 1;
+  default: return 0;
+  }
+}
+
 static int dynListToPixels(DYN_LIST *dl, IMAGE_DATA *idata)
 {
   DYN_LIST **sublists;		/* For RGB and RGBA specification */
@@ -330,51 +346,36 @@ static int dynListToPixels(DYN_LIST *dl, IMAGE_DATA *idata)
   idata->aspect = (float) (idata->w)/idata->h;
   switch (DYN_LIST_DATATYPE(dl)) {
   case DF_FLOAT:
+  case DLN_DOUBLE:		/* intensities, uploaded as float */
     n = DYN_LIST_N(dl);
-    if (idata->format < 0) {
-      if (DYN_LIST_N(dl) % size) return 0;
-      else switch (DYN_LIST_N(dl) / size) {
-      case 1: idata->format = GL_R8; break;
-      case 3: idata->format = GL_RGB; break;
-      case 4: idata->format = GL_RGBA; break;
-      }
-    }
+    if (!pixelFormat(n, size, idata)) return 0;
     idata->datatype = GL_FLOAT;
-
-    idata->pixels = (float *) calloc(n, sizeof(float));
+    idata->pixels = (float *) calloc(n ? n : 1, sizeof(float));
     if (!idata->pixels) return 0;
-    memcpy(idata->pixels, DYN_LIST_VALS(dl), n*sizeof(float));
+    dlnToFloats(dl, (float *) idata->pixels);
     break;
   case DF_CHAR:
     n = DYN_LIST_N(dl);
-    if (idata->format < 0) {
-      if (DYN_LIST_N(dl) % size) return 0;
-      else switch (DYN_LIST_N(dl) / size) {
-      case 1: idata->format = GL_R8; break;
-      case 3: idata->format = GL_RGB; break;
-      case 4: idata->format = GL_RGBA; break;
-      }
-    }
-
+    if (!pixelFormat(n, size, idata)) return 0;
     idata->datatype = GL_UNSIGNED_BYTE;
-    idata->pixels = (char *) calloc(n, sizeof(char));
+    idata->pixels = (char *) calloc(n ? n : 1, sizeof(char));
     if (!idata->pixels) return 0;
     memcpy(idata->pixels, DYN_LIST_VALS(dl), n*sizeof(char));
     break;
+  case DF_SHORT:
   case DF_LONG:
+  case DLN_INT64:		/* levels, uploaded as 32-bit GL_INT */
     n = DYN_LIST_N(dl);
-    if (idata->format < 0) {
-      if (DYN_LIST_N(dl) % size) return 0;
-      else switch (DYN_LIST_N(dl) / size) {
-      case 1: idata->format = GL_R8; break;
-      case 3: idata->format = GL_RGB; break;
-      case 4: idata->format = GL_RGBA; break;
-      }
-    }
+    if (!pixelFormat(n, size, idata)) return 0;
     idata->datatype = GL_INT;
-    idata->pixels = (long *) calloc(n, sizeof(long));
+    /* DF_LONG is 32-bit: this used to allocate and copy n*sizeof(long),
+       8 bytes on macOS and Linux, reading past the end of the list */
+    idata->pixels = (int *) calloc(n ? n : 1, sizeof(int));
     if (!idata->pixels) return 0;
-    memcpy(idata->pixels, DYN_LIST_VALS(dl), n*sizeof(long));
+    if (DYN_LIST_DATATYPE(dl) == DF_LONG)
+      memcpy(idata->pixels, DYN_LIST_VALS(dl), n*sizeof(int));
+    else
+      for (i = 0; i < n; i++) ((int *) idata->pixels)[i] = (int) dlnGet(dl, i);
     break;
   case DF_LIST:		/* Supports only RGB and RGBA chars for now */
     sublists = (DYN_LIST **) DYN_LIST_VALS(dl);
@@ -412,6 +413,9 @@ static int dynListToPixels(DYN_LIST *dl, IMAGE_DATA *idata)
 	    *pix++ = *b++;
 	  }
 	}
+	break;
+      default:			/* only char channels are supported */
+	return 0;
       }
       break;
     case 4: 
@@ -438,8 +442,13 @@ static int dynListToPixels(DYN_LIST *dl, IMAGE_DATA *idata)
 	    *pix++ = *a++;
 	  }
 	}
+	break;
+      default:			/* only char channels are supported */
+	return 0;
       }
       break;
+    default:			/* only RGB (3) or RGBA (4) channel lists */
+      return 0;
     }
     break;
   default:
@@ -464,9 +473,12 @@ static int imageGetDepth(DYN_LIST *dl, int w, int h)
       else return (n / (w*h));
     }
     break;
+  case DF_CHAR:
+  case DF_SHORT:
   case DF_LONG:
   case DF_FLOAT:
-  case DF_CHAR:
+  case DLN_INT64:
+  case DLN_DOUBLE:
     {
       n = DYN_LIST_N(dl);
       /* try RGBA, then RGB, then LUM */

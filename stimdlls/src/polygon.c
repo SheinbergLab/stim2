@@ -26,6 +26,7 @@
 
 #include "df.h"
 #include "tcl_dl.h"
+#include "dlnumeric.h"
 #include <stim2.h>
 #include "shaderutils.h"
 #include "objname.h"
@@ -538,148 +539,49 @@ static int polyaaCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 
+/*
+ * Interleave x, y (and optionally z) lists into one float vertex array.
+ * Any numeric dynlist type is accepted, in any mix -- char, short, long,
+ * float, int64 or double (dlnumeric.h) -- and rounded to float once.
+ * With three_d and no z list, z is 0.
+ */
 int combineDynlists(Tcl_Interp *interp, char *procname,
 		    DYN_LIST *xlist, DYN_LIST *ylist, DYN_LIST *zlist,
-		    int three_d, int *nOut,float  **vList)
+		    int three_d, int *nOut, float **vList)
 {
-  int type = 0;
   float *v, *verts;
-  int nverts;
-  int i;
-  
+  int i, n, stride = three_d ? 3 : 2;
+
   if (DYN_LIST_N(xlist) != DYN_LIST_N(ylist)) {
-    Tcl_AppendResult(interp, procname, 
+    Tcl_AppendResult(interp, procname,
 		     ": x and y vert lists must be same length", NULL);
     return TCL_ERROR;
   }
-
-  if (DYN_LIST_DATATYPE(xlist) == DF_FLOAT && 
-      DYN_LIST_DATATYPE(ylist) == DF_FLOAT) type = 0;
-  else if (DYN_LIST_DATATYPE(xlist) == DF_LONG && 
-	   DYN_LIST_DATATYPE(ylist) == DF_FLOAT) type = 1;
-  else if (DYN_LIST_DATATYPE(xlist) == DF_FLOAT && 
-	   DYN_LIST_DATATYPE(ylist) == DF_LONG) type = 2;
-  else if (DYN_LIST_DATATYPE(xlist) == DF_LONG && 
-	   DYN_LIST_DATATYPE(ylist) == DF_LONG) type = 3;
-  else {
-    Tcl_AppendResult(interp, procname, 
-		     ": verts must be either longs or floats", NULL);
+  if (!dlnIsNumeric(DYN_LIST_DATATYPE(xlist)) ||
+      !dlnIsNumeric(DYN_LIST_DATATYPE(ylist)) ||
+      (zlist && three_d && !dlnIsNumeric(DYN_LIST_DATATYPE(zlist)))) {
+    Tcl_AppendResult(interp, procname, ": verts must be numeric lists", NULL);
+    return TCL_ERROR;
+  }
+  if (zlist && three_d && DYN_LIST_N(zlist) != DYN_LIST_N(xlist)) {
+    Tcl_AppendResult(interp, procname,
+		     ": number of z verts must equal number of x verts", NULL);
     return TCL_ERROR;
   }
 
-  /* type 0-3 (any mix of float/long x,y lists) are all handled below */
-
-  if (zlist && three_d) {
-    if (DYN_LIST_DATATYPE(zlist) != DYN_LIST_DATATYPE(xlist)) {
-      Tcl_AppendResult(interp, procname, 
-		       ": z verts must be the same data type as x verts",NULL);
-      return TCL_ERROR;
-    }
-    if (DYN_LIST_N(zlist) != DYN_LIST_N(xlist)) {
-      Tcl_AppendResult(interp, procname, 
-		       ": number of z verts must equal number of x verts",
-		       NULL);
-      return TCL_ERROR;
-    }
+  n = DYN_LIST_N(xlist);
+  verts = (float *) calloc(n ? n*stride : 1, sizeof(float));
+  if (!verts) {
+    Tcl_AppendResult(interp, procname, ": out of memory", NULL);
+    return TCL_ERROR;
+  }
+  for (i = 0, v = verts; i < n; i++) {
+    *v++ = (float) dlnGet(xlist, i);
+    *v++ = (float) dlnGet(ylist, i);
+    if (three_d) *v++ = (zlist ? (float) dlnGet(zlist, i) : 0.0f);
   }
 
-  verts = (float *) calloc(DYN_LIST_N(xlist)*(three_d?3:2), sizeof(float));
-  v = verts;
-  
-  switch (type) {
-  case 0:
-    {
-      float *xvals, *yvals, *zvals;
-      xvals = (float *) DYN_LIST_VALS(xlist);
-      yvals = (float *) DYN_LIST_VALS(ylist);
-      if (zlist && three_d) zvals = (float *) DYN_LIST_VALS(zlist);
-      if (!three_d) {
-	for (i = 0; i < DYN_LIST_N(xlist); i++) {
-	  *v++ = xvals[i];
-	  *v++ = yvals[i];
-	}
-      }
-      else {
-	for (i = 0; i < DYN_LIST_N(xlist); i++) {
-	  *v++ = xvals[i];
-	  *v++ = yvals[i];
-	  *v++ = !zlist ? 0.0 : zvals[i];
-	}
-      }
-      nverts = DYN_LIST_N(xlist);
-    }
-    break;
-  case 1:
-    {
-      int *xvals, *zvals;
-      float *yvals;
-      xvals = (int *) DYN_LIST_VALS(xlist);
-      yvals = (float *) DYN_LIST_VALS(ylist);
-      if (zlist && three_d) zvals = (int *) DYN_LIST_VALS(zlist);
-      if (!three_d) {
-	for (i = 0; i < DYN_LIST_N(xlist); i++) {
-	  *v++ = xvals[i];
-	  *v++ = yvals[i];
-	}
-      }
-      else {
-	for (i = 0; i < DYN_LIST_N(xlist); i++) {
-	  *v++ = xvals[i];
-	  *v++ = yvals[i];
-	  *v++ = !zlist ? 0.0 : zvals[i];
-	}
-      }
-      nverts = DYN_LIST_N(xlist);
-    }
-    break;
-  case 2:
-    {
-      float *xvals, *zvals;
-      int *yvals;
-      xvals = (float *) DYN_LIST_VALS(xlist);
-      yvals = (int *) DYN_LIST_VALS(ylist);
-      if (zlist && three_d) zvals = (float *) DYN_LIST_VALS(zlist);
-      if (!three_d) {
-	for (i = 0; i < DYN_LIST_N(xlist); i++) {
-	  *v++ = xvals[i];
-	  *v++ = yvals[i];
-	}
-      }
-      else {
-	for (i = 0; i < DYN_LIST_N(xlist); i++) {
-	  *v++ = xvals[i];
-	  *v++ = yvals[i];
-	  *v++ = !zlist ? 0.0 : zvals[i];
-	}
-      }
-      nverts = DYN_LIST_N(xlist);
-    }
-    break;
-  case 3:
-    {
-      int *xvals, *yvals, *zvals;
-      xvals = (int *) DYN_LIST_VALS(xlist);
-      yvals = (int *) DYN_LIST_VALS(ylist);
-      if (zlist && three_d) zvals = (int *) DYN_LIST_VALS(zlist);
-      if (!three_d) {
-	for (i = 0; i < DYN_LIST_N(xlist); i++) {
-	  *v++ = xvals[i];
-	  *v++ = yvals[i];
-	}
-      }
-      else {
-	for (i = 0; i < DYN_LIST_N(xlist); i++) {
-	  *v++ = xvals[i];
-	  *v++ = yvals[i];
-	  *v++ = !zlist ? 0.0 : zvals[i];
-	}
-      }
-      nverts = DYN_LIST_N(xlist);
-    }
-    break;
-  }
-
-  if (nOut) *nOut = nverts;
+  if (nOut) *nOut = n;
   if (vList) *vList = verts;
   return TCL_OK;
 }

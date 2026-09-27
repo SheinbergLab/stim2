@@ -55,6 +55,7 @@
 #include <df.h>
 #include <dfana.h>
 #include <tcl_dl.h>
+#include "dlnumeric.h"
  
 #include "glsw.h"
 
@@ -498,6 +499,20 @@ static int set_default_uniforms(Tcl_Interp *interp, MESH_OBJ *s)
   return 1;
 }
 					  
+/* the list itself if it is float, else a float copy (NULL on failure) */
+static DYN_LIST *asFloatList(DYN_LIST *dl)
+{
+  float *vals;
+  if (DYN_LIST_DATATYPE(dl) == DF_FLOAT) return dl;
+  if (!(vals = dlnFloats(dl))) return NULL;
+  return dfuCreateDynListWithVals(DF_FLOAT, DYN_LIST_N(dl), vals);
+}
+
+static void freeIfCopy(DYN_LIST *dl, DYN_LIST *orig)
+{
+  if (dl && dl != orig) dfuFreeDynList(dl);
+}
+
 static int meshObjCmd(ClientData clientData, Tcl_Interp *interp,
 		      int argc, char *argv[])
 {
@@ -530,12 +545,14 @@ static int meshObjCmd(ClientData clientData, Tcl_Interp *interp,
   }
 
 
-  if (DYN_LIST_DATATYPE(verts) != DF_FLOAT) {
+  /* any numeric type (dlnumeric.h); non-float lists become temporary float
+     copies, freed once meshObjCreate has copied the data into its buffers */
+  if (!dlnIsNumeric(DYN_LIST_DATATYPE(verts))) {
     Tcl_AppendResult(interp, argv[0], ": invalid vertex datatype", NULL);
     return(TCL_ERROR);
   }
   if (normals) {
-    if (DYN_LIST_DATATYPE(normals) != DF_FLOAT) {
+    if (!dlnIsNumeric(DYN_LIST_DATATYPE(normals))) {
       Tcl_AppendResult(interp, argv[0], ": invalid normal datatype", NULL);
       return(TCL_ERROR);
     }
@@ -545,7 +562,7 @@ static int meshObjCmd(ClientData clientData, Tcl_Interp *interp,
     }
   }
   if (uvs) {
-    if (DYN_LIST_DATATYPE(uvs) != DF_FLOAT) {
+    if (!dlnIsNumeric(DYN_LIST_DATATYPE(uvs))) {
       Tcl_AppendResult(interp, argv[0], ": invalid uv datatype", NULL);
       return(TCL_ERROR);
     }
@@ -556,12 +573,25 @@ static int meshObjCmd(ClientData clientData, Tcl_Interp *interp,
     }
   }
 
-  n_elements = DYN_LIST_N(verts) / 9;
-  if ((id = meshObjCreate(olist, element_type, n_elements,
-			  verts, normals, uvs,
-			  sp)) < 0) {
-    Tcl_AppendResult(interp, argv[0], ": error creating shader", NULL);
-    return(TCL_ERROR);
+  {
+    DYN_LIST *fverts = asFloatList(verts), *fnormals = NULL, *fuvs = NULL;
+    if (normals) fnormals = asFloatList(normals);
+    if (uvs) fuvs = asFloatList(uvs);
+    if (!fverts || (normals && !fnormals) || (uvs && !fuvs)) {
+      freeIfCopy(fverts, verts); freeIfCopy(fnormals, normals);
+      freeIfCopy(fuvs, uvs);
+      Tcl_AppendResult(interp, argv[0], ": out of memory", NULL);
+      return(TCL_ERROR);
+    }
+    n_elements = DYN_LIST_N(verts) / 9;
+    id = meshObjCreate(olist, element_type, n_elements,
+		       fverts, fnormals, fuvs, sp);
+    freeIfCopy(fverts, verts); freeIfCopy(fnormals, normals);
+    freeIfCopy(fuvs, uvs);
+    if (id < 0) {
+      Tcl_AppendResult(interp, argv[0], ": error creating shader", NULL);
+      return(TCL_ERROR);
+    }
   }
 
   /* now copy default uniform values from shader program */
