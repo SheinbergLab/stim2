@@ -5,3 +5,19 @@ _CPack_Packages/
 build/
 developer_log.json
 .DS_Store
+
+# editor / merge leftovers
+*.ORIG
+*.orig
+# macOS metadata
+.AppleDouble/
+._*
+# compiled objects and Xcode per-user / index state
+*.o
+*.hmap
+*.pbxuser
+*.mode1
+*.mode1v3
+*.mode2v3
+*.pbxindex/
+xcuserdata/
