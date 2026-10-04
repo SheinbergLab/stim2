@@ -19,7 +19,11 @@ jobs:
   release-stim2:
 
     # Build on not-the-latest to keep dependency versions modest.
-    runs-on: macos-14
+    runs-on: macos-15
+    # Keep everything compiled here (GLFW, spine-c, box2d, stimdlls, stim2)
+    # runnable on macOS 14. Bundled Homebrew dylibs are macos-15 bottles.
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
 
     permissions:
       contents: write
