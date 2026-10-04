@@ -26,7 +26,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
   libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev
 
 log "Tcl 9 (deps/tcl) -> /usr/local"
-if [ -f /usr/local/lib/libtcl9.0.so ]; then
+if [ -f /usr/local/lib/libtcl9.1.so ]; then
   echo "Tcl 9 already in /usr/local -- skipping"
 else
   ( cd "$SRC/deps/tcl/unix" \

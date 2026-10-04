@@ -285,7 +285,8 @@ if(WIN32)
     
 elseif(APPLE)
     find_library(GLFW_LIB NAMES "libglfw3.a" REQUIRED)
-    find_library(TCLLIB "tcl9.0" REQUIRED)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/tcl9.cmake)
+    set(TCLLIB ${LIBTCL})
     
     get_filename_component(LIBTCL_ACTUAL ${TCLLIB} REALPATH)
     get_filename_component(LIBTCL_DIR ${LIBTCL_ACTUAL} DIRECTORY)
@@ -311,7 +312,8 @@ else()
     find_library(GLFW NAMES "libglfw3.a")
     find_library(LIBDL dl REQUIRED)
     find_library(LIBPTHREAD pthread REQUIRED)
-    find_library(TCLLIB tcl9.0 REQUIRED)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/tcl9.cmake)
+    set(TCLLIB ${LIBTCL})
     
     add_link_options("-rdynamic")
     
@@ -327,27 +329,22 @@ else()
         nlohmann_json::nlohmann_json
     )
 
-    # Prefer the Tcl in /usr/local/lib, fall back to the distro's.
+    # Load the Tcl we ship, from stim2's own directory.
     #
-    # Which libtcl9.0.so stim2 loaded was never deterministic: the ld cache is
-    # built by globbing /etc/ld.so.conf.d/*.conf ALPHABETICALLY, and
-    # /usr/local/lib comes from libc.conf while the system dir comes from the
-    # arch-named file. `a` < `l` < `x`, so aarch64-linux-gnu.conf wins on a Pi
-    # (apt's Tcl) and libc.conf wins on x86_64 (/usr/local/lib). Measured
-    # 2026-08-12: hm-0 resolved to apt, office-stim to /usr/local/lib -- the
-    # same package silently running a different Tcl depending on the arch.
+    # stim2 is linked against the Tcl built from deps/tcl (9.1). No distro
+    # packages libtcl9.1, so there is nothing for a Depends: to pull in, and a
+    # stim2-only box has no other copy to find. The deb therefore installs the
+    # very library the binary was linked against into /usr/local/stim2/lib (see
+    # the install rule below), and DT_RUNPATH -- searched before the ld cache --
+    # points there.
     #
-    # DT_RUNPATH is searched before the cache, so this pins the ORDER on every
-    # arch: if /usr/local/lib has a libtcl9.0.so -- today that means dserv's
-    # deb installed one, built from the core-9-0-N tag deps/tcl is pinned to --
-    # stim2 uses it and matches what it was compiled against. If not, the
-    # lookup falls through to the cache and finds apt's, which is why
-    # Depends: libtcl9.0 stays for stim2-only boxes.
-    #
-    # Deliberately NOT shipping our own copy at that path: dserv's deb owns
-    # /usr/local/lib/libtcl9.0.so, and two packages claiming one file is a hard
-    # dpkg unpack conflict on any rig that has both.
-    set_target_properties(stim2 PROPERTIES INSTALL_RPATH "/usr/local/lib")
+    # Deliberately NOT at /usr/local/lib: dserv's deb owns
+    # /usr/local/lib/libtcl9.1.so, and two packages claiming one file is a hard
+    # dpkg unpack conflict on any rig that has both. A private copy also ends
+    # the old arch-dependent lottery over which libtcl the ld cache listed
+    # first (measured 2026-08-12: hm-0 resolved to apt's, office-stim to
+    # /usr/local/lib).
+    set_target_properties(stim2 PROPERTIES INSTALL_RPATH "/usr/local/stim2/lib")
 endif()
 
 # =============================================================================
@@ -391,11 +388,11 @@ elseif(APPLE)
     # Copy TCL library files
     if(LIBTCL_DIR)
         install(
-            DIRECTORY ${LIBTCL_DIR}/tcl9.0/
-            DESTINATION ${APP_BUNDLE}/Contents/lib/tcl9.0
+            DIRECTORY ${LIBTCL_DIR}/tcl${TCL_MM}/
+            DESTINATION ${APP_BUNDLE}/Contents/lib/tcl${TCL_MM}
             COMPONENT stim2
         )
-	# Tcl 9 splits the stdlib: traditional packages live in tcl9.0/
+	# Tcl 9 splits the stdlib: traditional packages live in tcl9.N/
         # but Tcl Modules (msgcat, http, etc.) live in tcl9/. Bundle both
         # so the app has full stdlib coverage in the self-contained .app.
         install(
@@ -576,27 +573,18 @@ else()
         set(_STIM2_DEB_DEPS_DISPLAY "xinit, xserver-xorg-legacy, x11-xserver-utils")
     endif()
 
-    # libtcl9.0 only ships as an apt package from Debian Trixie onwards. On
-    # older distros (Bookworm, Jammy) and Ubuntu releases that predate Tcl 9
-    # GA (Noble), omit it from Depends -- admins must provide Tcl 9 some
-    # other way (the CI build does this from source). Extend the list below
-    # as upstream distros add the package (forky, plucky, oracular, ...).
-    #
-    # This stays even though the binary prefers /usr/local/lib (see RUNPATH
-    # above): that preference is a fallback chain, not a replacement. apt's copy
-    # is what stim2 loads on a box without dserv.
-    set(_STIM2_DISTROS_WITH_TCL9 "trixie" "")
-    list(FIND _STIM2_DISTROS_WITH_TCL9 "${DISTRO_SUFFIX}" _STIM2_TCL9_IDX)
-    if(_STIM2_TCL9_IDX GREATER_EQUAL 0)
-        set(_STIM2_DEB_DEPS_TCL ", libtcl9.0")
-    else()
-        set(_STIM2_DEB_DEPS_TCL "")
-    endif()
+    # No Tcl in Depends: the deb carries its own libtcl (see the RUNPATH note
+    # above), since no distro packages Tcl 9.1.
+    set(_STIM2_DEB_DEPS_TCL "")
 
     set(CPACK_DEBIAN_PACKAGE_DEPENDS "${_STIM2_DEB_DEPS_BASE}, ${_STIM2_DEB_DEPS_DISPLAY}${_STIM2_DEB_DEPS_TCL}")
     set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA ${CMAKE_CURRENT_SOURCE_DIR}/dpkg/postinst)
     
     install(TARGETS stim2 DESTINATION "/usr/local/stim2")
+
+    # The libtcl stim2 was linked against (see the RUNPATH note above).
+    get_filename_component(_STIM2_TCL_REAL ${TCLLIB} REALPATH)
+    install(FILES ${_STIM2_TCL_REAL} DESTINATION "/usr/local/stim2/lib")
 
     install(
 	PROGRAMS start-stim2.sh
