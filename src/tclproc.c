@@ -490,6 +490,28 @@ static int dumpCmd(ClientData clientData, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/* Playback only. Runs on this thread, so the draw finishes before the
+   next stimTimeSet in the same script. nrep copies go to filename. */
+static int captureFrameCmd(ClientData clientData, Tcl_Interp *interp,
+			   int argc, char *argv[])
+{
+  int nrep = 0;
+  if (argc != 3) {
+    Tcl_AppendResult(interp, "usage: ", argv[0], " filename nrep", NULL);
+    return TCL_ERROR;
+  }
+  if (Tcl_GetInt(interp, argv[2], &nrep) != TCL_OK) return TCL_ERROR;
+  if (nrep < 0) {
+    Tcl_SetResult(interp, "captureFrame nrep must be >= 0", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  if (stimCaptureFrame(argv[1], nrep) != 0) {
+    Tcl_SetResult(interp, "captureFrame failed", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  return TCL_OK;
+}
+
 static int toggleImguiCmd(ClientData clientData, Tcl_Interp *interp,
 			  int argc, char *argv[])
 {
@@ -2586,6 +2608,8 @@ void addTclCommands(Tcl_Interp *interp)
 
   Tcl_CreateCommand(interp, "dumpRaw", (Tcl_CmdProc *) dumpCmd, 
 		    (ClientData) DUMP_RAW, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "captureFrame", (Tcl_CmdProc *) captureFrameCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
 
  /* Dump Screen as PS */
 

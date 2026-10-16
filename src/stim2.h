@@ -234,6 +234,10 @@ int  toggleAnimation(void);
 int  startAnimation(void);
 int  stopAnimation(void);
 int  kickAnimation(void);
+/* One playback step, on the thread that owns the GL context. Pins are
+   already set. Updates and draws once, reads that image, and writes it
+   nrep times. Does not swap. 0 on success, -1 on refusal or a short write. */
+int  stimCaptureFrame(const char *filename, int nrep);
 void startAnimationProc(void *ClientData);
 int setDynamicUpdate(int status);
 int resetSwapInterval(int interval);

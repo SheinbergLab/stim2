@@ -1524,6 +1524,9 @@ public:
   std::thread msg_thread;
   
   void updateDisplay(bool);
+  int renderFrame(bool log_events, const char *capture_path, int nrep);
+  int capturePlayback(const char *filename, int nrep);
+  int writeCapture(const char *filename, int nrep);
   void processImgui(void);
   void toggleImgui(void);
   void showAppLog(bool *);
@@ -1838,12 +1841,17 @@ private:
     timerID = appTimer.create(0, timer_interval, [this]() {
       if (!systemIsSleeping) {
     updateTimes();
-    if (NextFrameTime >= 0 && StimTime >=
-        (unsigned int) NextFrameTime) {
-      NextFrameTime = -1;
-      kickAnimation();
+    /* Playback owns the picture. The timer still wakes the loop so a
+       queued redraw is drained, but it must not step objects or arm
+       the frame-based animation between those redraws. */
+    if (!stim_playback) {
+      if (NextFrameTime >= 0 && StimTime >=
+          (unsigned int) NextFrameTime) {
+        NextFrameTime = -1;
+        kickAnimation();
+      }
+      tqueue.push_back(StimTime);
     }
-    tqueue.push_back(StimTime);
     do_wakeup();
       }
     });
@@ -2339,6 +2347,10 @@ proc screen_config {} {
   processMessages(bool log_events) {
     int n = 0;
     bool did_update = 0;
+    /* One script can queue several redraws (a taped command that draws,
+       then the player's own redraw). Step objects once for that script;
+       further redraws only present the same picture. */
+    bool playback_stepped = false;
     while (MessageQueue.size()) {
       n++;
       int msg = MessageQueue.front();
@@ -2352,6 +2364,13 @@ proc screen_config {} {
     do_wakeup();
     break;
       case UPDATE_DISPLAY:
+    /* The timer path is what normally calls doUpdate. During playback
+       that path does not draw, so the explicit redraw takes the one
+       object step and then presents it. */
+    if (stim_playback && !playback_stepped) {
+      doUpdate();
+      playback_stepped = true;
+    }
     updateDisplay(log_events);
     did_update = 1;
     break;
@@ -2957,11 +2976,90 @@ void Application::deliverSwapTags(void)
   }
 }
 
+/* Top-down RGBA of one framebuffer, no header. */
+static int readFlipped(GLenum buffer, unsigned char *dst, int w, int h)
+{
+  static unsigned char *scratch = NULL;
+  static size_t cap = 0;
+  size_t rowbytes = (size_t) 4 * (size_t) w;
+  size_t nbytes = rowbytes * (size_t) h;
+  if (nbytes > cap) {
+    free(scratch);
+    scratch = (unsigned char *) malloc(nbytes);
+    cap = scratch ? nbytes : 0;
+  }
+  if (!scratch) return -1;
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  glReadBuffer(buffer);
+  glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, scratch);
+  for (int i = 0; i < h; i++) {
+    memcpy(dst + (size_t) i * rowbytes,
+	   scratch + (size_t) (h - 1 - i) * rowbytes,
+	   rowbytes);
+  }
+  return 0;
+}
+
+static int writeRaw(const char *filename, int nrep,
+		    const unsigned char *bytes, size_t nbytes)
+{
+  FILE *fp = fopen(filename, "wb");
+  if (!fp) return -1;
+  for (int r = 0; r < nrep; r++) {
+    if (fwrite(bytes, 1, nbytes, fp) != nbytes) {
+      fclose(fp);
+      return -1;
+    }
+  }
+  if (fclose(fp) != 0) return -1;
+  return 0;
+}
+
+/* The picture just drawn. Reading the front buffer without waiting for
+   the swap returns whatever was on the screen before this frame, so a
+   capture was picking up the previous stimulus. */
+int Application::writeCapture(const char *filename, int nrep)
+{
+  int w = winWidth;
+  int h = winHeight;
+  if (!filename || nrep <= 0 || w <= 0 || h <= 0) return -1;
+  size_t nbytes = (size_t) 4 * (size_t) w * (size_t) h;
+  unsigned char *pix = (unsigned char *) malloc(nbytes);
+  if (!pix) return -1;
+  glFinish();
+  int rc = readFlipped(GL_BACK, pix, w, h);
+  if (rc == 0) rc = writeRaw(filename, nrep, pix, nbytes);
+  free(pix);
+  return rc;
+}
+
 void Application::updateDisplay(bool log_events)
 {
+  renderFrame(log_events, NULL, 0);
+}
+
+int Application::capturePlayback(const char *filename, int nrep)
+{
+  doUpdate();
+  return renderFrame(false, filename, nrep);
+}
+
+extern "C" int stimCaptureFrame(const char *filename, int nrep)
+{
+  if (!stim_playback || !filename || nrep < 0) return -1;
+  return app.capturePlayback(filename, nrep);
+}
+
+int Application::renderFrame(bool log_events, const char *capture_path, int nrep)
+{
+  int rc = 0;
   OBJ_GROUP *g = NULL;
   if (OGL_NGROUPS(GList)) g = OGL_GROUP(GList, OGL_CURGROUP(GList));
-  if (!g) return;
+  if (!g) {
+    if (capture_path && nrep > 0)
+      rc = writeCapture(capture_path, nrep);
+    return rc;
+  }
 
   /* Guarantee at least one is bound...*/
   glBindVertexArray(vao);
@@ -2978,13 +3076,17 @@ void Application::updateDisplay(bool log_events)
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());  
 
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PreSwap");
-    swapsyncBeforeSwap();
-    glfwSwapBuffers(window);
-    waitForSwap();
+    if (capture_path) {
+      if (nrep > 0 && writeCapture(capture_path, nrep) != 0) rc = -1;
+    } else {
+      swapsyncBeforeSwap();
+      glfwSwapBuffers(window);
+      waitForSwap();
+    }
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PostSwap");
     SwapCount++;
     deliverSwapTags();
-    return;
+    return rc;
   }
 
   switch(OG_SWAPMODE(g)) {
@@ -3010,11 +3112,15 @@ void Application::updateDisplay(bool log_events)
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PreSwap");
-    /* Swap front and back buffers */
-    swapsyncBeforeSwap();
-    glfwSwapBuffers(window);
-    /* Wait for swap */
-    waitForSwap();
+    /* Swap front and back buffers, unless this draw is being captured.
+       The back buffer then holds the picture a swap would present. */
+    if (capture_path) {
+      if (nrep > 0 && writeCapture(capture_path, nrep) != 0) rc = -1;
+    } else {
+      swapsyncBeforeSwap();
+      glfwSwapBuffers(window);
+      waitForSwap();
+    }
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PostSwap");
 
     SwapCount++;
@@ -3042,10 +3148,15 @@ void Application::updateDisplay(bool log_events)
     break;
   case SWAP_ONLY:
     /* Only swap and acknowledge -- no clear, no draw */
-    swapsyncBeforeSwap();
-    glfwSwapBuffers(window);
-    SwapCount++;
-    waitForSwap();
+    if (capture_path) {
+      if (nrep > 0 && writeCapture(capture_path, nrep) != 0) rc = -1;
+      SwapCount++;
+    } else {
+      swapsyncBeforeSwap();
+      glfwSwapBuffers(window);
+      SwapCount++;
+      waitForSwap();
+    }
 
     /* Call any installed post frame command */
     updateTimes();
@@ -3070,6 +3181,8 @@ void Application::updateDisplay(bool log_events)
     drawGroup(g);
     executePostScripts(g);
     glFlush();
+    if (capture_path && nrep > 0 && writeCapture(capture_path, nrep) != 0)
+      rc = -1;
 
     updateTimes();
     executePostFrameScripts(g);
@@ -3089,6 +3202,7 @@ void Application::updateDisplay(bool log_events)
     }
     break;
   }
+  return rc;
 }
 
 /* Returns 1 if need to redisplay */
@@ -3737,7 +3851,10 @@ main(int argc, char *argv[]) {
     updated_display = app.processMessages(app.wait_for_swap);
     animEventPending = 0;
     
-    if (!updated_display && app.doUpdate()) {
+    /* While a tape is playing, only redraw (handled in processMessages)
+       may update and swap. A timer wake with an empty queue leaves the
+       picture where the last redraw put it. */
+    if (!stim_playback && !updated_display && app.doUpdate()) {
       app.updateDisplay(app.wait_for_swap);
       app.count_frame();     
     }
