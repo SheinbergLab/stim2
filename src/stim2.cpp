@@ -1,4 +1,8 @@
 #include <iostream>
+#include <cstdio>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <thread>
 #include <atomic>
 #include <vector>
@@ -412,11 +416,169 @@ int setWakeUp(int ms) {
   return NextFrameTime;
 }
 
+static uint32_t inbox_rotr(uint32_t x, int n)
+{
+  return (x >> n) | (x << (32 - n));
+}
+
+/* SHA-256 of the bytes stim actually eval'd. stim's Tcl has no sha256
+   command; the inbox proc calls stim_inbox_sha256 for an omitted cmd. */
+static void inbox_sha256(const unsigned char *msg, size_t len, unsigned char out[32])
+{
+  static const uint32_t K[64] = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+  };
+  size_t padded = ((len + 9 + 63) / 64) * 64;
+  unsigned char *buf = (unsigned char *)calloc(1, padded ? padded : 1);
+  if (!buf) { memset(out, 0, 32); return; }
+  if (len) memcpy(buf, msg, len);
+  buf[len] = 0x80;
+  uint64_t bits = (uint64_t)len * 8;
+  for (int i = 0; i < 8; i++)
+    buf[padded - 1 - i] = (unsigned char)(bits >> (8 * i));
+
+  uint32_t h0=0x6a09e667, h1=0xbb67ae85, h2=0x3c6ef372, h3=0xa54ff53a;
+  uint32_t h4=0x510e527f, h5=0x9b05688c, h6=0x1f83d9ab, h7=0x5be0cd19;
+  for (size_t off = 0; off < padded; off += 64) {
+    uint32_t w[64];
+    for (int i = 0; i < 16; i++) {
+      const unsigned char *p = buf + off + 4*i;
+      w[i] = ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];
+    }
+    for (int i = 16; i < 64; i++) {
+      uint32_t s0 = inbox_rotr(w[i-15],7) ^ inbox_rotr(w[i-15],18) ^ (w[i-15] >> 3);
+      uint32_t s1 = inbox_rotr(w[i-2],17) ^ inbox_rotr(w[i-2],19) ^ (w[i-2] >> 10);
+      w[i] = w[i-16] + s0 + w[i-7] + s1;
+    }
+    uint32_t a=h0,b=h1,c=h2,d=h3,e=h4,f=h5,g=h6,h=h7;
+    for (int i = 0; i < 64; i++) {
+      uint32_t S1 = inbox_rotr(e,6) ^ inbox_rotr(e,11) ^ inbox_rotr(e,25);
+      uint32_t ch = (e & f) ^ ((~e) & g);
+      uint32_t t1 = h + S1 + ch + K[i] + w[i];
+      uint32_t S0 = inbox_rotr(a,2) ^ inbox_rotr(a,13) ^ inbox_rotr(a,22);
+      uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+      uint32_t t2 = S0 + maj;
+      h=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
+    }
+    h0+=a; h1+=b; h2+=c; h3+=d; h4+=e; h5+=f; h6+=g; h7+=h;
+  }
+  free(buf);
+  uint32_t hs[8] = {h0,h1,h2,h3,h4,h5,h6,h7};
+  for (int i = 0; i < 8; i++) {
+    out[4*i] = (unsigned char)(hs[i] >> 24);
+    out[4*i+1] = (unsigned char)(hs[i] >> 16);
+    out[4*i+2] = (unsigned char)(hs[i] >> 8);
+    out[4*i+3] = (unsigned char)hs[i];
+  }
+}
+
+static int stim_inbox_sha256_cmd(ClientData clientData, Tcl_Interp *interp,
+                                 int objc, Tcl_Obj *const objv[])
+{
+  if (objc != 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "string");
+    return TCL_ERROR;
+  }
+  Tcl_Size len = 0;
+  const char *s = Tcl_GetStringFromObj(objv[1], &len);
+  unsigned char dig[32];
+  char hex[65];
+  inbox_sha256((const unsigned char *)s, (size_t)len, dig);
+  for (int i = 0; i < 32; i++)
+    sprintf(hex + 2*i, "%02x", dig[i]);
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(hex, 64));
+  return TCL_OK;
+}
+
+/* Playback feeds a recorded tape back in. StimTicksF still tracks the
+   wall clock (updateTimes), but StimTimeF is owned by the tape: stimTimeSet
+   writes it, resetStimTime still zeros it, and updateTimes must not
+   recompute it or a slow capture runs the trial fast. */
+static int stim_playback = 0;
+
+static int stim_playback_cmd(ClientData clientData, Tcl_Interp *interp,
+                             int objc, Tcl_Obj *const objv[])
+{
+  if (objc == 1) {
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(stim_playback));
+    return TCL_OK;
+  }
+  if (objc != 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "?boolean?");
+    return TCL_ERROR;
+  }
+  int v = 0;
+  if (Tcl_GetBooleanFromObj(interp, objv[1], &v) != TCL_OK) return TCL_ERROR;
+  stim_playback = v ? 1 : 0;
+  return TCL_OK;
+}
+
+static int stim_time_set_cmd(ClientData clientData, Tcl_Interp *interp,
+                             int objc, Tcl_Obj *const objv[])
+{
+  if (objc != 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "ms");
+    return TCL_ERROR;
+  }
+  double ms = 0;
+  if (Tcl_GetDoubleFromObj(interp, objv[1], &ms) != TCL_OK) return TCL_ERROR;
+  StimTimeF = ms;
+  StimTime = (int) ms;
+  return TCL_OK;
+}
+
+/* One stim/inbox record. stim_inbox_log (installed by ESS configure_stim)
+   stamps StimTicksF, StimTimeF and SwapCount and sends the record home.
+   Absent proc, a call re-entered from the logger itself, or playback
+   (which must not write a second tape) is a no-op.
+   Returns the record seq, or -1 when nothing was stored. */
+static long long inbox_log(const char *kind, const char *body, int nbytes)
+{
+  Tcl_Interp *ip = OurInterp;
+  static int busy = 0;
+
+  if (stim_playback) return -1;
+  if (!ip || !kind || busy) return -1;
+  if (!Tcl_FindCommand(ip, "stim_inbox_log", NULL, 0)) return -1;
+  if (!body) { body = ""; nbytes = 0; }
+  if (nbytes < 0) nbytes = 0;
+
+  busy = 1;
+  Tcl_Obj *ov[3];
+  ov[0] = Tcl_NewStringObj("stim_inbox_log", -1);
+  ov[1] = Tcl_NewStringObj(kind, -1);
+  ov[2] = Tcl_NewStringObj(body, nbytes);
+  for (int i = 0; i < 3; i++) Tcl_IncrRefCount(ov[i]);
+
+  /* Nested inside the command that is being logged. Keep its result. */
+  Tcl_Obj *saved = Tcl_GetObjResult(ip);
+  Tcl_IncrRefCount(saved);
+  int rc = Tcl_EvalObjv(ip, 3, ov, TCL_EVAL_GLOBAL);
+  long long seq = -1;
+  if (rc == TCL_OK)
+    Tcl_GetWideIntFromObj(NULL, Tcl_GetObjResult(ip), &seq);
+  else
+    Tcl_ResetResult(ip);
+  Tcl_SetObjResult(ip, saved);
+  Tcl_DecrRefCount(saved);
+  for (int i = 0; i < 3; i++) Tcl_DecrRefCount(ov[i]);
+  busy = 0;
+  return seq;
+}
+
 void resetStimTime(void)
 {
   StimStart = glfwGetTime();
   StimTime = 0;
   StimTimeF = 0.0;
+  inbox_log("reset", "", 0);
 }
 
 void updateTimes(void)
@@ -428,8 +590,10 @@ void updateTimes(void)
   StimTicksF = 1000.0*curtime;
   StimDeltaTime = StimTicks - prevTicks;
   StimDeltaTimeF = StimTicksF - prevTicksF;
-  StimTime = (int) (1000*(curtime-StimStart));
-  StimTimeF = 1000.0*(curtime-StimStart);
+  if (!stim_playback) {
+    StimTime = (int) (1000*(curtime-StimStart));
+    StimTimeF = 1000.0*(curtime-StimStart);
+  }
 }
 
 
@@ -1044,6 +1208,7 @@ typedef struct client_request_s {
   SharedQueue<std::string> *rqueue;
   bool wait_for_swap;       // do we want swap ack?
   int swap_at_queue;        // SwapCount when the reply was deferred
+  long long inbox_seq;      // stim/inbox seq of the cmd, or -1
 } client_request_t;
 
 typedef struct ds_client_request_s {
@@ -1728,6 +1893,12 @@ public:
     Tcl_CreateCommand(interp, "getMouseWorld",
                       (Tcl_CmdProc *) getMouseWorldCmd,
                       (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+    Tcl_CreateObjCommand(interp, "stim_inbox_sha256", stim_inbox_sha256_cmd,
+                         (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+    Tcl_CreateObjCommand(interp, "stimPlayback", stim_playback_cmd,
+                         (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+    Tcl_CreateObjCommand(interp, "stimTimeSet", stim_time_set_cmd,
+                         (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
 
     Tcl_VarEval(interp, 
         "proc load_local_packages {} {\n"
@@ -1996,7 +2167,9 @@ proc screen_config {} {
       n++;
       req = queue.front();
       queue.pop_front();
-      const char *script = req->script.c_str();
+      const std::string cmdtext = req->script;
+      const char *script = cmdtext.c_str();
+      req->inbox_seq = -1;
 
       // std::cout << "processing tcl request: " << req->script << std::endl;
       
@@ -2041,11 +2214,17 @@ proc screen_config {} {
     }
     else {
       // put result back into the request and queue for after swap
-      req->script = std::string("!TCL_ERROR "+std::string(rcstr));
+        req->script = std::string("!TCL_ERROR "+std::string(rcstr));
       req->swap_at_queue = SwapCount;
       reply_queue.push_back(req);
     }
       }
+      /* Stamp after the result is copied: inbox_log evals Tcl, and the
+         leading '!' was stripped before this script was queued. A '!'
+         command's frame time is the later swap record. */
+      long long seq = inbox_log("cmd", cmdtext.data(), (int) cmdtext.size());
+      if (req->wait_for_swap && seq >= 0)
+        req->inbox_seq = seq;
     }
 
     /* Do this here? */
@@ -2093,6 +2272,11 @@ proc screen_config {} {
     Tcl_VarEval(interp, cmd, " {*}", dsstring, (char *) NULL);
     //  Tcl_VarEval(interp, cmd, dsstring, (char *) NULL);  
     Tcl_ResetResult(interp);
+    /* stimdg bytes are already the stimdg point; the tape keeps the name. */
+    if (strcmp(varname, "stimdg") == 0)
+      inbox_log("ds", "stimdg", 6);
+    else
+      inbox_log("ds", dsstring, (int) strlen(dsstring));
       }
       
       /* clean up */
@@ -2119,6 +2303,13 @@ proc screen_config {} {
       if (log_level && req->swap_at_queue == SwapCount)
 	log.AddLog("[%.3f]: warning: swap-ack released with no intervening "
 		   "swap: %s\n", glfwGetTime(), req->script.c_str());
+      /* After the swap, and after the newly-visible resetStimTime that
+         updateDisplay runs before processReplies. Body is the cmd seq. */
+      if (req->inbox_seq >= 0) {
+        char seqbuf[32];
+        int n = snprintf(seqbuf, sizeof seqbuf, "%lld", req->inbox_seq);
+        if (n > 0) inbox_log("swap", seqbuf, n);
+      }
       req->rqueue->push_back(req->script);
       if (log_level) log.AddLog("[%.3f]: %s\n", glfwGetTime(), req->script.c_str());
 #ifdef JETSON_NANO
@@ -2441,6 +2632,7 @@ Application::tcp_client_process(int sockfd,
   SharedQueue<std::string> rqueue;
   client_request_t client_request;
   client_request.rqueue = &rqueue;
+  client_request.inbox_seq = -1;
   
   std::string script;  
   
@@ -2543,6 +2735,7 @@ Application::message_client_process(int sockfd,
   SharedQueue<std::string> rqueue;
   client_request_t client_request;
   client_request.rqueue = &rqueue;
+  client_request.inbox_seq = -1;
   
   std::string script;  
 
