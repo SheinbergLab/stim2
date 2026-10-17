@@ -3053,6 +3053,10 @@ extern "C" int stimCaptureFrame(const char *filename, int nrep)
 int Application::renderFrame(bool log_events, const char *capture_path, int nrep)
 {
   int rc = 0;
+  /* setBackground stores the color at once and only queues glClearColor
+     for after this script returns. A capture in that same script would
+     otherwise clear with the color left by the previous script. */
+  setBackgroundColor();
   OBJ_GROUP *g = NULL;
   if (OGL_NGROUPS(GList)) g = OGL_GROUP(GList, OGL_CURGROUP(GList));
   if (!g) {
