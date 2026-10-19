@@ -2228,18 +2228,20 @@ proc screen_config {} {
       if (log_level && req->swap_at_queue == SwapCount)
 	log.AddLog("[%.3f]: warning: swap-ack released with no intervening "
 		   "swap: %s\n", glfwGetTime(), req->script.c_str());
-      /* After the swap, and after the newly-visible resetStimTime that
-         updateDisplay runs before processReplies. Body is the cmd seq. */
-      if (req->inbox_seq >= 0) {
-        char seqbuf[32];
-        int n = snprintf(seqbuf, sizeof seqbuf, "%lld", req->inbox_seq);
-        if (n > 0) inbox_log("swap", seqbuf, n);
-      }
-      req->rqueue->push_back(req->script);
       if (log_level) log.AddLog("[%.3f]: %s\n", glfwGetTime(), req->script.c_str());
 #ifdef JETSON_NANO
       GPIO::output(output_pin, GPIO::LOW);
 #endif
+      /* The request lives on the client thread's stack. Copy what the
+         swap note needs, hand ESS the result, and only then write the
+         note. The client may reuse the request as soon as it wakes. */
+      long long seq = req->inbox_seq;
+      req->rqueue->push_back(req->script);
+      if (seq >= 0) {
+        char seqbuf[32];
+        int wrote = snprintf(seqbuf, sizeof seqbuf, "%lld", seq);
+        if (wrote > 0) inbox_log("swap", seqbuf, wrote);
+      }
       
     }
     return n;
