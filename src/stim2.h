@@ -103,7 +103,7 @@ enum {
   DYNAMIC_ALWAYS_UPDATE };
 
 typedef struct _dumpinfo { 
-  char filename[128];
+  char filename[1024];
   int x;			/* left corner     */
   int y;			/* top corner      */
   int w;			/* width (pixels)  */

@@ -426,8 +426,12 @@ static int setsystemCmd(ClientData clientData, Tcl_Interp *interp,
 			int argc, char *argv[])
 {
   if (argc > 1) {
-    char filename[80];
-    sprintf(filename, "%s.tcl", argv[1]);
+    char filename[1024];
+    if (snprintf(filename, sizeof(filename), "%s.tcl", argv[1])
+	>= (int) sizeof(filename)) {
+      Tcl_AppendResult(interp, argv[0], ": name too long", NULL);
+      return TCL_ERROR;
+    }
     Tcl_EvalFile(interp, filename);
   }
   return TCL_OK;
@@ -457,6 +461,10 @@ static int dumpCmd(ClientData clientData, Tcl_Interp *interp,
 
   if (argc < 2) {
     Tcl_AppendResult(interp, "usage: ", argv[0], " filename [x y w h]", NULL); 
+    return TCL_ERROR;
+  }
+  if (strlen(argv[1]) >= sizeof(dinfo.filename)) {
+    Tcl_AppendResult(interp, argv[0], ": filename too long", NULL);
     return TCL_ERROR;
   }
   strcpy(dinfo.filename, argv[1]);
