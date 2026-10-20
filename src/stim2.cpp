@@ -1401,6 +1401,24 @@ public:
   std::vector<std::string> swap_tags;
   std::string swap_tag_callback;
   void deliverSwapTags(void);
+
+  // frame-counted work (main thread only, like swap tags): scripts to run
+  // after N swaps, and grabs of the next drawn frame
+  struct FrameAfter { int at; std::string script; };
+  struct FrameGrab {
+    std::string script;
+    int x, y, w, h, keep_alpha;
+    bool captured = false;
+    int gw = 0, gh = 0;
+    std::vector<unsigned char> pixels;
+  };
+  std::vector<FrameAfter> frame_afters;
+  std::vector<FrameGrab> frame_grabs;
+  void captureFrameGrabs(void);
+  void deliverFrameWork(void);
+  bool frameWorkPending(void) {
+    return !frame_grabs.empty() || !frame_afters.empty();
+  }
   
   const char *title;
   int tcpport = 4610;
@@ -2216,6 +2234,32 @@ const char *swapTagCallbackGet(void)
   return app.swap_tag_callback.c_str();
 }
 
+/* C-linkage glue for afterFrames / frameGrab (declared in stim2.h).  While
+   either is pending the main loop draws a frame on every pass (see
+   frameWorkPending), so the work happens even when nothing is animating.
+   No UPDATE_DISPLAY message is queued for it: a backlog of those would
+   delay every other display message (setBackground, dumpRaw). */
+void frameAfterAdd(int n, const char *script)
+{
+  app.frame_afters.push_back({SwapCount + n, script ? script : ""});
+  do_wakeup();
+}
+
+int frameAfterPending(void)
+{
+  return (int) app.frame_afters.size();
+}
+
+void frameGrabAdd(const char *script, int x, int y, int w, int h,
+		  int keep_alpha)
+{
+  Application::FrameGrab g;
+  g.script = script ? script : "";
+  g.x = x; g.y = y; g.w = w; g.h = h; g.keep_alpha = keep_alpha;
+  app.frame_grabs.push_back(std::move(g));
+  do_wakeup();
+}
+
 
 // Global logging helper
 void log_message(const char* level, const char* fmt, ...) {
@@ -2764,6 +2808,86 @@ void Application::deliverSwapTags(void)
   }
 }
 
+/* Read pending grabs from the back buffer: called after the frame is drawn
+   and before the swap (and before any imgui overlay), so the pixels are
+   exactly the frame about to be shown.  Rows are stored top-down; alpha is
+   forced to 255 unless the grab asked to keep it (the framebuffer's alpha
+   is a blending by-product, < 1 wherever anything was blended). */
+void Application::captureFrameGrabs(void)
+{
+  for (auto &g : frame_grabs) {
+    if (g.captured) continue;
+    int w = g.w > 0 ? g.w : winWidth;
+    int h = g.h > 0 ? g.h : winHeight;
+    int x = g.x, y = g.y;           /* top-left origin, window pixels */
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x + w > winWidth) w = winWidth - x;
+    if (y + h > winHeight) h = winHeight - y;
+    if (w < 0) w = 0;
+    if (h < 0) h = 0;
+    std::vector<unsigned char> buf((size_t) w * h * 4);
+    if (w && h) {
+      glPixelStorei(GL_PACK_ALIGNMENT, 1);
+      glReadBuffer(GL_BACK);
+      glReadPixels(x, winHeight - y - h, w, h, GL_RGBA, GL_UNSIGNED_BYTE,
+		   buf.data());
+    }
+    size_t rowbytes = (size_t) w * 4;
+    g.pixels.resize(buf.size());
+    for (int i = 0; i < h; i++)     /* GL rows are bottom-up */
+      memcpy(&g.pixels[i * rowbytes], &buf[(size_t) (h - i - 1) * rowbytes],
+	     rowbytes);
+    if (!g.keep_alpha)
+      for (size_t i = 3; i < g.pixels.size(); i += 4) g.pixels[i] = 255;
+    g.gw = w; g.gh = h;
+    g.captured = true;
+  }
+}
+
+/* Post-swap: deliver captured grabs as  script w h bytes swapcount  and
+   run afterFrames scripts that are due.  While anything is still pending,
+   wake the main loop, which then draws another frame (frameWorkPending),
+   so a static display keeps swapping: one per vsync, never a busy loop. */
+void Application::deliverFrameWork(void)
+{
+  if (frame_grabs.empty() && frame_afters.empty()) return;
+
+  std::vector<FrameGrab> grabs;
+  std::vector<FrameGrab> waiting;
+  for (auto &g : frame_grabs) (g.captured ? grabs : waiting).push_back(std::move(g));
+  frame_grabs = std::move(waiting);   /* scripts may queue more */
+
+  for (auto &g : grabs) {
+    Tcl_Obj *cmd = Tcl_NewStringObj(g.script.c_str(), -1);
+    Tcl_IncrRefCount(cmd);
+    Tcl_ListObjAppendElement(interp, cmd, Tcl_NewIntObj(g.gw));
+    Tcl_ListObjAppendElement(interp, cmd, Tcl_NewIntObj(g.gh));
+    Tcl_ListObjAppendElement(interp, cmd,
+			     Tcl_NewByteArrayObj(g.pixels.data(),
+						 (Tcl_Size) g.pixels.size()));
+    Tcl_ListObjAppendElement(interp, cmd, Tcl_NewIntObj(SwapCount));
+    if (Tcl_EvalObjEx(interp, cmd, TCL_EVAL_GLOBAL) != TCL_OK) {
+      log.AddLog("[error]: frameGrab: %s\n", Tcl_GetStringResult(interp));
+      Tcl_ResetResult(interp);
+    }
+    Tcl_DecrRefCount(cmd);
+  }
+
+  std::vector<FrameAfter> due;
+  std::vector<FrameAfter> later;
+  for (auto &a : frame_afters) (a.at <= SwapCount ? due : later).push_back(std::move(a));
+  frame_afters = std::move(later);    /* scripts may queue more */
+  for (auto &a : due) {
+    if (Tcl_EvalEx(interp, a.script.c_str(), -1, TCL_EVAL_GLOBAL) != TCL_OK) {
+      log.AddLog("[error]: afterFrames: %s\n", Tcl_GetStringResult(interp));
+      Tcl_ResetResult(interp);
+    }
+  }
+
+  if (frameWorkPending()) do_wakeup();
+}
+
 void Application::updateDisplay(bool log_events)
 {
   OBJ_GROUP *g = NULL;
@@ -2778,6 +2902,7 @@ void Application::updateDisplay(bool log_events)
     if (ClearBackground) {
       glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     }
+    captureFrameGrabs();
     
     if (!show_imgui)
       stopAnimation();
@@ -2791,6 +2916,7 @@ void Application::updateDisplay(bool log_events)
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PostSwap");
     SwapCount++;
     deliverSwapTags();
+    deliverFrameWork();
     return;
   }
 
@@ -2812,6 +2938,7 @@ void Application::updateDisplay(bool log_events)
     executePreScripts(g);
     drawGroup(g);
     executePostScripts(g);
+    captureFrameGrabs();
 
     if (show_imgui)
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -2838,6 +2965,7 @@ void Application::updateDisplay(bool log_events)
     /* Call any installed post frame command */
     updateTimes();
     deliverSwapTags();
+    deliverFrameWork();
     executePostFrameScripts(g);
     executeThisFrameScripts(g);
     glistPostFrameCmd(g);
@@ -2857,6 +2985,7 @@ void Application::updateDisplay(bool log_events)
     /* Call any installed post frame command */
     updateTimes();
     deliverSwapTags();
+    deliverFrameWork();
     executePostFrameScripts(g);
     executeThisFrameScripts(g);
     glistPostFrameCmd(g);
@@ -3544,7 +3673,7 @@ main(int argc, char *argv[]) {
     updated_display = app.processMessages(app.wait_for_swap);
     animEventPending = 0;
     
-    if (!updated_display && app.doUpdate()) {
+    if (!updated_display && (app.doUpdate() || app.frameWorkPending())) {
       app.updateDisplay(app.wait_for_swap);
       app.count_frame();     
     }
