@@ -16,9 +16,11 @@ other dependencies required.
    driving the program directly is at [http://localhost:4613/](http://localhost:4613/).
 
 The app bundles its own copy of the `dlsh` Tcl package library (`dlsh.zip`), so
-it runs standalone. If a shared copy is installed at `/usr/local/dlsh/dlsh.zip`
-(or `$DLSH_LIBRARY` is set), stim2 uses that instead, so labs can update the
-package library without reinstalling the app.
+it runs standalone. If a shared copy is installed at `/usr/local/dlsh/dlsh.zip`,
+stim2 uses that instead, so labs can update the package library without
+reinstalling the app. To use another copy (a test build, say), set
+`$DLSH_ZIP` to the zip file or `$DLSH_LIBRARY` to the directory holding
+`dlsh.zip`, as for the `dlsh` interpreter; `$DLSH_ZIP` wins if both are set.
 
 ## Design
 

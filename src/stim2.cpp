@@ -1756,21 +1756,30 @@ public:
 #else
         " set sysdlsh /usr/local/dlsh/dlsh.zip\n"
 #endif
-        // Candidate dlsh.zip locations, in priority order: explicit
-        // DLSH_LIBRARY override, the shared system install (so labs can update
-        // dlsh.zip without rebuilding the app), then copies bundled with the
-        // app -- next to the executable (Linux/Windows) or in the macOS .app
+        // Candidate dlsh.zip locations, in priority order, as the dlsh
+        // interpreter finds them (dlsh_main.c): $DLSH_ZIP (the zip file),
+        // $DLSH_LIBRARY/dlsh.zip (DLSH_LIBRARY is a DIRECTORY; one naming a
+        // file is still taken as the zip, as stim2 used to read it), the
+        // shared system install (so labs can update dlsh.zip without
+        // rebuilding the app), then copies bundled with the app -- next to
+        // the executable (Linux/Windows) or in the macOS .app
         // Contents/Resources dir. Data must live in Resources, not MacOS, or
-        // macOS code signing/notarization rejects the bundle.
+        // macOS code signing/notarization rejects the bundle. Only a regular
+        // file counts: a directory left in DLSH_LIBRARY (start-stim.sh's old
+        // /usr/local/lib/tcltk/dlsh) used to be "found" and fail to mount.
         " set candidates {}\n"
-        " if {[info exists ::env(DLSH_LIBRARY)]} { lappend candidates $::env(DLSH_LIBRARY) }\n"
+        " if {[info exists ::env(DLSH_ZIP)]} { lappend candidates $::env(DLSH_ZIP) }\n"
+        " if {[info exists ::env(DLSH_LIBRARY)]} {\n"
+        "  set l $::env(DLSH_LIBRARY)\n"
+        "  lappend candidates [expr {[file isfile $l] ? $l : [file join $l dlsh.zip]}]\n"
+        " }\n"
         " lappend candidates $sysdlsh\n"
         " lappend candidates [file join $f dlsh.zip]\n"
         " lappend candidates [file normalize [file join $f .. Resources dlsh.zip]]\n"
         " set dlshzip [lindex $candidates end]\n"
-        " foreach c $candidates { if {[file exists $c]} { set dlshzip $c; break } }\n"
+        " foreach c $candidates { if {[file isfile $c]} { set dlshzip $c; break } }\n"
         " set dlshroot [file join [zipfs root] dlsh]\n"
-        " zipfs unmount $dlshroot\n"
+        " catch { zipfs unmount $dlshroot }\n"
         " zipfs mount $dlshzip $dlshroot\n"
         " set auto_path [linsert $auto_path [set auto_path 0] $dlshroot/lib]\n"
         "package require dlsh; package require qpcs }\n"
