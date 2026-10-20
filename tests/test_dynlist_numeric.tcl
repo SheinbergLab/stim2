@@ -1,6 +1,6 @@
 # test_dynlist_numeric.tcl -- every numeric dynlist type, in a real stim2
 #
-#   stim2 -w 600 -h 600 -f /abs/path/to/examples/test_dynlist_numeric.tcl
+#   stim2 -w 600 -h 600 -f /abs/path/to/tests/test_dynlist_numeric.tcl
 #
 # dlsh lists are char, short, long (32-bit), float and, since 2026, int64
 # and double. The modules that take coordinate, vector, matrix, id and pixel
