@@ -54,12 +54,13 @@ static inline int dlnIsInteger(int datatype)
 }
 
 /* element i as a double; the caller has checked dlnIsNumeric. char is
-   read as plain char, as dlsh's own arithmetic reads it. */
+   an unsigned byte (0..255), as dlsh reads it on every platform; plain
+   char would be signed on macOS and unsigned on ARM Linux. */
 static inline double dlnGet(DYN_LIST *dl, int i)
 {
   void *v = DYN_LIST_VALS(dl);
   switch (DYN_LIST_DATATYPE(dl)) {
-  case DF_CHAR:    return ((char *) v)[i];
+  case DF_CHAR:    return ((unsigned char *) v)[i];
   case DF_SHORT:   return ((short *) v)[i];
   case DF_LONG:    return ((int *) v)[i];    /* DF_LONG is 32-bit */
   case DF_FLOAT:   return ((float *) v)[i];
