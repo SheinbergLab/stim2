@@ -500,8 +500,13 @@ void resetStimTime(void)
   inbox_log("reset", "", 0);
 }
 
+/* The frame timer writes these from another thread. processReplies holds
+   this across the cmd and swap tape rows so both read one sample. */
+static std::mutex stim_clock_mu;
+
 void updateTimes(void)
 {
+  std::lock_guard<std::mutex> lock(stim_clock_mu);
   double curtime = glfwGetTime();
   unsigned int prevTicks = StimTicks;
   double prevTicksF = StimTicksF;
@@ -1128,6 +1133,7 @@ typedef struct client_request_s {
   bool wait_for_swap;       // do we want swap ack?
   int swap_at_queue;        // SwapCount when the reply was deferred
   long long inbox_seq;      // stim/inbox seq of the cmd, or -1
+  std::string inbox_cmd;    // ! command text, logged after the flip
 } client_request_t;
 
 typedef struct ds_client_request_s {
@@ -2144,12 +2150,17 @@ proc screen_config {} {
       reply_queue.push_back(req);
     }
       }
-      /* Stamp after the result is copied: inbox_log evals Tcl, and the
-         leading '!' was stripped before this script was queued. A '!'
-         command's frame time is the later swap record. */
-      long long seq = inbox_log("cmd", cmdtext.data(), (int) cmdtext.size());
-      if (req->wait_for_swap && seq >= 0)
-        req->inbox_seq = seq;
+      /* A '!' command is painted by the swap that follows this eval.
+         Hold its text and log it from processReplies, when StimTicksF
+         is the post-flip clock. Anything else is done now, so log it
+         at the arrival time. */
+      if (req->wait_for_swap) {
+        req->inbox_cmd = cmdtext;
+      }
+      else {
+        req->inbox_cmd.clear();
+        inbox_log("cmd", cmdtext.data(), (int) cmdtext.size());
+      }
     }
 
     /* Do this here? */
@@ -2233,14 +2244,25 @@ proc screen_config {} {
       GPIO::output(output_pin, GPIO::LOW);
 #endif
       /* The request lives on the client thread's stack. Copy what the
-         swap note needs, hand ESS the result, and only then write the
-         note. The client may reuse the request as soon as it wakes. */
+         tape needs, hand ESS the result, and only then write the notes.
+         The client may reuse the request as soon as it wakes. The cmd
+         row is logged here so its clock is the flip that painted it. */
+      std::string held = std::move(req->inbox_cmd);
+      req->inbox_cmd.clear();
       long long seq = req->inbox_seq;
+      req->inbox_seq = -1;
       req->rqueue->push_back(req->script);
-      if (seq >= 0) {
-        char seqbuf[32];
-        int wrote = snprintf(seqbuf, sizeof seqbuf, "%lld", seq);
-        if (wrote > 0) inbox_log("swap", seqbuf, wrote);
+      /* Hold the clock so the timer thread cannot advance StimTicksF
+         between the command row and the swap row that points at it. */
+      {
+        std::lock_guard<std::mutex> lock(stim_clock_mu);
+        if (seq < 0 && !held.empty())
+          seq = inbox_log("cmd", held.data(), (int) held.size());
+        if (seq >= 0) {
+          char seqbuf[32];
+          int wrote = snprintf(seqbuf, sizeof seqbuf, "%lld", seq);
+          if (wrote > 0) inbox_log("swap", seqbuf, wrote);
+        }
       }
       
     }
