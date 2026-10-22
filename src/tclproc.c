@@ -426,8 +426,12 @@ static int setsystemCmd(ClientData clientData, Tcl_Interp *interp,
 			int argc, char *argv[])
 {
   if (argc > 1) {
-    char filename[80];
-    sprintf(filename, "%s.tcl", argv[1]);
+    char filename[1024];
+    if (snprintf(filename, sizeof(filename), "%s.tcl", argv[1])
+	>= (int) sizeof(filename)) {
+      Tcl_AppendResult(interp, argv[0], ": name too long", NULL);
+      return TCL_ERROR;
+    }
     Tcl_EvalFile(interp, filename);
   }
   return TCL_OK;
@@ -440,8 +444,12 @@ static int setsystemCmd(ClientData clientData, Tcl_Interp *interp,
 static int exitCmd(ClientData clientData, Tcl_Interp *interp,
 			   int argc, char *argv[])
 {
+  int status = 0;
+  /* exit ?status?: scripted tests report failure through it */
+  if (argc > 1 && Tcl_GetInt(interp, argv[1], &status) != TCL_OK)
+    return TCL_ERROR;
   kill_window();
-  exit(0);
+  exit(status);
   return TCL_OK;
 }
 
@@ -457,6 +465,10 @@ static int dumpCmd(ClientData clientData, Tcl_Interp *interp,
 
   if (argc < 2) {
     Tcl_AppendResult(interp, "usage: ", argv[0], " filename [x y w h]", NULL); 
+    return TCL_ERROR;
+  }
+  if (strlen(argv[1]) >= sizeof(dinfo.filename)) {
+    Tcl_AppendResult(interp, argv[0], ": filename too long", NULL);
     return TCL_ERROR;
   }
   strcpy(dinfo.filename, argv[1]);
@@ -749,6 +761,84 @@ static int swapTagCmd(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
   swapTagAdd(argv[1]);
+  return TCL_OK;
+}
+
+/*
+ * afterFrames ?n script?
+ *   Evaluate script (at global level) once n more swaps have completed,
+ *   from the post-swap point where swap tags are delivered.  Unlike Tcl's
+ *   after, this does not depend on stim2's loop being awake: while
+ *   anything is pending stim2 keeps drawing frames, so it works on a
+ *   static display.  With no arguments, returns the number pending.
+ */
+static int afterFramesCmd(ClientData clientData, Tcl_Interp *interp,
+			  int argc, char *argv[])
+{
+  int n;
+  if (argc == 1) {
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(frameAfterPending()));
+    return TCL_OK;
+  }
+  if (argc != 3) {
+    Tcl_SetResult(interp, "usage: afterFrames ?n script?", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  if (Tcl_GetInt(interp, argv[1], &n) != TCL_OK) return TCL_ERROR;
+  if (n < 1) {
+    Tcl_SetResult(interp, "afterFrames: n must be >= 1", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  frameAfterAdd(n, argv[2]);
+  return TCL_OK;
+}
+
+/*
+ * frameGrab ?-alpha? ?-rect {x y w h}? script
+ *   Read the next drawn frame from the back buffer just before it is
+ *   swapped (so exactly what is shown, without the imgui overlay), then
+ *   after the swap evaluate
+ *       script w h pixels swapcount
+ *   pixels is a byte array of w*h RGBA, rows top-down.  -rect takes window
+ *   pixels from the top-left (w or h 0 = to the edge); the default is the
+ *   whole window.  Alpha is forced to 255 unless -alpha: the framebuffer's
+ *   alpha is only a blending by-product.  For analysis in dlsh (dl_uint
+ *   reads chars as unsigned, 0..255):
+ *       dl_local px [dl_clist]; dl_fromString $pixels $px
+ *       dl_local v [dl_uint $px]
+ */
+static int frameGrabCmd(ClientData clientData, Tcl_Interp *interp,
+			int argc, char *argv[])
+{
+  int i, keep_alpha = 0;
+  int x = 0, y = 0, w = 0, h = 0;
+  const char *script = NULL;
+  const char *usage = "usage: frameGrab ?-alpha? ?-rect {x y w h}? script";
+
+  for (i = 1; i < argc; i++) {
+    if (!strcmp(argv[i], "-alpha")) keep_alpha = 1;
+    else if (!strcmp(argv[i], "-rect")) {
+      Tcl_Size n;
+      const char **r;
+      if (i + 1 >= argc) { Tcl_SetResult(interp, (char *) usage, TCL_STATIC); return TCL_ERROR; }
+      if (Tcl_SplitList(interp, argv[++i], &n, &r) != TCL_OK) return TCL_ERROR;
+      if (n != 4 ||
+	  Tcl_GetInt(interp, r[0], &x) != TCL_OK ||
+	  Tcl_GetInt(interp, r[1], &y) != TCL_OK ||
+	  Tcl_GetInt(interp, r[2], &w) != TCL_OK ||
+	  Tcl_GetInt(interp, r[3], &h) != TCL_OK) {
+	Tcl_Free((char *) r);
+	Tcl_ResetResult(interp);
+	Tcl_SetResult(interp, "frameGrab: -rect needs {x y w h} integers", TCL_STATIC);
+	return TCL_ERROR;
+      }
+      Tcl_Free((char *) r);
+    }
+    else if (!script && i == argc - 1) script = argv[i];
+    else { Tcl_SetResult(interp, (char *) usage, TCL_STATIC); return TCL_ERROR; }
+  }
+  if (!script) { Tcl_SetResult(interp, (char *) usage, TCL_STATIC); return TCL_ERROR; }
+  frameGrabAdd(script, x, y, w, h, keep_alpha);
   return TCL_OK;
 }
 
@@ -2848,6 +2938,10 @@ void addTclCommands(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "swapStats", (Tcl_CmdProc *) swapStatsCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "swapTag", (Tcl_CmdProc *) swapTagCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "afterFrames", (Tcl_CmdProc *) afterFramesCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "frameGrab", (Tcl_CmdProc *) frameGrabCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "swapTagCallback",
 		    (Tcl_CmdProc *) swapTagCallbackCmd,

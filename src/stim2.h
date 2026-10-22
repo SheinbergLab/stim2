@@ -103,7 +103,7 @@ enum {
   DYNAMIC_ALWAYS_UPDATE };
 
 typedef struct _dumpinfo { 
-  char filename[128];
+  char filename[1024];
   int x;			/* left corner     */
   int y;			/* top corner      */
   int w;			/* width (pixels)  */
@@ -229,6 +229,16 @@ int isImguiVisible(void);
 void swapTagAdd(const char *payload);
 void swapTagCallbackSet(const char *proc);
 const char *swapTagCallbackGet(void);
+
+/* Frame-counted work, run post-swap (see afterFrames / frameGrab in
+   tclproc.c).  frameAfterAdd: eval script once n more swaps have
+   completed.  frameGrabAdd: read the next drawn frame (pre-swap, so it is
+   exactly what is shown) and eval script with "w h bytes swapcount"
+   appended.  w/h of 0 mean the whole window; keep_alpha 0 forces A=255. */
+void frameAfterAdd(int n, const char *script);
+int  frameAfterPending(void);
+void frameGrabAdd(const char *script, int x, int y, int w, int h,
+		  int keep_alpha);
 
 int  toggleAnimation(void);
 int  startAnimation(void);

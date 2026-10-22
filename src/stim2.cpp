@@ -1494,6 +1494,24 @@ public:
   std::vector<std::string> swap_tags;
   std::string swap_tag_callback;
   void deliverSwapTags(void);
+
+  // frame-counted work (main thread only, like swap tags): scripts to run
+  // after N swaps, and grabs of the next drawn frame
+  struct FrameAfter { int at; std::string script; };
+  struct FrameGrab {
+    std::string script;
+    int x, y, w, h, keep_alpha;
+    bool captured = false;
+    int gw = 0, gh = 0;
+    std::vector<unsigned char> pixels;
+  };
+  std::vector<FrameAfter> frame_afters;
+  std::vector<FrameGrab> frame_grabs;
+  void captureFrameGrabs(void);
+  void deliverFrameWork(void);
+  bool frameWorkPending(void) {
+    return !frame_grabs.empty() || !frame_afters.empty();
+  }
   
   const char *title;
   int tcpport = 4610;
@@ -1840,21 +1858,30 @@ public:
 #else
         " set sysdlsh /usr/local/dlsh/dlsh.zip\n"
 #endif
-        // Candidate dlsh.zip locations, in priority order: explicit
-        // DLSH_LIBRARY override, the shared system install (so labs can update
-        // dlsh.zip without rebuilding the app), then copies bundled with the
-        // app -- next to the executable (Linux/Windows) or in the macOS .app
+        // Candidate dlsh.zip locations, in priority order, as the dlsh
+        // interpreter finds them (dlsh_main.c): $DLSH_ZIP (the zip file),
+        // $DLSH_LIBRARY/dlsh.zip (DLSH_LIBRARY is a DIRECTORY; one naming a
+        // file is still taken as the zip, as stim2 used to read it), the
+        // shared system install (so labs can update dlsh.zip without
+        // rebuilding the app), then copies bundled with the app -- next to
+        // the executable (Linux/Windows) or in the macOS .app
         // Contents/Resources dir. Data must live in Resources, not MacOS, or
-        // macOS code signing/notarization rejects the bundle.
+        // macOS code signing/notarization rejects the bundle. Only a regular
+        // file counts: a directory left in DLSH_LIBRARY (start-stim.sh's old
+        // /usr/local/lib/tcltk/dlsh) used to be "found" and fail to mount.
         " set candidates {}\n"
-        " if {[info exists ::env(DLSH_LIBRARY)]} { lappend candidates $::env(DLSH_LIBRARY) }\n"
+        " if {[info exists ::env(DLSH_ZIP)]} { lappend candidates $::env(DLSH_ZIP) }\n"
+        " if {[info exists ::env(DLSH_LIBRARY)]} {\n"
+        "  set l $::env(DLSH_LIBRARY)\n"
+        "  lappend candidates [expr {[file isfile $l] ? $l : [file join $l dlsh.zip]}]\n"
+        " }\n"
         " lappend candidates $sysdlsh\n"
         " lappend candidates [file join $f dlsh.zip]\n"
         " lappend candidates [file normalize [file join $f .. Resources dlsh.zip]]\n"
         " set dlshzip [lindex $candidates end]\n"
-        " foreach c $candidates { if {[file exists $c]} { set dlshzip $c; break } }\n"
+        " foreach c $candidates { if {[file isfile $c]} { set dlshzip $c; break } }\n"
         " set dlshroot [file join [zipfs root] dlsh]\n"
-        " zipfs unmount $dlshroot\n"
+        " catch { zipfs unmount $dlshroot }\n"
         " zipfs mount $dlshzip $dlshroot\n"
         " set auto_path [linsert $auto_path [set auto_path 0] $dlshroot/lib]\n"
         "package require dlsh; package require qpcs }\n"
@@ -2365,6 +2392,32 @@ void swapTagCallbackSet(const char *proc)
 const char *swapTagCallbackGet(void)
 {
   return app.swap_tag_callback.c_str();
+}
+
+/* C-linkage glue for afterFrames / frameGrab (declared in stim2.h).  While
+   either is pending the main loop draws a frame on every pass (see
+   frameWorkPending), so the work happens even when nothing is animating.
+   No UPDATE_DISPLAY message is queued for it: a backlog of those would
+   delay every other display message (setBackground, dumpRaw). */
+void frameAfterAdd(int n, const char *script)
+{
+  app.frame_afters.push_back({SwapCount + n, script ? script : ""});
+  do_wakeup();
+}
+
+int frameAfterPending(void)
+{
+  return (int) app.frame_afters.size();
+}
+
+void frameGrabAdd(const char *script, int x, int y, int w, int h,
+		  int keep_alpha)
+{
+  Application::FrameGrab g;
+  g.script = script ? script : "";
+  g.x = x; g.y = y; g.w = w; g.h = h; g.keep_alpha = keep_alpha;
+  app.frame_grabs.push_back(std::move(g));
+  do_wakeup();
 }
 
 
@@ -2974,6 +3027,86 @@ int Application::writeCapture(const char *filename, int nrep)
   return rc;
 }
 
+/* Read pending grabs from the back buffer: called after the frame is drawn
+   and before the swap (and before any imgui overlay), so the pixels are
+   exactly the frame about to be shown.  Rows are stored top-down; alpha is
+   forced to 255 unless the grab asked to keep it (the framebuffer's alpha
+   is a blending by-product, < 1 wherever anything was blended). */
+void Application::captureFrameGrabs(void)
+{
+  for (auto &g : frame_grabs) {
+    if (g.captured) continue;
+    int w = g.w > 0 ? g.w : winWidth;
+    int h = g.h > 0 ? g.h : winHeight;
+    int x = g.x, y = g.y;           /* top-left origin, window pixels */
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x + w > winWidth) w = winWidth - x;
+    if (y + h > winHeight) h = winHeight - y;
+    if (w < 0) w = 0;
+    if (h < 0) h = 0;
+    std::vector<unsigned char> buf((size_t) w * h * 4);
+    if (w && h) {
+      glPixelStorei(GL_PACK_ALIGNMENT, 1);
+      glReadBuffer(GL_BACK);
+      glReadPixels(x, winHeight - y - h, w, h, GL_RGBA, GL_UNSIGNED_BYTE,
+		   buf.data());
+    }
+    size_t rowbytes = (size_t) w * 4;
+    g.pixels.resize(buf.size());
+    for (int i = 0; i < h; i++)     /* GL rows are bottom-up */
+      memcpy(&g.pixels[i * rowbytes], &buf[(size_t) (h - i - 1) * rowbytes],
+	     rowbytes);
+    if (!g.keep_alpha)
+      for (size_t i = 3; i < g.pixels.size(); i += 4) g.pixels[i] = 255;
+    g.gw = w; g.gh = h;
+    g.captured = true;
+  }
+}
+
+/* Post-swap: deliver captured grabs as  script w h bytes swapcount  and
+   run afterFrames scripts that are due.  While anything is still pending,
+   wake the main loop, which then draws another frame (frameWorkPending),
+   so a static display keeps swapping: one per vsync, never a busy loop. */
+void Application::deliverFrameWork(void)
+{
+  if (frame_grabs.empty() && frame_afters.empty()) return;
+
+  std::vector<FrameGrab> grabs;
+  std::vector<FrameGrab> waiting;
+  for (auto &g : frame_grabs) (g.captured ? grabs : waiting).push_back(std::move(g));
+  frame_grabs = std::move(waiting);   /* scripts may queue more */
+
+  for (auto &g : grabs) {
+    Tcl_Obj *cmd = Tcl_NewStringObj(g.script.c_str(), -1);
+    Tcl_IncrRefCount(cmd);
+    Tcl_ListObjAppendElement(interp, cmd, Tcl_NewIntObj(g.gw));
+    Tcl_ListObjAppendElement(interp, cmd, Tcl_NewIntObj(g.gh));
+    Tcl_ListObjAppendElement(interp, cmd,
+			     Tcl_NewByteArrayObj(g.pixels.data(),
+						 (Tcl_Size) g.pixels.size()));
+    Tcl_ListObjAppendElement(interp, cmd, Tcl_NewIntObj(SwapCount));
+    if (Tcl_EvalObjEx(interp, cmd, TCL_EVAL_GLOBAL) != TCL_OK) {
+      log.AddLog("[error]: frameGrab: %s\n", Tcl_GetStringResult(interp));
+      Tcl_ResetResult(interp);
+    }
+    Tcl_DecrRefCount(cmd);
+  }
+
+  std::vector<FrameAfter> due;
+  std::vector<FrameAfter> later;
+  for (auto &a : frame_afters) (a.at <= SwapCount ? due : later).push_back(std::move(a));
+  frame_afters = std::move(later);    /* scripts may queue more */
+  for (auto &a : due) {
+    if (Tcl_EvalEx(interp, a.script.c_str(), -1, TCL_EVAL_GLOBAL) != TCL_OK) {
+      log.AddLog("[error]: afterFrames: %s\n", Tcl_GetStringResult(interp));
+      Tcl_ResetResult(interp);
+    }
+  }
+
+  if (frameWorkPending()) do_wakeup();
+}
+
 void Application::updateDisplay(bool log_events)
 {
   renderFrame(log_events, NULL, 0);
@@ -3014,6 +3147,7 @@ int Application::renderFrame(bool log_events, const char *capture_path, int nrep
     if (ClearBackground) {
       glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     }
+    if (!capture_path) captureFrameGrabs();
     
     if (!show_imgui)
       stopAnimation();
@@ -3031,6 +3165,7 @@ int Application::renderFrame(bool log_events, const char *capture_path, int nrep
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PostSwap");
     SwapCount++;
     deliverSwapTags();
+    if (!capture_path) deliverFrameWork();
     return rc;
   }
 
@@ -3052,6 +3187,7 @@ int Application::renderFrame(bool log_events, const char *capture_path, int nrep
     executePreScripts(g);
     drawGroup(g);
     executePostScripts(g);
+    if (!capture_path) captureFrameGrabs();
 
     if (show_imgui)
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -3082,6 +3218,7 @@ int Application::renderFrame(bool log_events, const char *capture_path, int nrep
     /* Call any installed post frame command */
     updateTimes();
     deliverSwapTags();
+    if (!capture_path) deliverFrameWork();
     executePostFrameScripts(g);
     executeThisFrameScripts(g);
     glistPostFrameCmd(g);
@@ -3106,6 +3243,7 @@ int Application::renderFrame(bool log_events, const char *capture_path, int nrep
     /* Call any installed post frame command */
     updateTimes();
     deliverSwapTags();
+    if (!capture_path) deliverFrameWork();
     executePostFrameScripts(g);
     executeThisFrameScripts(g);
     glistPostFrameCmd(g);
@@ -3798,8 +3936,10 @@ main(int argc, char *argv[]) {
     
     /* While a tape is playing, only redraw (handled in processMessages)
        may update and swap. A timer wake with an empty queue leaves the
-       picture where the last redraw put it. */
-    if (!stim_playback && !updated_display && app.doUpdate()) {
+       picture where the last redraw put it. A live display still draws
+       when a frameGrab or afterFrames script is waiting. */
+    if (!stim_playback && !updated_display &&
+	(app.doUpdate() || app.frameWorkPending())) {
       app.updateDisplay(app.wait_for_swap);
       app.count_frame();     
     }
