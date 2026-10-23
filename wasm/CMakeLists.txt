@@ -173,7 +173,7 @@ target_link_options(shape_raster PRIVATE
     "SHELL:-s MODULARIZE=1"
     "SHELL:-s EXPORT_NAME=createShapeRaster"
     "SHELL:-s ENVIRONMENT=web,node"
-    "SHELL:-s EXPORTED_FUNCTIONS=[_stim_eval,_stim_error,_stim_result,_stim_load_dg,_stim_gl_init,_shape_bytes,_shape_side,_shape_stride,_shape_span,_stim_redraw,_stim_draw_cx,_stim_draw_cy,_stim_draw_hx,_stim_draw_hy,_stim_draw_opacity,_stim_draw_side,_stim_draw_stride,_stim_draw_bytes,_stim_set_screen,_stim_frame,_stim_wants_frame,_stim_timer_ticks,_malloc,_free]"
+    "SHELL:-s EXPORTED_FUNCTIONS=[_stim_eval,_stim_error,_stim_result,_stim_load_dg,_stim_gl_init,_shape_bytes,_shape_side,_shape_stride,_shape_span,_stim_redraw,_stim_draw_cx,_stim_draw_cy,_stim_draw_hx,_stim_draw_hy,_stim_draw_opacity,_stim_draw_side,_stim_draw_stride,_stim_draw_bytes,_stim_set_screen,_stim_frame,_stim_wants_frame,_stim_scene_moves,_stim_timer_ticks,_malloc,_free]"
     "SHELL:-s EXPORTED_RUNTIME_METHODS=[HEAPU8,FS]"
     "SHELL:-s ALLOW_MEMORY_GROWTH=1"
     "SHELL:-s MIN_WEBGL_VERSION=2"
@@ -183,3 +183,30 @@ target_link_options(shape_raster PRIVATE
     --no-entry
 )
 set_target_properties(shape_raster PROPERTIES OUTPUT_NAME "shape_raster")
+
+# Trial mp4 encoder. libx264 stays out of shape_raster: stim2 is MIT
+# and x264 is GPL. The page loads trial_encode.js beside the stim module.
+set(X264_PREFIX ${CMAKE_BINARY_DIR}/x264-install)
+set(X264_LIB ${X264_PREFIX}/lib/libx264.a)
+add_custom_command(
+    OUTPUT ${X264_LIB}
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/build_x264.sh ${CMAKE_BINARY_DIR}/x264-build ${X264_PREFIX}
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/build_x264.sh
+    COMMENT "Building libx264 for WebAssembly"
+    VERBATIM
+)
+add_custom_target(x264_wasm DEPENDS ${X264_LIB})
+add_executable(trial_encode encode.cpp)
+add_dependencies(trial_encode x264_wasm)
+target_include_directories(trial_encode PRIVATE ${X264_PREFIX}/include)
+target_link_libraries(trial_encode PRIVATE ${X264_LIB})
+target_link_options(trial_encode PRIVATE
+    "SHELL:-s MODULARIZE=1"
+    "SHELL:-s EXPORT_NAME=createTrialEncode"
+    "SHELL:-s ENVIRONMENT=web,node"
+    "SHELL:-s EXPORTED_FUNCTIONS=[_enc_open,_enc_rgba,_enc_flush,_enc_sample,_enc_sample_size,_enc_sample_key,_enc_avcc,_enc_avcc_size,_enc_error,_enc_close,_malloc,_free]"
+    "SHELL:-s EXPORTED_RUNTIME_METHODS=[HEAPU8]"
+    "SHELL:-s ALLOW_MEMORY_GROWTH=1"
+    --no-entry
+)
+set_target_properties(trial_encode PROPERTIES OUTPUT_NAME "trial_encode")

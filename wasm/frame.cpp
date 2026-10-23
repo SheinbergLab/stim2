@@ -593,6 +593,18 @@ extern "C" int stim_frame(void) {
 
 extern "C" int stim_wants_frame(void) { return wants_frame; }
 
+/* The live display runs the frame pass on every refresh while the
+   current group is showing and marked dynamic (glistSetDynamic status
+   other than NOT_DYNAMIC). The page uses the same mark to decide
+   whether a quiet stretch of the tape is one picture. */
+extern "C" int stim_scene_moves(void) {
+    if (!GList || !OGL_NGROUPS(GList) || !OGL_VISIBLE(GList)) return 0;
+    if (OGL_CURGROUP(GList) >= OGL_NGROUPS(GList)) return 0;
+    OBJ_GROUP *g = OGL_GROUP(GList, OGL_CURGROUP(GList));
+    if (!g) return 0;
+    return OG_DYNAMIC(g) != NOT_DYNAMIC;
+}
+
 static int stim_playback_cmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]) {
     if (objc == 1) {
         Tcl_SetObjResult(interp, Tcl_NewIntObj(stim_playback));
