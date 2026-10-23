@@ -203,7 +203,7 @@ target_link_libraries(trial_encode PRIVATE ${X264_LIB})
 target_link_options(trial_encode PRIVATE
     "SHELL:-s MODULARIZE=1"
     "SHELL:-s EXPORT_NAME=createTrialEncode"
-    "SHELL:-s ENVIRONMENT=web,node"
+    "SHELL:-s ENVIRONMENT=web,worker,node"
     "SHELL:-s EXPORTED_FUNCTIONS=[_enc_open,_enc_rgba,_enc_flush,_enc_sample,_enc_sample_size,_enc_sample_key,_enc_avcc,_enc_avcc_size,_enc_error,_enc_close,_malloc,_free]"
     "SHELL:-s EXPORTED_RUNTIME_METHODS=[HEAPU8]"
     "SHELL:-s ALLOW_MEMORY_GROWTH=1"
