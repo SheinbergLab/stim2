@@ -538,7 +538,7 @@ static ma_device_id *find_audio_device(const char *name_pattern, char *found_nam
     return NULL;  // Use default
   }
 
-#ifdef __linux__
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
   // A pattern containing ':' (or "default") is a literal ALSA device id rather
   // than a name to search for, so a config can name an exact card:
   // "plughw:CARD=Katana,DEV=0". Same rule as dserv's sound module, so both
@@ -1147,7 +1147,7 @@ int videoCreate(OBJ_LIST *objlist, char *filename) {
                     config.dataCallback = audio_data_callback;
                     config.pUserData = v;
 		    
-#ifdef __linux__
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
                     // ALSA-specific: disable mmap for better USB audio compatibility
                     config.alsa.noMMap = MA_TRUE;
 #endif

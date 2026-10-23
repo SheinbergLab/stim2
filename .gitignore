@@ -3,6 +3,7 @@
 *~
 _CPack_Packages/
 build/
+build-wasm/
 developer_log.json
 .DS_Store
 

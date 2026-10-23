@@ -25,6 +25,7 @@
 #include <vector>
 
 #include <plutovg.h>
+#include "shape_raster.h"
 
 #include <tcl.h>
 #include <df.h>
@@ -90,60 +91,36 @@ struct ShapeSpec {
 static float shape_rasterize(SVG_OBJ *svg, DYN_LIST *xs, DYN_LIST *ys,
                              const ShapeSpec& spec) {
     int n = DYN_LIST_N(xs);
-
-    /* Fit: the box has to hold the outline plus half the stroke, since a
-       stroke straddles the path -- exactly the span rule the SVG route used. */
-    double m = 0.0;
+    std::vector<double> x(n), y(n);
     for (int i = 0; i < n; i++) {
-        double ax = fabs(dl_elt(xs, i)), ay = fabs(dl_elt(ys, i));
-        if (ax > m) m = ax;
-        if (ay > m) m = ay;
-    }
-    float span = (float)(m + spec.stroke_w/2.0 + spec.pad);
-    if (span <= 0.f) return -1.f;
-
-    int size = spec.size;
-    plutovg_surface_t* surface = plutovg_surface_create(size, size);
-    if (!surface) return -1.f;
-    plutovg_canvas_t* canvas = plutovg_canvas_create(surface);
-
-    /* outline units -> raster pixels, y flipped (texture rows run downward) */
-    double k = size / (2.0 * span);
-    for (int i = 0; i < n; i++) {
-        float px = (float)((dl_elt(xs, i) + span) * k);
-        float py = (float)((span - dl_elt(ys, i)) * k);
-        if (i == 0) plutovg_canvas_move_to(canvas, px, py);
-        else        plutovg_canvas_line_to(canvas, px, py);
-    }
-    if (spec.closed) plutovg_canvas_close_path(canvas);
-
-    /* fill first, stroke over it -- SVG's order */
-    if (spec.has_fill) {
-        plutovg_canvas_set_rgba(canvas, spec.fill[0], spec.fill[1],
-                                spec.fill[2], 1.f);
-        /* preserve: a stroke may still need the path */
-        plutovg_canvas_fill_preserve(canvas);
-    }
-    if (spec.stroke_w > 0.f) {
-        const float *sc = spec.has_stroke_col ? spec.stroke_col : spec.fill;
-        plutovg_canvas_set_rgba(canvas, sc[0], sc[1], sc[2], 1.f);
-        plutovg_canvas_set_line_width(canvas, (float)(spec.stroke_w * k));
-        plutovg_canvas_set_line_join(canvas, spec.join);
-        plutovg_canvas_set_line_cap(canvas, spec.cap);
-        if (!spec.dashes.empty()) {
-            std::vector<float> px_dashes;
-            px_dashes.reserve(spec.dashes.size());
-            for (float d : spec.dashes) px_dashes.push_back((float)(d * k));
-            plutovg_canvas_set_dash(canvas, (float)(spec.dash_offset * k),
-                                    px_dashes.data(), (int)px_dashes.size());
-        }
-        plutovg_canvas_stroke(canvas);
+        x[i] = dl_elt(xs, i);
+        y[i] = dl_elt(ys, i);
     }
 
-    svgUploadArgb32(svg, plutovg_surface_get_data(surface), size, size,
-                  plutovg_surface_get_stride(surface));
+    ShapeRasterSpec rs = shapeRasterDefaults();
+    rs.fill[0] = spec.fill[0];
+    rs.fill[1] = spec.fill[1];
+    rs.fill[2] = spec.fill[2];
+    rs.has_fill = spec.has_fill;
+    rs.stroke_col[0] = spec.stroke_col[0];
+    rs.stroke_col[1] = spec.stroke_col[1];
+    rs.stroke_col[2] = spec.stroke_col[2];
+    rs.has_stroke_col = spec.has_stroke_col;
+    rs.stroke_w = spec.stroke_w;
+    rs.pad = spec.pad;
+    rs.size = spec.size;
+    rs.closed = spec.closed;
+    rs.dash_offset = spec.dash_offset;
+    rs.dashes = spec.dashes;
+    rs.join = spec.join;
+    rs.cap = spec.cap;
 
-    plutovg_canvas_destroy(canvas);
+    plutovg_surface_t *surface = nullptr;
+    float span = shapeRasterPaint(x.data(), y.data(), n, rs, &surface);
+    if (span < 0.f || !surface) return -1.f;
+
+    svgUploadArgb32(svg, plutovg_surface_get_data(surface), spec.size, spec.size,
+                    plutovg_surface_get_stride(surface));
     plutovg_surface_destroy(surface);
     return span;
 }

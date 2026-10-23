@@ -99,10 +99,18 @@ private:
     typedef std::multiset<QueueValue, NextActiveComparator> Queue;
     Queue queue;
 
-    // Thread and exit flag
+    // Thread and exit flag. The browser build has one thread (no pthreads),
+    // so the same queue is drained on the main thread there.
+#ifndef __EMSCRIPTEN__
     std::thread worker;
-    bool done;
     void threadStart();
+#else
+    bool pending;
+    void scheduleLocked();
+    void pump();
+    static void emPump(void *vp);
+#endif
+    bool done;
 
 public:
     Timer();

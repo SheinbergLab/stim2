@@ -1307,7 +1307,11 @@ int spineShaderCreate(Tcl_Interp *interp, SPINE_INFO *spineInfo)
   #ifndef STIM2_USE_GLES
     "# version 330\n"
   #else
-    "# version 310 es\n"  
+    #ifdef __EMSCRIPTEN__
+    "# version 300 es\n"
+    #else
+    "# version 310 es\n"
+    #endif
   #endif
     "in vec2 vertex_position;"
     "in vec2 vertex_texcoord;"
@@ -1327,7 +1331,11 @@ int spineShaderCreate(Tcl_Interp *interp, SPINE_INFO *spineInfo)
   #ifndef STIM2_USE_GLES
     "# version 330\n"
   #else
-    "# version 310 es\n"  
+    #ifdef __EMSCRIPTEN__
+    "# version 300 es\n"
+    #else
+    "# version 310 es\n"
+    #endif
   #endif
   
     "#ifdef GL_ES\n"
@@ -1348,7 +1356,11 @@ int spineShaderCreate(Tcl_Interp *interp, SPINE_INFO *spineInfo)
   #ifndef STIM2_USE_GLES
     "# version 330\n"
   #else
-    "# version 310 es\n"  
+    #ifdef __EMSCRIPTEN__
+    "# version 300 es\n"
+    #else
+    "# version 310 es\n"
+    #endif
   #endif
     "in vec2 vertex_position;"
     "uniform mat4 projMat;"
@@ -1361,7 +1373,11 @@ int spineShaderCreate(Tcl_Interp *interp, SPINE_INFO *spineInfo)
   #ifndef STIM2_USE_GLES
     "# version 330\n"
   #else
-    "# version 310 es\n"  
+    #ifdef __EMSCRIPTEN__
+    "# version 300 es\n"
+    #else
+    "# version 310 es\n"
+    #endif
   #endif
   
     "#ifdef GL_ES\n"
