@@ -116,7 +116,34 @@ The default install includes a startup config file that:
 3. Sources user scripts from `~/.config/stim2/`
 4. Calls `screen_config` to apply display settings
 
+## Message port, ACK1 reply header and `stimClock`
 
+Remote clients (ESS on dserv, `stimctrl`) drive stim2 over the framed
+message port, TCP 4612: each request and reply is a 4-byte big-endian
+length followed by the payload. Two optional prefixes on a command:
+
+* `!` -- reply only after the next swap (unchanged behaviour).
+* `@` -- prepend a timing header to the reply:
+  `ACK1 <ticks_dequeue> <ticks_done> <swapcount> <flipwall_us>\n<result>`.
+  The tick stamps are stim2's internal clock (`1000.0 * glfwGetTime()`,
+  ms since stim2 started, `%.3f`), `swapcount` the swap counter, and
+  `flipwall_us` the CLOCK_REALTIME time of the flip that released a `@!`
+  reply (0 for a non-swap reply, -1 when the swapsync strategy cannot time
+  flips). `@!` applies both. `stimAckHeader` returns 1 on a stim2 that
+  honours `@`, so a client can probe for it.
+
+`stimClock` relates the two clocks: it returns `<ticks_ms> <wall_us>
+<span_us>`, the tick clock and CLOCK_REALTIME (integer microseconds) read
+back to back. The wall clock is read, then the tick clock, then the wall
+clock again; `wall_us` is the midpoint of the two wall reads and `span_us`
+their difference, i.e. the error bound of the pairing. One sample per
+connection, or per data file, lets analysis put every tick stamp in the
+header (and anything else stim2 reports in ticks) on the wall timeline
+with `wall = wall_us + (tick - ticks_ms) * 1000`. The tick clock is
+monotonic while the realtime clock is slewed by NTP/PTP, so resample
+occasionally rather than relying on one offset for a whole session.
+`stimClock` works as a plain command, as an `@` command, and inside a
+startup script.
 
 ## Linux Systemd Service
 

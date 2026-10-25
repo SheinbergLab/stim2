@@ -485,6 +485,38 @@ static int stimFrameLogCmd(ClientData clientData, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/*
+ * stimClock
+ *   Returns "<ticks_ms> <wall_us> <span_us>": the tick clock
+ *   (1000.0*glfwGetTime(), %.3f -- the same clock and formatting as the
+ *   ACK1 header's dequeue/done stamps) and CLOCK_REALTIME in integer
+ *   microseconds, read back to back.  wall_us is the midpoint of two
+ *   realtime reads taken either side of the tick read; span_us is their
+ *   difference, i.e. the worst-case error of the pairing.  One sample
+ *   lets a client convert tick stamps to wall time; the tick clock is
+ *   monotonic while the wall clock may be slewed (PTP), so resample
+ *   occasionally.  See stimClockSample() in stim2.cpp.
+ */
+static int stimClockCmd(ClientData clientData, Tcl_Interp *interp,
+			int argc, char *argv[])
+{
+  double ticks_ms;
+  long long wall_us, span_us;
+  char buf[64];
+  Tcl_Obj *items[3];
+
+  if (!stimClockSample(&ticks_ms, &wall_us, &span_us)) {
+    Tcl_AppendResult(interp, argv[0], ": realtime clock unavailable", NULL);
+    return TCL_ERROR;
+  }
+  snprintf(buf, sizeof(buf), "%.3f", ticks_ms);
+  items[0] = Tcl_NewStringObj(buf, -1);
+  items[1] = Tcl_NewWideIntObj((Tcl_WideInt) wall_us);
+  items[2] = Tcl_NewWideIntObj((Tcl_WideInt) span_us);
+  Tcl_SetObjResult(interp, Tcl_NewListObj(3, items));
+  return TCL_OK;
+}
+
 
 /*********************************************************************/
 /*                     Setsystem Command                             */
@@ -2731,6 +2763,9 @@ void addTclCommands(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "stimAckHeader", (Tcl_CmdProc *) stimAckHeaderCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "stimFrameLog", (Tcl_CmdProc *) stimFrameLogCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+
+  Tcl_CreateCommand(interp, "stimClock", (Tcl_CmdProc *) stimClockCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
 
 #ifndef NO_EXIT_COMMANDS

@@ -6,6 +6,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <chrono>
+#include <ctime>
 #include <queue>
 #include <algorithm>
 
@@ -669,6 +670,34 @@ double getStimTimeF(void)
 double getStimTicksF(void)
 {
   return StimTicksF;
+}
+
+/********************************************************************
+ * Function:     stimClockSample
+ * Returns:      1 on success, 0 if the realtime clock is unavailable
+ * Description:  Sample the tick clock (1000.0*glfwGetTime(), the clock
+ *               behind StimTicksF and the ACK1 header stamps) and
+ *               CLOCK_REALTIME together, so a client can place tick
+ *               stamps on the wall timeline.  Order: realtime, glfw,
+ *               realtime; *wall_us is the midpoint of the two realtime
+ *               reads and *span_us their difference (the error bound
+ *               of the pairing).  Same realtime source as
+ *               swapsync.cpp's last_flip_wall_us (timespec_get).
+ *               Backs the stimClock Tcl command (tclproc.c).
+ ********************************************************************/
+
+int stimClockSample(double *ticks_ms, long long *wall_us, long long *span_us)
+{
+  struct timespec t0, t1;
+  if (timespec_get(&t0, TIME_UTC) != TIME_UTC) return 0;
+  double ticks = 1000.0 * glfwGetTime();
+  if (timespec_get(&t1, TIME_UTC) != TIME_UTC) return 0;
+  long long w0 = (long long) t0.tv_sec * 1000000LL + t0.tv_nsec / 1000;
+  long long w1 = (long long) t1.tv_sec * 1000000LL + t1.tv_nsec / 1000;
+  if (ticks_ms) *ticks_ms = ticks;
+  if (wall_us) *wall_us = w0 + (w1 - w0) / 2;
+  if (span_us) *span_us = w1 - w0;
+  return 1;
 }
 
 /********************************************************************

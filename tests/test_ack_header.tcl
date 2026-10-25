@@ -13,6 +13,8 @@
 #              followed by the usual result text (possibly empty or
 #              "!TCL_ERROR ...").  ticks are StimTicksF ms (%.3f); flipwall_us
 #              is CLOCK_REALTIME us of the flip for a swap-ack reply, else 0.
+#   stimClock: "<ticks_ms> <wall_us> <span_us>" -- tick clock and
+#              CLOCK_REALTIME sampled together (see section (e) below).
 #
 # Prints OK/FAIL lines and a summary; exits non-zero on any failure.
 
@@ -144,6 +146,47 @@ check "consecutive '@!redraw' swapcounts increase" \
 check "consecutive '@!redraw' dequeue stamps increase" \
     [expr {$r1 ne {} && $r2 ne {} &&
 	   [dict get $r2 dequeue] > [dict get $r1 done]}]
+
+# ---- (e) stimClock: tick clock and wall clock sampled together -----------
+# "<ticks_ms> <wall_us> <span_us>": ticks_ms is the ACK1 tick clock (%.3f),
+# wall_us CLOCK_REALTIME us (midpoint of two reads around the tick read),
+# span_us the difference of those two reads.  Needs stim2 >= 0.28.
+proc numeric {s} { return [string is double -strict $s] }
+
+set r [msg_send $sock "stimClock"]
+set n [llength $r]
+set ok [expr {($n == 2 || $n == 3) && [numeric [lindex $r 0]]
+	      && [string is wideinteger -strict [lindex $r 1]]
+	      && ($n == 2 || [string is wideinteger -strict [lindex $r 2]])}]
+check "stimClock returns 2 or 3 numeric fields" $ok "got {$r}"
+if {$ok} {
+    check "  ticks_ms printed with 3 decimals" \
+	[regexp {^[0-9]+\.[0-9]{3}$} [lindex $r 0]] "got [lindex $r 0]"
+    set here [clock microseconds]
+    check "  wall_us within 1 s of this tclsh's clock microseconds" \
+	[expr {abs([lindex $r 1] - $here) < 1000000}] \
+	"stim2 [lindex $r 1] vs here $here"
+    if {$n == 3} {
+	check "  span_us small (0 <= span < 1000)" \
+	    [expr {[lindex $r 2] >= 0 && [lindex $r 2] < 1000}] \
+	    "got [lindex $r 2]"
+    }
+}
+
+# the sample is taken while the '@stimClock' command runs, so its tick
+# must sit between that command's own dequeue and done stamps
+set r [msg_send $sock "@stimClock"]
+set c [parse_ack $r]
+check "'@stimClock' carries an ACK1 header" [expr {$c ne {}}] "got {$r}"
+if {$c ne {} && [numeric [lindex [dict get $c result] 0]]} {
+    set t [lindex [dict get $c result] 0]
+    check "  dequeue <= ticks_ms <= done" \
+	[expr {$t >= [dict get $c dequeue] && $t <= [dict get $c done]}] \
+	"[dict get $c dequeue] <= $t <= [dict get $c done]"
+    check "  ticks_ms within 5 ms of the dequeue stamp" \
+	[expr {$t - [dict get $c dequeue] < 5.0}] \
+	"[dict get $c dequeue] -> $t"
+}
 
 close $sock
 

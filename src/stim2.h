@@ -186,6 +186,9 @@ extern int getCurrentEye(void);
 extern int getStimTime(void);
 extern double getStimTimeF(void);   /* float ms since reset (no int truncation) */
 extern double getStimTicksF(void);  /* float free-running ms */
+/* tick clock + CLOCK_REALTIME sampled together (stimClock); 0 = no clock */
+extern int stimClockSample(double *ticks_ms, long long *wall_us,
+                           long long *span_us);
 extern double getFrameDuration(void);
 extern int getStereoMode(void);
 extern int setStereoMode(int);
