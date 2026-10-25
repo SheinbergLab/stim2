@@ -1043,8 +1043,56 @@ typedef struct client_request_s {
   std::string script;
   SharedQueue<std::string> *rqueue;
   bool wait_for_swap;       // do we want swap ack?
+  bool ack_header;          // '@' prefix: prepend an ACK1 header to the reply
   int swap_at_queue;        // SwapCount when the reply was deferred
+  double ticks_dequeue;     // glfwGetTime()*1000 when the render thread
+                            // dequeued the request (header stamp)
 } client_request_t;
+
+/* Reply header requested by a '@' command.  Fixed wire format -- the ESS
+   side parses exactly this:
+       ACK1 <ticks_dequeue> <ticks_done> <swapcount> <flipwall_us>\n<result>
+   ticks are StimTicksF-domain ms (%.3f), swapcount the unsigned SwapCount,
+   flipwall_us the CLOCK_REALTIME flip time of a swap-ack reply, exactly as
+   swapsyncLastFlipWallUs() reports it (-1 when the strategy cannot time
+   flips, e.g. glfinish), and 0 for an immediate (non-swap) reply.
+   Longest line: 4+1+ 2x(20 digits + '.' + 3) + 1+10 + 1+20 + '\n' < 96.  */
+#define ACK_HEADER_MAX 96
+
+static inline std::string
+ack_header_reply(double ticks_dequeue, double ticks_done,
+                 int swapcount, long long flipwall_us,
+                 const char *result, size_t result_len)
+{
+  char hdr[ACK_HEADER_MAX];
+  int hn = snprintf(hdr, sizeof(hdr), "ACK1 %.3f %.3f %u %lld\n",
+                    ticks_dequeue, ticks_done, (unsigned) swapcount,
+                    flipwall_us);
+  if (hn < 0) hn = 0;
+  else if ((size_t) hn >= sizeof(hdr)) hn = sizeof(hdr) - 1;
+  std::string reply;
+  reply.reserve((size_t) hn + result_len);
+  reply.append(hdr, (size_t) hn);
+  reply.append(result, result_len);
+  return reply;
+}
+
+/* Strip the optional '@' (ack header) and '!' (swap ack) prefixes, in that
+   order, from an incoming command.  Shared by the CR/LF and the framed
+   message ports so both accept the same prefixes.  Returns the number of
+   prefix bytes to skip.  A bare '!' or an unprefixed command behaves
+   exactly as before '@' existed. */
+static inline size_t
+parse_request_prefix(const char *buf, size_t len,
+                     bool *ack_header, bool *wait_for_swap)
+{
+  size_t off = 0;
+  *ack_header = false;
+  *wait_for_swap = false;
+  if (off < len && buf[off] == '@') { *ack_header = true; off++; }
+  if (off < len && buf[off] == '!') { *wait_for_swap = true; off++; }
+  return off;
+}
 
 typedef struct ds_client_request_s {
   std::string datapoint_string;
@@ -2025,8 +2073,12 @@ proc screen_config {} {
       queue.pop_front();
       const char *script = req->script.c_str();
 
+      /* Dequeue stamp for the ACK1 header: read the clock directly rather
+         than StimTicksF, which the timer thread only refreshes every ms. */
+      if (req->ack_header) req->ticks_dequeue = 1000.0 * glfwGetTime();
+
       // std::cout << "processing tcl request: " << req->script << std::endl;
-      
+
       if (req->wait_for_swap) {
     wait_for_swap = true;
     
@@ -2041,7 +2093,17 @@ proc screen_config {} {
       const char *rcstr = Tcl_GetStringResult(interp);
       if (retcode == TCL_OK) {
     if (!req->wait_for_swap) {
-      if (rcstr) {
+      if (req->ack_header) {
+        /* Immediate reply: done stamp right after Tcl_Eval, current
+           SwapCount, no flip (0).  Pushing to rqueue hands the request
+           back to its client thread, so nothing touches req after it. */
+        const char *res = rcstr ? rcstr : "";
+        req->rqueue->push_back(ack_header_reply(req->ticks_dequeue,
+                                                1000.0 * glfwGetTime(),
+                                                SwapCount, 0,
+                                                res, strlen(res)));
+      }
+      else if (rcstr) {
         req->rqueue->push_back(std::string(rcstr));
       }
       else {
@@ -2057,7 +2119,16 @@ proc screen_config {} {
       }
       else {
     if (!req->wait_for_swap) {
-      if (rcstr) {
+      if (req->ack_header) {
+        std::string err = rcstr ? "!TCL_ERROR " + std::string(rcstr)
+                                : std::string("Error:");
+        if (rcstr) log.AddLog("[error]: %s\n", rcstr);
+        req->rqueue->push_back(ack_header_reply(req->ticks_dequeue,
+                                                1000.0 * glfwGetTime(),
+                                                SwapCount, 0,
+                                                err.data(), err.size()));
+      }
+      else if (rcstr) {
         req->rqueue->push_back("!TCL_ERROR "+std::string(rcstr));
         //      std::cout << "Error: " + std::string(rcstr) << std::endl;
         log.AddLog("[error]: %s\n", rcstr);
@@ -2146,7 +2217,19 @@ proc screen_config {} {
       if (log_level && req->swap_at_queue == SwapCount)
 	log.AddLog("[%.3f]: warning: swap-ack released with no intervening "
 		   "swap: %s\n", glfwGetTime(), req->script.c_str());
-      req->rqueue->push_back(req->script);
+      if (req->ack_header) {
+	/* '@!' reply: done stamp, SwapCount and the hardware flip time are
+	   read here, after the swap this command caused. */
+	req->rqueue->push_back(ack_header_reply(req->ticks_dequeue,
+						1000.0 * glfwGetTime(),
+						SwapCount,
+						swapsyncLastFlipWallUs(),
+						req->script.data(),
+						req->script.size()));
+      }
+      else {
+	req->rqueue->push_back(req->script);
+      }
       if (log_level) log.AddLog("[%.3f]: %s\n", glfwGetTime(), req->script.c_str());
 #ifdef JETSON_NANO
       GPIO::output(output_pin, GPIO::LOW);
@@ -2503,14 +2586,10 @@ Application::tcp_client_process(int sockfd,
       if (c == '\n') {
     
     if (script.length() > 0) {
-      if (script[0] == '!') {
-        client_request.wait_for_swap = true;
-        client_request.script = script.substr(1);
-      }
-      else {
-        client_request.wait_for_swap = false;
-        client_request.script = std::string(script);
-      }
+      size_t off = parse_request_prefix(script.data(), script.size(),
+                                        &client_request.ack_header,
+                                        &client_request.wait_for_swap);
+      client_request.script = script.substr(off);
       /* push request onto queue for main thread to retrieve */
       queue->push_back(&client_request);
       
@@ -2603,15 +2682,11 @@ Application::message_client_process(int sockfd,
     auto [buffer, msgSize] = receiveMessage(sockfd);
     if (buffer == nullptr) break;
     if (msgSize) {
-      if (buffer[0] == '!') {
-    client_request.wait_for_swap = true;
-    client_request.script = std::string(buffer+1, msgSize-1);
-      }
-      else {
-    client_request.wait_for_swap = false;
-    client_request.script = std::string(buffer, msgSize);
-      }
-      
+      size_t off = parse_request_prefix(buffer, msgSize,
+                                        &client_request.ack_header,
+                                        &client_request.wait_for_swap);
+      client_request.script = std::string(buffer + off, msgSize - off);
+
       /* push request onto queue for main thread to retrieve */
       queue->push_back(&client_request);
       

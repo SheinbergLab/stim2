@@ -417,6 +417,20 @@ static int pingCmd(ClientData clientData, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/*
+ * stimAckHeader
+ *   Capability probe: returns 1 when this stim2 honours the '@' reply
+ *   prefix (ACK1 header on message-port replies, see stim2.cpp).  ESS
+ *   calls it once at configure; an older stim2 answers "invalid command
+ *   name", which ESS treats as unsupported.
+ */
+static int stimAckHeaderCmd(ClientData clientData, Tcl_Interp *interp,
+			    int argc, char *argv[])
+{
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(1));
+  return TCL_OK;
+}
+
 
 /*********************************************************************/
 /*                     Setsystem Command                             */
@@ -2657,7 +2671,10 @@ void addTclCommands(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "setsystem", (Tcl_CmdProc *) setsystemCmd, 
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
 
-  Tcl_CreateCommand(interp, "ping", (Tcl_CmdProc *) pingCmd, 
+  Tcl_CreateCommand(interp, "ping", (Tcl_CmdProc *) pingCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+
+  Tcl_CreateCommand(interp, "stimAckHeader", (Tcl_CmdProc *) stimAckHeaderCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
 
 #ifndef NO_EXIT_COMMANDS
