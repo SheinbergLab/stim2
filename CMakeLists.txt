@@ -162,6 +162,7 @@ set(STIM2_SOURCES
     src/timer.cpp
     src/swapsync.cpp
     src/framelog.cpp
+    src/latedraw.cpp
     src/glad.c
     src/rawapi.c
     src/diagnostics.cpp
@@ -188,6 +189,14 @@ endif()
 # command (tclproc.c): CI passes the git tag as PROJECT_VERSION, a local
 # configure gets the 0.0.0 default above. ESS records it in stim/script.
 target_compile_definitions(stim2 PRIVATE STIM2_VERSION="${PROJECT_VERSION}")
+
+# Unit check of the draw-late scheduler arithmetic (src/latedraw.cpp is
+# pure: no GL, no Tcl), so it runs without a display:
+#     ctest --test-dir build -R latedraw      (or ./build/latedraw_check)
+enable_testing()
+add_executable(latedraw_check tests/latedraw_check.cpp src/latedraw.cpp)
+target_include_directories(latedraw_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME latedraw_check COMMAND latedraw_check)
 
 # The vendored imgui (1.84-era) zeroes its own structs with memset inside
 # inline constructors; clang 17+ flags that (-Wnontrivial-memcall) in every

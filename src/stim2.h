@@ -190,6 +190,20 @@ extern double getStimTicksF(void);  /* float free-running ms */
 /* tick clock + CLOCK_REALTIME sampled together (stimClock); 0 = no clock */
 extern int stimClockSample(double *ticks_ms, long long *wall_us,
                            long long *span_us);
+
+/* draw-late scheduler (stimLateDraw; see latedraw.h).  Enable returns -1
+   with err filled when the swap-sync strategy has no flip timestamps. */
+typedef struct latedraw_status_s {
+  int enabled;
+  double budget_ms;        /* the floor the user set */
+  double effective_ms;     /* current adaptive budget */
+  double period_ms;        /* 0 = unknown (scheduler dormant) */
+  long draws, late;
+  double draw_ms_med, draw_ms_max;
+} latedraw_status_t;
+extern int stimLateDrawEnable(double budget_ms, char *err, int errlen);
+extern void stimLateDrawDisable(void);
+extern void stimLateDrawStatus(latedraw_status_t *st);
 extern double getFrameDuration(void);
 extern int getStereoMode(void);
 extern int setStereoMode(int);

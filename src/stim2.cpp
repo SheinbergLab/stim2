@@ -38,6 +38,7 @@
 
 #include "SharedQueue.h"
 #include "framelog.h"
+#include "latedraw.h"
 #include "WebSocketServer.h"
 #include "TclCompletion.h"
 
@@ -1420,6 +1421,68 @@ public:
     wake_queue.clear_all();
   }
 
+  /* Late-draw's timed wait: block at most ms (>= 1) for a wake-up, then
+     drain the queue exactly as wait_for_wakeup does.  Only the deferral
+     window uses it; every other iteration still blocks indefinitely. */
+  void wait_for_wakeup_ms(int ms) {
+    wake_queue.wait_with_timeout(ms);
+    wake_queue.clear_all();
+  }
+
+  /* ---- draw-late scheduler (render thread only; see latedraw.h) -------- */
+  latedraw_state_t latedraw = {};
+  double latedraw_swap_submit = 0.0;  /* glfwGetTime() right after the last
+                                         glfwSwapBuffers while enabled */
+
+  /* What lateDrawDefer() learned about this iteration, for the accounting
+     after the frame it allowed.  active: the scheduler governed this frame
+     (enabled, dynamic, period and a flip timestamp known). */
+  struct LateDrawFrame {
+    bool active = false;
+    double t0 = 0.0;          /* clock just before the object step */
+    double flip0 = 0.0;       /* flip the target was computed from */
+    long missed0 = 0;         /* swapsyncMissedFrames() before the draw */
+  };
+
+  /* Decide whether the next dynamic frame must wait.  Returns true to skip
+     the step+draw this iteration, with *wait_ms the whole milliseconds the
+     next wait may block (0 = don't wait at all).  Costs one clock read and
+     a comparison on the governed path; a few plain loads otherwise. */
+  bool lateDrawDefer(LateDrawFrame *f, int *wait_ms) {
+    if (!latedraw.enabled || !OL_DYNAMIC(OBJList)) return false;
+    double flip = swapsyncLastFlipTime();
+    if (flip <= 0.0) return false;                 /* dormant: no flips */
+    double period = latedrawPeriodMs(&latedraw, swapsyncLastRefreshMs());
+    if (period <= 0.0) return false;               /* dormant: no period */
+    double now = glfwGetTime();
+    double target = latedrawTarget(flip, period, latedraw.effective_ms);
+    if (now < target) {
+      *wait_ms = latedrawWaitMs(now, target);
+      return true;
+    }
+    f->active = true;
+    f->t0 = now;
+    f->flip0 = flip;
+    f->missed0 = swapsyncMissedFrames();
+    return false;
+  }
+
+  /* After a frame the scheduler governed: draw time (step to swap submit),
+     late detection (missed counter advanced or flip interval > 1.5 periods),
+     and the budget adaptation.  A frame whose arm did not swap (no new
+     submit stamp) is not counted. */
+  void lateDrawAccount(const LateDrawFrame &f) {
+    if (!f.active || latedraw_swap_submit < f.t0) return;
+    double flip1 = swapsyncLastFlipTime();
+    double interval_ms = (flip1 - f.flip0) * 1000.0;
+    latedrawNoteFlipInterval(&latedraw, interval_ms);
+    double period = latedrawPeriodMs(&latedraw, swapsyncLastRefreshMs());
+    double draw_ms = (latedraw_swap_submit - f.t0) * 1000.0;
+    int late = latedrawIsLate(f.missed0, swapsyncMissedFrames(),
+                              interval_ms, period);
+    latedrawOnFrame(&latedraw, draw_ms, late, period);
+  }
+
   
   // for client requests over tcp
   SharedQueue<client_request_t *> queue;
@@ -2413,6 +2476,52 @@ static void do_wakeup(void)
   app.wakeup();
 }
 
+/*
+ * stimLateDraw backing (tclproc.c).  All on the render thread: the Tcl
+ * interpreter runs there, and the scheduler state is plain data.
+ */
+int stimLateDrawEnable(double budget_ms, char *err, int errlen)
+{
+  if (!(budget_ms > 0.0)) {
+    snprintf(err, errlen, "budget must be a positive number of ms");
+    return -1;
+  }
+  if (swapsyncLastFlipTime() <= 0.0 || swapsyncLastRefreshMs() <= 0.0) {
+    snprintf(err, errlen,
+             "late-draw needs hardware flip timestamps and a refresh period, "
+             "but the \"%s\" swap-sync strategy has %s "
+             "(flip timestamps are required; the oml and presentation "
+             "strategies provide them once a frame has been swapped)",
+             swapsyncStrategyName(),
+             swapsyncLastFlipTime() <= 0.0 ? "reported no flip yet"
+                                           : "no refresh period");
+    return -1;
+  }
+  latedrawInit(&app.latedraw, budget_ms);
+  app.latedraw.enabled = 1;
+  do_wakeup();
+  return 0;
+}
+
+void stimLateDrawDisable(void)
+{
+  /* keep the floor and stats for status; just stop governing frames */
+  app.latedraw.enabled = 0;
+}
+
+void stimLateDrawStatus(latedraw_status_t *st)
+{
+  const latedraw_state_t *s = &app.latedraw;
+  st->enabled = s->enabled;
+  st->budget_ms = s->floor_ms;
+  st->effective_ms = s->effective_ms;
+  st->period_ms = latedrawPeriodMs(s, swapsyncLastRefreshMs());
+  st->draws = s->draws;
+  st->late = s->late;
+  st->draw_ms_med = latedrawDrawMedianMs(s);
+  st->draw_ms_max = latedrawDrawMaxMs(s);
+}
+
 void Application::start_tcp_server(void)
 {
   struct sockaddr_in address;
@@ -3047,6 +3156,7 @@ void Application::updateDisplay(bool log_events)
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PreSwap");
     swapsyncBeforeSwap();
     glfwSwapBuffers(window);
+    if (latedraw.enabled) latedraw_swap_submit = glfwGetTime();
     waitForSwap();
     frame_ticks_us = (long long) (1e6 * glfwGetTime());
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PostSwap");
@@ -3084,6 +3194,7 @@ void Application::updateDisplay(bool log_events)
     /* Swap front and back buffers */
     swapsyncBeforeSwap();
     glfwSwapBuffers(window);
+    if (latedraw.enabled) latedraw_swap_submit = glfwGetTime();
     /* Wait for swap */
     waitForSwap();
     frame_ticks_us = (long long) (1e6 * glfwGetTime());
@@ -3118,6 +3229,7 @@ void Application::updateDisplay(bool log_events)
     /* Only swap and acknowledge -- no clear, no draw */
     swapsyncBeforeSwap();
     glfwSwapBuffers(window);
+    if (latedraw.enabled) latedraw_swap_submit = glfwGetTime();
     SwapCount++;
     waitForSwap();
     frame_ticks_us = (long long) (1e6 * glfwGetTime());
@@ -3815,8 +3927,15 @@ main(int argc, char *argv[]) {
 
   redraw();
 
+  /* Late-draw: how the NEXT iteration waits.  -1 = block for a wake-up as
+     always; N > 0 = block at most N ms (the time left to the draw target);
+     0 = the target is under 1 ms away, don't block at all. */
+  int late_wait_ms = -1;
+
   while (!glfwWindowShouldClose(app.window)) {
-    app.wait_for_wakeup();
+    if (late_wait_ms < 0) app.wait_for_wakeup();
+    else if (late_wait_ms > 0) app.wait_for_wakeup_ms(late_wait_ms);
+    late_wait_ms = -1;
 
     glfwPollEvents();
     
@@ -3830,17 +3949,32 @@ main(int argc, char *argv[]) {
 
     updated_display = app.processMessages(app.wait_for_swap);
     animEventPending = 0;
-    
-    if (!updated_display && (app.doUpdate() || app.frameWorkPending())) {
+
+    /* Draw-late: with the scheduler on and the display in continuous
+       dynamic mode, the next frame's step+draw waits until
+       lastFlip + period - budget; until then this pass skips the draw and
+       the loop keeps answering commands and datapoints.  Off, not dynamic,
+       or with no flip timestamps, lateDrawDefer() is false and this is the
+       loop as it always was. */
+    Application::LateDrawFrame ldf;
+    bool deferred = false;
+    if (!updated_display && app.lateDrawDefer(&ldf, &late_wait_ms)) {
+      deferred = true;          /* nothing to draw this pass */
+    }
+    else if (!updated_display && (app.doUpdate() || app.frameWorkPending())) {
       app.updateDisplay(app.wait_for_swap);
-      app.count_frame();     
+      app.count_frame();
+      app.lateDrawAccount(ldf);
     }
 
     if (updated_display) {
         app.count_frame();
     }
 
-    app.processReplies();
+    /* A '!' command dequeued during a deferral pass keeps its promise of
+       "ack after the swap": its reply stays queued until the pass that
+       draws.  Without deferral this is the unconditional call it was. */
+    if (!deferred) app.processReplies();
 
     // track status, FPS, and frame count
     static unsigned int last_ws_update = 0;

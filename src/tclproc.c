@@ -504,6 +504,70 @@ static int stimFrameLogCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 /*
+ * stimLateDraw ?budget_ms?
+ *   Opt-in "draw late" scheduler for continuous dynamic displays (see
+ *   latedraw.h): the next frame's step+draw is deferred until
+ *   lastFlip + period - budget so commands and datapoints arriving during
+ *   the frame show one frame sooner.  budget_ms > 0 enables with that
+ *   floor; 0 disables; no argument reports.  Every form returns the state
+ *       enabled 0|1 budget_ms <floor> effective_ms <adaptive> period_ms <p>
+ *       draws <n> late <n> draw_ms_med <x> draw_ms_max <x>
+ *   (draw_ms_* over the last 256 governed draws).  Enabling is refused,
+ *   naming the swap-sync strategy, until that strategy has reported a
+ *   hardware flip timestamp and refresh period.  An older stim2 answers
+ *   "invalid command name", which is ESS's probe.
+ */
+static int stimLateDrawCmd(ClientData clientData, Tcl_Interp *interp,
+			   int argc, char *argv[])
+{
+  latedraw_status_t st;
+  Tcl_Obj *d;
+
+  if (argc > 2) {
+    Tcl_SetResult(interp, "usage: stimLateDraw ?budget_ms?", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  if (argc == 2) {
+    double budget;
+    char err[256];
+    if (Tcl_GetDouble(interp, argv[1], &budget) != TCL_OK) return TCL_ERROR;
+    if (budget == 0.0) {
+      stimLateDrawDisable();
+    }
+    else if (budget < 0.0) {
+      Tcl_AppendResult(interp, argv[0], ": budget_ms must be >= 0 (0 disables)",
+		       NULL);
+      return TCL_ERROR;
+    }
+    else if (stimLateDrawEnable(budget, err, sizeof(err)) < 0) {
+      Tcl_AppendResult(interp, argv[0], ": ", err, NULL);
+      return TCL_ERROR;
+    }
+  }
+
+  stimLateDrawStatus(&st);
+  d = Tcl_NewDictObj();
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("enabled", -1),
+		 Tcl_NewIntObj(st.enabled));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("budget_ms", -1),
+		 Tcl_NewDoubleObj(st.budget_ms));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("effective_ms", -1),
+		 Tcl_NewDoubleObj(st.effective_ms));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("period_ms", -1),
+		 Tcl_NewDoubleObj(st.period_ms));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("draws", -1),
+		 Tcl_NewLongObj(st.draws));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("late", -1),
+		 Tcl_NewLongObj(st.late));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("draw_ms_med", -1),
+		 Tcl_NewDoubleObj(st.draw_ms_med));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("draw_ms_max", -1),
+		 Tcl_NewDoubleObj(st.draw_ms_max));
+  Tcl_SetObjResult(interp, d);
+  return TCL_OK;
+}
+
+/*
  * stimClock
  *   Returns "<ticks_ms> <wall_us> <span_us>": the tick clock
  *   (1000.0*glfwGetTime(), %.3f -- the same clock and formatting as the
@@ -2783,6 +2847,8 @@ void addTclCommands(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "stimVersion", (Tcl_CmdProc *) stimVersionCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "stimFrameLog", (Tcl_CmdProc *) stimFrameLogCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "stimLateDraw", (Tcl_CmdProc *) stimLateDrawCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
 
   Tcl_CreateCommand(interp, "stimClock", (Tcl_CmdProc *) stimClockCmd,
