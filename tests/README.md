@@ -14,11 +14,16 @@ Self-checking scripts that run inside a real stim2. Each prints `OK` /
 | `test_frame_grab.tcl` | `frameGrab` (pixels, row order, `-rect`, `-alpha`, dlsh conversion) and `afterFrames` (exact swap counts on a static display; display messages are not delayed) |
 | `test_dynlist_numeric.tcl` | every numeric dynlist type through the modules that read coordinate, id and pixel lists |
 | `test_ack_header.tcl` | the `@` reply-header prefix on the message port (`ACK1 <dequeue> <done> <swapcount> <flipwall_us>\n<result>`), `@!` after-swap stamps, `stimAckHeader` probe, and that plain and `!` commands are unchanged |
+| `test_stimess.tcl` | the `stimess` package (`modules/stimess-1.0.tm`, see `docs/stimess.md`): `stim::bind` / `get` / `count` / event handlers / error counting / `unbind_all` / `bindings_json`, with stim2's `::dsCmds` dispatch imitated and the qpcs procs stubbed |
 
-`test_ack_header.tcl` is the exception: it is a client, run from `tclsh`
-against an already running stim2 (default `localhost 4612`):
+Two tests are exceptions and run from plain `tclsh`. `test_ack_header.tcl`
+is a client against an already running stim2 (default `localhost 4612`):
 
     tclsh tests/test_ack_header.tcl ?host? ?port?
+
+`test_stimess.tcl` needs neither stim2 nor dserv:
+
+    tclsh tests/test_stimess.tcl
 
 To check what a scene draws, chain steps with `afterFrames n script` and
 read frames with `frameGrab script`, which gets `w h pixels swapcount`
