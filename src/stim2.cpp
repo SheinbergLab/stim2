@@ -2342,6 +2342,12 @@ proc screen_config {} {
 // Allow other functions to access
 Application app;
 
+/* Websocket console port (--port-base + 3), for the diagnostics overlay */
+int getWebSocketPort(void)
+{
+  return app.websocket_port;
+}
+
 /* C-linkage frame-tag glue for tclproc.c (declared in stim2.h) */
 void swapTagAdd(const char *payload)
 {
@@ -3543,6 +3549,7 @@ main(int argc, char *argv[]) {
   int xpos = 30, ypos = 30;
   float refresh = 60;
   int interval = 2;
+  int port_base = 4610;
   const char *startup_file = NULL;
   bool updated_display = false;
 
@@ -3579,6 +3586,9 @@ main(int argc, char *argv[]) {
     ("t,timer", "timer interval", cxxopts::value<int>(interval))
     ("F,fullscreen", "Fullscreen mode", cxxopts::value<bool>(fullscreen))
     ("f,file", "File name", cxxopts::value<std::string>())
+    ("port-base", "First of the four listener ports: command (N), "
+     "dataserver (N+1), message (N+2), websocket (N+3)",
+     cxxopts::value<int>(port_base)->default_value("4610"))
     ("help", "Print help", cxxopts::value<bool>(help))
     ;
 
@@ -3598,7 +3608,20 @@ main(int argc, char *argv[]) {
     std::cout << options.help({"", "Group"}) << std::endl;
     exit(0);
   }
-  
+
+  /* All four listeners move together so a second stim2 (a test build,
+     say) can run beside one on the default ports.  Set before any server
+     or the websocket console starts. */
+  if (port_base < 1024 || port_base + 3 > 65535) {
+    std::cout << "error: --port-base must be between 1024 and 65532 (got "
+              << port_base << ")" << std::endl;
+    exit(1);
+  }
+  app.tcpport = port_base;
+  app.dsport = port_base + 1;
+  app.messageport = port_base + 2;
+  app.websocket_port = port_base + 3;
+
 #ifdef _WIN32
   glfwWindowHint (GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint (GLFW_CONTEXT_VERSION_MINOR, 2);

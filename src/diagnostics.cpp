@@ -183,7 +183,8 @@ void DiagnosticsPanel::drawSections()
                 DiagColor c = iface.up ? DIAG_GREEN : DIAG_RED;
                 std::string val = iface.addr;
                 if (!iface.up) val += "  (down)";
-                else val += "  ->  http://" + iface.addr + ":4613";
+                else val += "  ->  http://" + iface.addr + ":" +
+                         std::to_string(getWebSocketPort());
                 entries.push_back({iface.name, val, c});
             }
         }

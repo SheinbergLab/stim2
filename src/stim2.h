@@ -179,6 +179,7 @@ extern void sendDispMsgWithData(int event, int data);
 extern float *getBackgroundColor(void);
 extern int getHWND(void);
 extern int getSwapCount(void);
+extern int getWebSocketPort(void);  /* console port: --port-base + 3 */
 extern FILE *getConsoleFP(void);
 extern char *getWGLExtensions(void);
 extern int getOverlayStatus(void);

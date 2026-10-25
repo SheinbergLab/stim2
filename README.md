@@ -78,6 +78,7 @@ For real experiment systems, it is of course essential to get these numbers corr
 | `-t` | `--timer` | Timer interval (ms) | — |
 | `-F` | `--fullscreen` | Run in fullscreen mode | off |
 | `-f` | `--file` | Tcl startup script to source | none |
+| | `--port-base` | First listener port N: command port N, dataserver N+1, message port N+2, websocket console N+3 | 4610 |
 | | `--help` | Print help message | |
 
 ### Examples
@@ -94,6 +95,10 @@ stim2 -b -f experiment.tcl
 
 # Verbose mode for debugging
 stim2 -v -F
+
+# A development build beside a running stim2: listens on 5610-5613
+# (message port 5612, console at http://localhost:5613/)
+stim2 --port-base 5610 -w 400 -h 300
 ```
 
 ## Example: Monitor Configuration
@@ -119,8 +124,9 @@ The default install includes a startup config file that:
 ## Message port, ACK1 reply header and `stimClock`
 
 Remote clients (ESS on dserv, `stimctrl`) drive stim2 over the framed
-message port, TCP 4612: each request and reply is a 4-byte big-endian
-length followed by the payload. Two optional prefixes on a command:
+message port, TCP 4612 by default (`--port-base` + 2): each request and
+reply is a 4-byte big-endian length followed by the payload. Two optional
+prefixes on a command:
 
 * `!` -- reply only after the next swap (unchanged behaviour).
 * `@` -- prepend a timing header to the reply:
