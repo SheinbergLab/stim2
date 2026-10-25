@@ -36,6 +36,7 @@
 #endif
 
 #include "SharedQueue.h"
+#include "framelog.h"
 #include "WebSocketServer.h"
 #include "TclCompletion.h"
 
@@ -2089,6 +2090,7 @@ proc screen_config {} {
       }
 
       retcode = Tcl_Eval(interp, script);
+      FrameLogCmdsApplied++;      /* stim/frame: commands applied so far */
 
       const char *rcstr = Tcl_GetStringResult(interp);
       if (retcode == TCL_OK) {
@@ -2162,6 +2164,7 @@ proc screen_config {} {
       n++;
       req = ds_queue.front();
       ds_queue.pop_front();
+      FrameLogDsDispatched++;     /* stim/frame: every forwarded datapoint */
       char *dsstring = strdup(req->datapoint_string.c_str());
       /* The request is ours now (ds_client_process allocates one per
          datapoint) and the string is already copied out, so release it
@@ -2972,9 +2975,22 @@ void Application::deliverFrameWork(void)
   if (frameWorkPending()) do_wakeup();
 }
 
+/* stim/frame record for the swap just completed (see framelog.h).  Called
+   on the render thread right after SwapCount++ in every arm that really
+   swapped; ticks_us was read the moment waitForSwap returned.  Costs an
+   atomic load when the stream is off. */
+static inline void frameLogSwap(long long ticks_us)
+{
+  if (!frameLogEnabled()) return;
+  frameLogPush(SwapCount, swapsyncLastFlipWallUs(), ticks_us,
+               swapsyncMissedFrames(), FrameLogCmdsApplied,
+               FrameLogDsDispatched);
+}
+
 void Application::updateDisplay(bool log_events)
 {
   OBJ_GROUP *g = NULL;
+  long long frame_ticks_us;
   if (OGL_NGROUPS(GList)) g = OGL_GROUP(GList, OGL_CURGROUP(GList));
   if (!g) return;
 
@@ -2997,8 +3013,10 @@ void Application::updateDisplay(bool log_events)
     swapsyncBeforeSwap();
     glfwSwapBuffers(window);
     waitForSwap();
+    frame_ticks_us = (long long) (1e6 * glfwGetTime());
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PostSwap");
     SwapCount++;
+    frameLogSwap(frame_ticks_us);
     deliverSwapTags();
     deliverFrameWork();
     return;
@@ -3033,9 +3051,11 @@ void Application::updateDisplay(bool log_events)
     glfwSwapBuffers(window);
     /* Wait for swap */
     waitForSwap();
+    frame_ticks_us = (long long) (1e6 * glfwGetTime());
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PostSwap");
 
     SwapCount++;
+    frameLogSwap(frame_ticks_us);
 
     if (OGL_NEWLY_VISIBLE(GList)) {
       OGL_NEWLY_VISIBLE(GList) = 0;
@@ -3065,6 +3085,8 @@ void Application::updateDisplay(bool log_events)
     glfwSwapBuffers(window);
     SwapCount++;
     waitForSwap();
+    frame_ticks_us = (long long) (1e6 * glfwGetTime());
+    frameLogSwap(frame_ticks_us);
 
     /* Call any installed post frame command */
     updateTimes();

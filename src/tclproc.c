@@ -28,6 +28,7 @@
 #include "objname.h"
 #include "diagnostics.h"
 #include "swapsync.h"
+#include "framelog.h"
 
 /* Global asset search paths - Tcl list stored as string */
 static Tcl_Obj *assetSearchPaths = NULL;
@@ -428,6 +429,59 @@ static int stimAckHeaderCmd(ClientData clientData, Tcl_Interp *interp,
 			    int argc, char *argv[])
 {
   Tcl_SetObjResult(interp, Tcl_NewIntObj(1));
+  return TCL_OK;
+}
+
+/*
+ * stimFrameLog ?host? ?0|1?
+ *   Per-swap frame record streamed to dserv as the datapoint "stim/frame"
+ *   (see framelog.h for the seven int64 fields).  host is "host" or
+ *   "host:port" (default port 4620, dserv's fire-and-forget datapoint
+ *   port).  With 1: connect (asynchronously) and start the writer; a
+ *   different host restarts it.  With 0: stop and close.  Every form
+ *   returns the current state as a dict
+ *       enabled 0|1 host <h> sent <n> dropped <n> connected 0|1
+ *   so the bare command doubles as ESS's capability probe (an older stim2
+ *   answers "invalid command name").
+ */
+static int stimFrameLogCmd(ClientData clientData, Tcl_Interp *interp,
+			   int argc, char *argv[])
+{
+  framelog_status_t st;
+  Tcl_Obj *d;
+
+  if (argc > 3) {
+    Tcl_SetResult(interp, "usage: stimFrameLog ?host? ?0|1?", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  if (argc == 3) {
+    int on;
+    const char *err = NULL;
+    if (Tcl_GetBoolean(interp, argv[2], &on) != TCL_OK) return TCL_ERROR;
+    if (on) {
+      if (frameLogStart(argv[1], &err) < 0) {
+	Tcl_SetResult(interp, (char *) err, TCL_STATIC);
+	return TCL_ERROR;
+      }
+    }
+    else {
+      frameLogStop();
+    }
+  }
+
+  frameLogStatus(&st);
+  d = Tcl_NewDictObj();
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("enabled", -1),
+		 Tcl_NewIntObj(st.enabled));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("host", -1),
+		 Tcl_NewStringObj(st.host, -1));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("sent", -1),
+		 Tcl_NewWideIntObj((Tcl_WideInt) st.sent));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("dropped", -1),
+		 Tcl_NewWideIntObj((Tcl_WideInt) st.dropped));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("connected", -1),
+		 Tcl_NewIntObj(st.connected));
+  Tcl_SetObjResult(interp, d);
   return TCL_OK;
 }
 
@@ -2675,6 +2729,8 @@ void addTclCommands(Tcl_Interp *interp)
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
 
   Tcl_CreateCommand(interp, "stimAckHeader", (Tcl_CmdProc *) stimAckHeaderCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "stimFrameLog", (Tcl_CmdProc *) stimFrameLogCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
 
 #ifndef NO_EXIT_COMMANDS

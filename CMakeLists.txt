@@ -161,6 +161,7 @@ set(STIM2_SOURCES
     src/prmutil.c
     src/timer.cpp
     src/swapsync.cpp
+    src/framelog.cpp
     src/glad.c
     src/rawapi.c
     src/diagnostics.cpp
