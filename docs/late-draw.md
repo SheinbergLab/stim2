@@ -102,9 +102,15 @@ state is plain data on the render thread.
 
 ## Validating on the rig
 
-The 120 Hz Pi rig (Wayland, `presentation` strategy, flip timestamps from
-the compositor) is where the effect can be measured; a Mac's `glfinish`
-strategy refuses to enable.
+A rig with flip timestamps is where the effect can be measured: the
+120 Hz X11 display box (`oml` strategy, flip timestamps from
+`glXWaitForSbcOML`; the period is measured from consecutive UST/MSC
+stamps, with the video mode's period standing in after the first swap) or
+a Wayland rig (`presentation` strategy, period reported by the
+compositor). A Mac's `glfinish` strategy refuses to enable. On a
+compositor the frame must also make the compositor's repaint deadline,
+so expect the adaptation to settle at a larger `effective_ms` there than
+on direct X11 flips.
 
 1. Start stim2 as usual, let ESS configure it, swap at least one frame.
    `swapStats` must show `refresh` of about 8.333 and a positive

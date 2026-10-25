@@ -97,6 +97,7 @@ static struct {
   PFN_WaitForSbcOML wait_for_sbc;
   double mono_to_glfw;          /* glfwGetTime() - CLOCK_MONOTONIC seconds */
   int ust_reliable;             /* UST verified to be CLOCK_MONOTONIC us */
+  int64_t prev_ust, prev_msc;   /* previous flip, for the measured period */
 } oml;
 
 static double mono_now(void)
@@ -151,7 +152,20 @@ static void oml_wait(void)
   if (oml.wait_for_sbc(oml.dpy, oml.drawable, 0, &ust, &msc, &sbc)) {
     double flip = oml.ust_reliable ? ust * 1e-6 + oml.mono_to_glfw
                                    : glfwGetTime();
-    record_flip(flip, msc, 0.0);
+    /* Refresh period: X11 has no per-flip report like wp_presentation's,
+       so measure it from the hardware stamps -- UST delta over MSC delta
+       between consecutive flips, which stays right across missed frames.
+       Until a second flip exists (or when UST is unusable), the video
+       mode's period stands in, so late-draw can enable after one swap. */
+    double refresh_ms = 1000.0 * ss.frame_period;
+    if (oml.ust_reliable && oml.prev_msc > 0 && msc > oml.prev_msc &&
+        ust > oml.prev_ust) {
+      double measured = (ust - oml.prev_ust) * 1e-3 / (double) (msc - oml.prev_msc);
+      if (measured > 1.0 && measured < 100.0) refresh_ms = measured;
+    }
+    oml.prev_ust = ust;
+    oml.prev_msc = msc;
+    record_flip(flip, msc, refresh_ms);
   }
   else {
     glFinish();                 /* server hiccup: at least drain the GPU */
