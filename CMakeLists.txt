@@ -184,6 +184,11 @@ else()
     add_executable(stim2 ${STIM2_SOURCES})
 endif()
 
+# The release string the binary reports through the `stimVersion` Tcl
+# command (tclproc.c): CI passes the git tag as PROJECT_VERSION, a local
+# configure gets the 0.0.0 default above. ESS records it in stim/script.
+target_compile_definitions(stim2 PRIVATE STIM2_VERSION="${PROJECT_VERSION}")
+
 # The vendored imgui (1.84-era) zeroes its own structs with memset inside
 # inline constructors; clang 17+ flags that (-Wnontrivial-memcall) in every
 # unit that includes imgui.h. Upstream cast it away years later, and the

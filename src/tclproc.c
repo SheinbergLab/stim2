@@ -433,6 +433,24 @@ static int stimAckHeaderCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 /*
+ * stimVersion
+ *   The release this binary was built from: the PROJECT_VERSION CMake
+ *   passes in (the git tag in CI, e.g. "0.27.2"; "0.0.0" for a local
+ *   build that set none).  ESS records it in stim/script so a data file
+ *   says which stim2 produced it.  The Tcl-linked StimVersion global is
+ *   the wire-level format number (20), not a release, and stays as it is.
+ */
+#ifndef STIM2_VERSION
+#define STIM2_VERSION "0.0.0"
+#endif
+static int stimVersionCmd(ClientData clientData, Tcl_Interp *interp,
+			  int argc, char *argv[])
+{
+  Tcl_SetResult(interp, (char *) STIM2_VERSION, TCL_STATIC);
+  return TCL_OK;
+}
+
+/*
  * stimFrameLog ?host? ?0|1?
  *   Per-swap frame record streamed to dserv as the datapoint "stim/frame"
  *   (see framelog.h for the seven int64 fields).  host is "host" or
@@ -2761,6 +2779,8 @@ void addTclCommands(Tcl_Interp *interp)
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
 
   Tcl_CreateCommand(interp, "stimAckHeader", (Tcl_CmdProc *) stimAckHeaderCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "stimVersion", (Tcl_CmdProc *) stimVersionCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "stimFrameLog", (Tcl_CmdProc *) stimFrameLogCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
