@@ -234,19 +234,30 @@ case "$ARCH" in
     *) AGENT_ARCH="" ;;
 esac
 
-# Bootstrap dserv-agent only on standalone stim2 systems (no dserv)
+# Bootstrap dserv-agent only on standalone stim2 systems (no dserv).
+#
+# Look for the binary by PATH, under apt's maintainer-script PATH (which
+# omits /usr/local/bin, so `command -v` alone said "not found" on a box
+# that had been running dserv-agent for weeks) and then the curl wrote
+# straight over the RUNNING binary: "Text file busy", exit 23, and the
+# stim2 package left half-configured until the next dpkg run.  Download
+# to a temp file and rename into place, which is atomic and is allowed
+# on a running executable, and never let a download failure fail the
+# package: stim2 itself is installed and fine either way.
 if [ -n "$AGENT_ARCH" ] \
    && ! dpkg -s dserv >/dev/null 2>&1 \
-   && ! command -v dserv-agent >/dev/null 2>&1; then
+   && ! command -v dserv-agent >/dev/null 2>&1 \
+   && [ ! -x /usr/local/bin/dserv-agent ]; then
     echo "dserv-agent not found (standalone stim2), installing..."
 
     AGENT_URL=$(curl -s https://api.github.com/repos/SheinbergLab/dserv/releases/latest \
         | grep "browser_download_url.*dserv-agent_linux_${AGENT_ARCH}" \
         | head -1 | cut -d'"' -f4)
 
-    if [ -n "$AGENT_URL" ]; then
-        curl -fSL "$AGENT_URL" -o /usr/local/bin/dserv-agent
-        chmod +x /usr/local/bin/dserv-agent
+    if [ -n "$AGENT_URL" ] \
+       && curl -fSL "$AGENT_URL" -o /usr/local/bin/dserv-agent.tmp.$$ \
+       && chmod +x /usr/local/bin/dserv-agent.tmp.$$ \
+       && mv -f /usr/local/bin/dserv-agent.tmp.$$ /usr/local/bin/dserv-agent; then
         echo "Installed dserv-agent to /usr/local/bin/dserv-agent"
 
         if [ ! -f /etc/systemd/system/stim2-agent.service ]; then
@@ -260,24 +271,30 @@ if [ -n "$AGENT_ARCH" ] \
             fi
         fi
     else
-        echo "Warning: could not determine dserv-agent download URL"
+        rm -f /usr/local/bin/dserv-agent.tmp.$$
+        echo "Warning: could not download dserv-agent (install it later from the dserv release)"
     fi
 fi
 
 # Bootstrap dservctl CLI from the same release. stim2-agent speaks the same
 # HTTP/WS API as dserv-agent, so dservctl works against either; the stimctl
-# shim below just wraps it for the local agent (default port 80).
-if [ -n "$AGENT_ARCH" ] && ! command -v dservctl >/dev/null 2>&1; then
+# shim below just wraps it for the local agent (default port 80).  Same
+# rules as above: look in /usr/local/bin too, download to a temp file and
+# rename, never fail the package over the network.
+if [ -n "$AGENT_ARCH" ] && ! command -v dservctl >/dev/null 2>&1 \
+   && [ ! -x /usr/local/bin/dservctl ]; then
     echo "dservctl not found, installing..."
     DCTL_URL=$(curl -s https://api.github.com/repos/SheinbergLab/dserv/releases/latest \
         | grep "browser_download_url.*dservctl_linux_${AGENT_ARCH}" \
         | head -1 | cut -d'"' -f4)
-    if [ -n "$DCTL_URL" ]; then
-        curl -fSL "$DCTL_URL" -o /usr/local/bin/dservctl
-        chmod +x /usr/local/bin/dservctl
+    if [ -n "$DCTL_URL" ] \
+       && curl -fSL "$DCTL_URL" -o /usr/local/bin/dservctl.tmp.$$ \
+       && chmod +x /usr/local/bin/dservctl.tmp.$$ \
+       && mv -f /usr/local/bin/dservctl.tmp.$$ /usr/local/bin/dservctl; then
         echo "Installed dservctl to /usr/local/bin/dservctl"
     else
-        echo "Warning: could not determine dservctl download URL"
+        rm -f /usr/local/bin/dservctl.tmp.$$
+        echo "Warning: could not download dservctl (install it later from the dserv release)"
     fi
 fi
 
