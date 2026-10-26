@@ -16,6 +16,9 @@ Conflicts=weston.service weston.socket
 # can't activate and every start eats the 90s device-job timeout instead.
 Wants=seatd.service dev-dri-card0.device
 After=seatd.service systemd-user-sessions.service dev-dri-card0.device
+# Ordered after chrony so the waitsync below has a daemon to ask; harmless
+# where the unit does not exist.
+After=chrony.service chronyd.service
 # A rig must never give up on its display: without this, a slow display
 # driver at boot means 5 failed starts in 10s and systemd stops retrying,
 # leaving the console on screen until someone logs in.
@@ -25,6 +28,15 @@ StartLimitIntervalSec=0
 Type=notify
 RuntimeDirectory=stim2
 Environment=XDG_RUNTIME_DIR=/run/stim2
+# Do not start until chrony has settled the clock: the stim/frame record
+# stamps every flip with CLOCK_REALTIME, and dserv on the other host joins
+# those to its own timestamps. A clock still being stepped or slewed into
+# place after boot moves under the session. waitsync blocks until the
+# remaining correction is under 1 ms, once a second for up to 60 s. ALL
+# FOUR arguments: the interval defaults to 10 s, so `waitsync 60 0.001`
+# alone is a 600 s stall. The `-` lets a host with no chronyc, or no
+# reachable time source, start anyway once the 60 s are up.
+ExecStartPre=-/usr/bin/chronyc waitsync 60 0.001 0 1
 ExecStart=/usr/bin/weston --log=/run/stim2/weston.log --modules=systemd-notify.so -c /etc/xdg/weston/stim2-kiosk.ini
 Restart=always
 RestartSec=2

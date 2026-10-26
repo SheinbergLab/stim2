@@ -6,10 +6,24 @@
 Description=Stim2 Stimulus Presentation (X11)
 Conflicts=getty@tty1.service
 After=getty@tty1.service systemd-user-sessions.service
+# Ordered after chrony so the waitsync below has a daemon to ask; harmless
+# where the unit does not exist.
+After=chrony.service chronyd.service
 
 [Service]
 Type=simple
 User=stim
+# Do not start until chrony has settled the clock: the stim/frame record
+# stamps every flip with CLOCK_REALTIME, and dserv on the other host joins
+# those to its own timestamps. A clock still being stepped or slewed into
+# place after boot moves under the session. waitsync blocks until the
+# remaining correction is under 1 ms, once a second for up to 60 s. ALL
+# FOUR arguments: the interval defaults to 10 s, so `waitsync 60 0.001`
+# alone is a 600 s stall. The `-` lets a host with no chronyc, or no
+# reachable time source, start anyway once the 60 s are up. chronyc's
+# monitoring commands work unprivileged (UDP 127.0.0.1:323), so User=stim
+# is fine.
+ExecStartPre=-/usr/bin/chronyc waitsync 60 0.001 0 1
 ExecStart=/usr/bin/xinit /usr/local/stim2/start-stim2.sh -- :0 vt1 -keeptty -noreset -s 0 -dpms
 Restart=always
 RestartSec=5
