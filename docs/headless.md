@@ -105,6 +105,27 @@ fixed when the sink opens. A failed write (the reader exited) stops the
 sink and sets `failed`; SIGPIPE is ignored, so it cannot kill stim2. A
 sink still open at exit is closed, so ffmpeg finishes the file.
 
+## Overlay
+
+    overlay set gaze -points {x y ...} ?-size deg? ?-color {r g b ?a?}? ?-show 0|1?
+    overlay delete NAME | clear | names | get NAME
+    frameRepaint
+
+The overlay is a set of named items, each a group of discs in degrees,
+drawn over the scene after its post scripts and before `frameGrab`, the
+frame sink and the display. It is separate from the object and group
+lists, so a script's `resetObjList` or `glistInit` leaves it alone. When
+it is empty, it costs nothing.
+
+While it has items, the finished scene is copied aside with one blit, so
+`frameRepaint` can draw the overlay at a new position over the same scene.
+That is not a new frame: no update, no frame scripts, no `SwapCount`. A
+frame-locked movie needs this when the rig held a frame while the eye kept
+moving.
+
+It works headless and in a window. `replay.tcl -render` uses it for the
+gaze, and a live mirror can use it the same way.
+
 ## In a container
 
 `docker/headless/Dockerfile` builds a Debian trixie image. It contains:

@@ -23,7 +23,10 @@ datapoints in the same order and at the same pace.
 | `-dry` | read and plan, print the summary and the first events, send nothing. |
 | `-verbose` | print every event as it goes out. |
 | `-render OUT` | frame-locked into a movie on the rig's timeline (below). `OUT` ending `.mp4`/`.mov`/`.mkv` goes through ffmpeg; anything else gets raw RGBA (a file, or `"|command"`). `-speed` is ignored; `-gap` compresses only when given. |
-| `-fps F` | the movie's frame rate with `-render`, default the rig's refresh. QuickTime Player plays movies above 60 fps in slow motion after the first seconds; browsers and mrv2 play them right. Use `-fps 60` for a QuickTime copy (frames shorter than a tick then drop). |
+| `-eye MODE` | with `-render`, draw the logged gaze (`eyetracking/raw` with `em/settings`) over each movie tick (below). `auto` (default), `analog`, `video`, `degrees` or `off`. |
+| `-crf N` | x264 quality for a movie file, default 14 (lower is better and bigger; 0 is lossless). Encoded with `-tune animation`, which suits flat stimulus graphics. |
+| `-noblend` | with `-fps` below the rig's refresh, drop rig ticks instead of averaging them. |
+| `-fps F` | the movie's frame rate with `-render`, default the rig's refresh. Below the refresh, into a movie file, every rig tick is still drawn, and each movie frame is the mean of the ticks it spans (2 ticks for 60 fps from a 120 Hz rig). That looks much smoother than dropping every other tick. QuickTime Player plays movies above 60 fps in slow motion after the first seconds; browsers and mrv2 play them right. Use `-fps 60` for a QuickTime copy (frames shorter than a tick then drop). |
 
 Needs `dlsh` with the `dslog` and `tcljson` packages (dlsh.zip 0.20.4 or
 newer) and a stim2 with stimess 1.1 or newer (`stim::prelude playback`).
@@ -94,6 +97,36 @@ the rig's 1920x1080 and 120 Hz:
 - The check: the first correct-feedback command has `swap` 10072. Rig
   frame 10073 flips 5558.4 ms after the first frame, which is movie
   frame 667. Movie frame 667 is the first to show the green target.
+
+### Gaze
+
+The gaze is drawn on stim2's overlay layer (`overlay` and `frameRepaint`,
+`docs/headless.md`), not as stim2 objects, so a script that resets its
+objects every trial does not remove it. Each movie tick shows:
+- a disc at the newest sample no more than 100 ms old, hidden when there
+  is none (ESS logs eye data only inside observation periods);
+- a fainter trail of the last 150 ms.
+
+Where the rig held a frame for several ticks while the eye moved, the same
+scene is repainted with the gaze at each tick's time.
+
+How the samples are read:
+- **Batching.** `eyetracking/raw` is batched by dserv: 10 (h, v) pairs per
+  80-byte record, stamped with the first sample's time. The others are
+  spread at the median record interval.
+- **Calibration** follows dserv's `emconf`, using the `em/settings` logged
+  in the file: either linear (`scale * (raw - center)`, with `invert`
+  applied afterwards on the analog path; the video path's raw is already
+  inverted) or the biquadratic fit when `use_biquadratic` is on.
+- **`-eye auto`** treats a sample within ±90 as already in degrees, which
+  is how the virtual source logs it, and anything else as counts on the
+  analog path. That also handles a file where two sources were writing to
+  `eyetracking/raw` at once.
+- **An exact (0, 0) is not a sample.** It is the virtual eye at rest when
+  the virtual source is mixed with a real one.
+
+For files that would be ambiguous, logging `eyetracking/position` (already
+in degrees) alongside the raw samples would remove the guesswork.
 
 ## What is and is not reproduced
 

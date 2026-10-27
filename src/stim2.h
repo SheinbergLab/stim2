@@ -290,6 +290,7 @@ typedef struct stim_headless_stats_s {
   double span_s;           /* since the last reset (0 before one) */
 } stim_headless_stats_t;
 void   stimHeadlessStats(int reset, stim_headless_stats_t *st);
+int    stimFrameRepaint(char *err, int errlen);   /* overlay over the last scene */
 int    stimHeadless(void);
 int    stimStepMode(void);
 double stimStepClockMs(void);

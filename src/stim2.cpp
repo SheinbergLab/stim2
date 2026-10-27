@@ -41,6 +41,7 @@
 
 #include "SharedQueue.h"
 #include "framelog.h"
+#include "overlay.h"
 #include "latedraw.h"
 #include "WebSocketServer.h"
 #include "TclCompletion.h"
@@ -2047,6 +2048,65 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
     if (!sink.manual) sinkWrite();
   }
 
+  /* The overlay (overlay.h) is drawn over the finished scene.  While it
+     has items, the scene is first copied aside (one blit), so frameRepaint
+     can put the overlay at a new position over the same scene without
+     stepping anything -- a frame-locked movie holds a rig frame for
+     several ticks while the eye moves on. */
+  GLuint scene_fbo = 0, scene_rb = 0;
+  int scene_w = 0, scene_h = 0;
+  bool scene_valid = false;
+  GLuint drawFramebuffer(void) { return Headless ? headless_fbo : 0; }
+
+  void sceneSave(void)
+  {
+    if (!scene_fbo || scene_w != winWidth || scene_h != winHeight) {
+      if (!scene_fbo) { glGenFramebuffers(1, &scene_fbo); glGenRenderbuffers(1, &scene_rb); }
+      glBindRenderbuffer(GL_RENDERBUFFER, scene_rb);
+      glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, winWidth, winHeight);
+      glBindRenderbuffer(GL_RENDERBUFFER, 0);
+      glBindFramebuffer(GL_FRAMEBUFFER, scene_fbo);
+      glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                GL_RENDERBUFFER, scene_rb);
+      scene_w = winWidth; scene_h = winHeight;
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, drawFramebuffer());
+    glReadBuffer(drawnBuffer());
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, scene_fbo);
+    glBlitFramebuffer(0, 0, winWidth, winHeight, 0, 0, winWidth, winHeight,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, drawFramebuffer());
+    glReadBuffer(drawnBuffer());
+    scene_valid = true;
+  }
+
+  void overlayStage(void)
+  {
+    if (!overlayCount()) { scene_valid = false; return; }
+    sceneSave();
+    overlayDraw(winWidth, winHeight, HALF_SCREEN_DEG_X, HALF_SCREEN_DEG_Y);
+  }
+
+  /* the last scene again, with the overlay as it is now: into the sink
+     (held, when manual) and onto the display; not a new frame, so no
+     SwapCount, frame record or frame scripts */
+  bool frameRepaint(void)
+  {
+    if (!scene_valid || scene_w != winWidth || scene_h != winHeight) return false;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, scene_fbo);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawFramebuffer());
+    glBlitFramebuffer(0, 0, winWidth, winHeight, 0, 0, winWidth, winHeight,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, drawFramebuffer());
+    glReadBuffer(drawnBuffer());
+    overlayDraw(winWidth, winHeight, HALF_SCREEN_DEG_X, HALF_SCREEN_DEG_Y);
+    sinkFrame();
+    presentFrame();
+    if (!Headless) swapsyncAfterSwap();
+    return true;
+  }
+
   /* stepFrame bookkeeping: a redraw asked for while stepped is held here
      for the next stepFrame instead of drawing at once, and the flip time
      that stepFrame gave is applied by waitForSwap */
@@ -2898,6 +2958,16 @@ void stimHeadlessStats(int reset, stim_headless_stats_t *st)
   }
 }
 
+int stimFrameRepaint(char *err, int errlen)
+{
+  if (!app.frameRepaint()) {
+    snprintf(err, errlen, "no scene to repaint: the overlay was empty or the window "
+             "changed size since the last frame");
+    return -1;
+  }
+  return 0;
+}
+
 void stimFrameSinkStatus(stim_sink_status_t *st)
 {
   st->open = app.sink.fp != nullptr;
@@ -3631,8 +3701,9 @@ void Application::updateDisplay(bool log_events)
     if (ClearBackground) {
       glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     }
+    overlayStage();             /* annotations still show on a blank screen */
     captureFrameGrabs();
-    sinkFrame();                /* like the grabs: before any overlay */
+    sinkFrame();                /* like the grabs: before the imgui overlay */
     
     if (!show_imgui)
       stopAnimation();
@@ -3669,8 +3740,9 @@ void Application::updateDisplay(bool log_events)
     executePreScripts(g);
     drawGroup(g);
     executePostScripts(g);
+    overlayStage();             /* annotations over the finished scene */
     captureFrameGrabs();
-    sinkFrame();                /* like the grabs: before any overlay */
+    sinkFrame();                /* like the grabs: before the imgui overlay */
 
     if (show_imgui)
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

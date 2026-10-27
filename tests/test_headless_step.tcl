@@ -148,6 +148,48 @@ file delete $mpath
 ck "manual file is three identical frames" [expr {[string length $mdata] == 3 * $fsz &&
     [string range $mdata 0 [expr {$fsz - 1}]] eq [string range $mdata $fsz [expr {2 * $fsz - 1}]]}]
 
+# --- overlay: discs in degrees over the scene, kept across object resets ----
+proc px_at { w bytes off x y } {
+    binary scan $bytes @[expr {$off + ($y * $w + $x) * 4}]cu4 rgba
+    return $rgba
+}
+proc deg2px { xd yd } {         ;# degrees -> window pixel, top-left origin
+    list [expr {int(round($::W / 2.0 + $xd * $::W / (2.0 * [screen_set HalfScreenDegreeX])))}] \
+         [expr {int(round($::H / 2.0 - $yd * $::H / (2.0 * [screen_set HalfScreenDegreeY])))}]
+}
+ck "overlay: empty at start" [expr {[overlay names] eq ""}]
+ck "overlay: bad -points refused" [catch { overlay set bad -points {1 2 3} }]
+ck "overlay: bad -color refused" [catch { overlay set bad -color {1 0} }]
+overlay set gaze -points {-10 5} -size 3 -color {0 0 1}
+ck "overlay get: 1 point, size 3" [expr {[dict get [overlay get gaze] points] == 1 && [dict get [overlay get gaze] size] == 3.0}]
+# a script resetting its world every trial must not touch the overlay
+resetObjList; glistInit 1; setBackground 20 40 60
+glistSetVisible 1; redraw
+ck "overlay survives resetObjList/glistInit" [expr {[overlay names] eq "gaze"}]
+set fd [file tempfile opath headless_overlay.rgba]; close $fd
+frameSink open -manual $opath
+set r [stepFrame]
+set sc_drawn [dict get $r swapcount]
+frameSink write 1
+lassign [deg2px -10 5] gx gy
+# move the disc and repaint the same scene: no new frame, new position
+overlay set gaze -points {10 -5}
+frameRepaint
+frameSink write 1
+ck "frameRepaint is not a frame (SwapCount unchanged)" [expr {$SwapCount == $sc_drawn}]
+lassign [deg2px 10 -5] hx hy
+overlay clear
+set r [stepFrame]                        ;# overlay empty: no scene kept
+ck "frameRepaint refused when the overlay was empty" [catch { frameRepaint }]
+frameSink close
+set fd [open $opath rb]; set odata [read $fd]; close $fd
+file delete $opath
+ck "overlay file: 2 frames" [expr {[string length $odata] == 2 * $fsz}]
+ck "frame 1: blue disc at (-10, 5) deg ([px_at $W $odata 0 $gx $gy])" [expr {[px_at $W $odata 0 $gx $gy] eq {0 0 255 255}}]
+ck "frame 1: background at (10, -5) deg" [expr {[px_at $W $odata 0 $hx $hy] eq {20 40 60 255}}]
+ck "repaint: disc moved to (10, -5) deg" [expr {[px_at $W $odata $fsz $hx $hy] eq {0 0 255 255}}]
+ck "repaint: (-10, 5) deg is background again (scene restored)" [expr {[px_at $W $odata $fsz $gx $gy] eq {20 40 60 255}}]
+
 # --- back to real time ------------------------------------------------------
 set st [stepMode 0]
 ck "stepMode 0: disabled" [expr {![dict get $st enabled]}]

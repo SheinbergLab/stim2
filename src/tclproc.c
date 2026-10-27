@@ -25,6 +25,7 @@
 #include <sys/stat.h>
 
 #include "stim2.h"
+#include "overlay.h"
 #include "objname.h"
 #include "diagnostics.h"
 #include "swapsync.h"
@@ -1263,6 +1264,141 @@ static int headlessStatsCmd(ClientData clientData, Tcl_Interp *interp,
   PUTD("span_s", st.span_s);
 #undef PUTD
   Tcl_SetObjResult(interp, d);
+  return TCL_OK;
+}
+
+/*
+ * overlay set name ?-points {x y ...}? ?-size deg? ?-color {r g b ?a?}? ?-show 0|1?
+ * overlay delete name | clear | names | get name
+ *   The annotation layer (overlay.h): named sets of discs in degrees, drawn
+ *   over the scene after its post scripts, before frameGrab, the frame sink
+ *   and the display.  Independent of the object and group lists, so a
+ *   script's resetObjList/glistInit leaves it alone.  New items: no points,
+ *   0.5 deg, opaque white, shown.  -points {} clears an item's points.
+ *   Takes effect on the next frame (or frameRepaint).  get returns
+ *       points <n> size <deg> color {r g b a} show 0|1
+ */
+static int overlayCmd(ClientData clientData, Tcl_Interp *interp,
+		      int argc, char *argv[])
+{
+  const char *usage = "usage: overlay set name ?-points {x y ...}? ?-size deg?"
+    " ?-color {r g b ?a?}? ?-show 0|1? | delete name | clear | names | get name";
+  if (argc < 2) { Tcl_SetResult(interp, (char *) usage, TCL_STATIC); return TCL_ERROR; }
+  if (!strcmp(argv[1], "set") && argc >= 3 && argc % 2 == 1) {
+    float *pts = NULL, size = -1.0f, rgba[4], *rgbap = NULL;
+    int n = -1, show = -1, i;
+    for (i = 3; i < argc; i += 2) {
+      const char *opt = argv[i], *val = argv[i + 1];
+      if (!strcmp(opt, "-points")) {
+	Tcl_Size m, j;
+	const char **el;
+	if (Tcl_SplitList(interp, val, &m, &el) != TCL_OK) goto fail;
+	if (m % 2) {
+	  Tcl_Free((char *) el);
+	  Tcl_SetResult(interp, "overlay: -points needs x y pairs", TCL_STATIC);
+	  goto fail;
+	}
+	ckfree((char *) pts);
+	pts = (float *) ckalloc(sizeof(float) * (m ? m : 1));
+	for (j = 0; j < m; j++) {
+	  double d;
+	  if (Tcl_GetDouble(interp, el[j], &d) != TCL_OK) { Tcl_Free((char *) el); goto fail; }
+	  pts[j] = (float) d;
+	}
+	Tcl_Free((char *) el);
+	n = (int) (m / 2);
+      }
+      else if (!strcmp(opt, "-size")) {
+	double d;
+	if (Tcl_GetDouble(interp, val, &d) != TCL_OK) goto fail;
+	size = (float) d;
+      }
+      else if (!strcmp(opt, "-color")) {
+	Tcl_Size m, j;
+	const char **el;
+	if (Tcl_SplitList(interp, val, &m, &el) != TCL_OK) goto fail;
+	if (m != 3 && m != 4) {
+	  Tcl_Free((char *) el);
+	  Tcl_SetResult(interp, "overlay: -color needs {r g b ?a?}", TCL_STATIC);
+	  goto fail;
+	}
+	rgba[3] = 1.0f;
+	for (j = 0; j < m; j++) {
+	  double d;
+	  if (Tcl_GetDouble(interp, el[j], &d) != TCL_OK) { Tcl_Free((char *) el); goto fail; }
+	  rgba[j] = (float) d;
+	}
+	Tcl_Free((char *) el);
+	rgbap = rgba;
+      }
+      else if (!strcmp(opt, "-show")) {
+	if (Tcl_GetBoolean(interp, val, &show) != TCL_OK) goto fail;
+      }
+      else { Tcl_SetResult(interp, (char *) usage, TCL_STATIC); goto fail; }
+    }
+    overlaySet(argv[2], pts, n, size, rgbap, show);
+    ckfree((char *) pts);
+    return TCL_OK;
+  fail:
+    ckfree((char *) pts);
+    return TCL_ERROR;
+  }
+  if (!strcmp(argv[1], "delete") && argc == 3) {
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(overlayDelete(argv[2])));
+    return TCL_OK;
+  }
+  if (!strcmp(argv[1], "clear") && argc == 2) { overlayClear(); return TCL_OK; }
+  if (!strcmp(argv[1], "names") && argc == 2) {
+    Tcl_Obj *l = Tcl_NewListObj(0, NULL);
+    int i;
+    for (i = 0; i < overlayCount(); i++)
+      Tcl_ListObjAppendElement(interp, l, Tcl_NewStringObj(overlayName(i), -1));
+    Tcl_SetObjResult(interp, l);
+    return TCL_OK;
+  }
+  if (!strcmp(argv[1], "get") && argc == 3) {
+    int npts, show, i;
+    float size, rgba[4];
+    Tcl_Obj *d, *c;
+    if (!overlayGet(argv[2], &npts, &size, rgba, &show)) {
+      Tcl_AppendResult(interp, "overlay: no item ", argv[2], NULL);
+      return TCL_ERROR;
+    }
+    d = Tcl_NewDictObj();
+    c = Tcl_NewListObj(0, NULL);
+    for (i = 0; i < 4; i++) Tcl_ListObjAppendElement(interp, c, Tcl_NewDoubleObj(rgba[i]));
+    Tcl_DictObjPut(interp, d, Tcl_NewStringObj("points", -1), Tcl_NewIntObj(npts));
+    Tcl_DictObjPut(interp, d, Tcl_NewStringObj("size", -1), Tcl_NewDoubleObj(size));
+    Tcl_DictObjPut(interp, d, Tcl_NewStringObj("color", -1), c);
+    Tcl_DictObjPut(interp, d, Tcl_NewStringObj("show", -1), Tcl_NewIntObj(show));
+    Tcl_SetObjResult(interp, d);
+    return TCL_OK;
+  }
+  Tcl_SetResult(interp, (char *) usage, TCL_STATIC);
+  return TCL_ERROR;
+}
+
+/*
+ * frameRepaint
+ *   The last frame's scene again with the overlay as it is now -- into the
+ *   frame sink (held, for a manual sink) and onto the display.  Not a new
+ *   frame: no update, no frame scripts, no SwapCount.  A frame-locked
+ *   replay uses it for movie ticks where the rig held a frame but the eye
+ *   moved.  An error when the overlay was empty at the last frame (no
+ *   scene was kept) or the window has changed size since.
+ */
+static int frameRepaintCmd(ClientData clientData, Tcl_Interp *interp,
+			   int argc, char *argv[])
+{
+  char err[256];
+  if (argc != 1) {
+    Tcl_SetResult(interp, "usage: frameRepaint", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  if (stimFrameRepaint(err, sizeof(err))) {
+    Tcl_AppendResult(interp, argv[0], ": ", err, NULL);
+    return TCL_ERROR;
+  }
   return TCL_OK;
 }
 
@@ -3388,6 +3524,10 @@ void addTclCommands(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "frameSink", (Tcl_CmdProc *) frameSinkCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "headlessStats", (Tcl_CmdProc *) headlessStatsCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "overlay", (Tcl_CmdProc *) overlayCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "frameRepaint", (Tcl_CmdProc *) frameRepaintCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "swapTagCallback",
 		    (Tcl_CmdProc *) swapTagCallbackCmd,

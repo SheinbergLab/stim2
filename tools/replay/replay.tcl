@@ -30,7 +30,17 @@
 #                      with stepFrame (headless or not) and a file with
 #                      stim/frame and ACK-stamped stim/cmd records.
 #       -fps F         the movie's frame rate (default: the rig's refresh; above
-#                      60, QuickTime Player slows down -- -fps 60 for it)
+#                      60, QuickTime Player slows down -- -fps 60 for it).
+#                      Below the rig's refresh, into a movie file, every rig
+#                      tick is still drawn and each movie frame is the mean
+#                      of the ticks it spans (-noblend: drop instead)
+#       -crf N         x264 quality for a movie file (default 14; lower is
+#                      better and bigger, 0 lossless)
+#       -eye MODE      with -render, draw the logged gaze (eyetracking/raw +
+#                      em/settings) over each movie tick: auto (default; a
+#                      sample within +/-90 is already degrees, as the virtual
+#                      source logs it, anything else is calibrated as ADC
+#                      counts), analog, video, degrees, or off
 #
 # What it does, in the order ESS's configure_stim does it:
 #
@@ -76,10 +86,13 @@ set opt(verbose) 0
 set opt(render)  ""
 set opt(fps)     ""
 set opt(gap_given) 0
+set opt(eye)     auto
+set opt(blend)   1
+set opt(crf)     14
 
 if {[llength $argv] < 1} {
     puts stderr "usage: dlsh replay.tcl FILE.ess ?-host H? ?-port P? ?-live? ?-trial N | -trials A-B?\
- ?-speed X? ?-gap S? ?-stream NAME ...? ?-dry? ?-verbose? ?-render OUT? ?-fps F?"
+ ?-speed X? ?-gap S? ?-stream NAME ...? ?-dry? ?-verbose? ?-render OUT? ?-fps F? ?-noblend? ?-crf N? ?-eye MODE?"
     exit 2
 }
 set path [lindex $argv 0]
@@ -98,6 +111,10 @@ while {[llength $args]} {
         -gap     { set opt(gap)   [lindex $args 0]; set args [lrange $args 1 end]; set opt(gap_given) 1 }
         -render  { set opt(render) [lindex $args 0]; set args [lrange $args 1 end] }
         -fps     { set opt(fps)   [lindex $args 0]; set args [lrange $args 1 end] }
+        -noblend { set opt(blend) 0 }
+        -crf     { set opt(crf)   [lindex $args 0]; set args [lrange $args 1 end] }
+        -eye     { set opt(eye)   [lindex $args 0]; set args [lrange $args 1 end]
+                   if {$opt(eye) ni {auto analog video degrees off}} { puts stderr "-eye wants auto|analog|video|degrees|off"; exit 2 } }
         -stream  { lappend opt(streams) [lindex $args 0]; set args [lrange $args 1 end] }
         -dry     { set opt(dry) 1 }
         -verbose { set opt(verbose) 1 }
@@ -140,6 +157,8 @@ set script ""; set script_path ""; set libs {}; set bind_names {}
 set stimdg ""; set obs_begin {}; set obs_end {}
 set events {}          ;# {ts kind payload...}, kinds: cmd | dp
 set frames {}          ;# stim/frame: {dserv_ts frame swapcount flip_us ticks_us missed cmds ds}
+set eye_recs {}        ;# eyetracking/raw: {dserv_ts {h v h v ...}}, 10 samples a record
+set em_settings ""     ;# em/settings: the calibration in force
 set counts [dict create]
 set hashed 0
 set stream_set [dict create]
@@ -177,6 +196,12 @@ while {1} {
         ess/screen_w     { set geom(w)     [string trim [dict get $d data]] }
         ess/screen_h     { set geom(h)     [string trim [dict get $d data]] }
         ess/screen_refresh_rate { set geom(hz) [string trim [dict get $d data]] }
+        eyetracking/raw {
+            if {[binary scan [dict get $d data] f* v] == 1 && [llength $v] >= 2} {
+                lappend eye_recs [list [dict get $d timestamp] $v]
+            }
+        }
+        em/settings { set em_settings [dict get $d data] }
         stim/frame {
             if {[binary scan [dict get $d data] w7 v] == 1 && [llength $v] == 7} {
                 lappend frames [list [dict get $d timestamp] {*}$v]
@@ -331,7 +356,16 @@ if {$opt(render) ne ""} {
     if {$opt(fps) eq ""} {
         set opt(fps) [expr {[info exists geom(hz)] && $geom(hz) > 0 ? $geom(hz) : 60}]
     }
-    set period [expr {1000.0 / $opt(fps)}]
+    # blending: below the rig's refresh into a movie file, draw at the rig's
+    # rate and let ffmpeg average each group of `blend` ticks into one frame
+    set movie_out [expr {[string index $opt(render) 0] ne "|" && [regexp -nocase {\.(mp4|mov|mkv)$} $opt(render)]}]
+    set rig_hz [expr {[info exists geom(hz)] && $geom(hz) > 0 ? $geom(hz) : 0}]
+    set blend 1
+    if {$opt(blend) && $movie_out && $rig_hz > 0 && $opt(fps) < $rig_hz} {
+        set blend [expr {max(1, int(round(double($rig_hz) / $opt(fps))))}]
+    }
+    set render_fps [expr {$blend > 1 ? $rig_hz : $opt(fps)}]
+    set period [expr {1000.0 / $render_fps}]
     set gap_ms [expr {$opt(gap_given) ? $opt(gap) * 1000.0 : 1e300}]
     set F0 [expr {[lindex $frames 0 4] / 1000.0}]
     set shift 0.0; set pos {}; set prevF $F0
@@ -344,7 +378,67 @@ if {$opt(render) ne ""} {
     set writes {}
     for {set i 0} {$i < $nf - 1} {incr i} { lappend writes [expr {[lindex $pos [expr {$i + 1}]] - [lindex $pos $i]}] }
     lappend writes 1
-    set movie_frames [tcl::mathop::+ {*}$writes]
+    set movie_frames [expr {[tcl::mathop::+ {*}$writes] / $blend}]
+
+    # the gaze: every eyetracking/raw sample in degrees on the rig clock.
+    # A record holds the samples dserv buffered (80 bytes: 10 h,v pairs)
+    # stamped with the first one's time; the rest are spread at the median
+    # record interval / samples per record.  The calibration is em/settings,
+    # as dserv's emconf applies it: linear (scale * (raw - center), then
+    # invert on the analog path; the video path's raw is already inverted)
+    # or the biquadratic fit.  An exact 0,0 is no sample.
+    set eye_t {}; set eye_x {}; set eye_y {}
+    set eye_zero 0; set eye_deg_n 0; set eye_cal_n 0
+    if {$opt(eye) ne "off" && [llength $eye_recs]} {
+        if {$opt(eye) in {auto analog video} && $em_settings eq ""} {
+            puts stderr "eyetracking/raw without em/settings: no calibration; -eye degrees or -eye off"; exit 1
+        }
+        set cal [dict create scale_h 1 scale_v 1 raw_center_h 0 raw_center_v 0 invert_h 0 invert_v 0 use_biquadratic 0]
+        catch { set cal [dict merge $cal $em_settings] }
+        set ivals {}
+        for {set r 1} {$r < [llength $eye_recs]} {incr r} {
+            lappend ivals [expr {[lindex $eye_recs $r 0] - [lindex $eye_recs [expr {$r - 1}] 0]}]
+        }
+        set per_rec [expr {[llength [lindex $eye_recs 0 1]] / 2}]
+        set spacing [expr {[llength $ivals] ? [median $ivals] / double($per_rec) : 2000.0}]
+        proc bq {x y c} {
+            lassign $c c0 c1 c2 c3 c4 c5 c6 c7 c8
+            expr {$c0 + $c1*$x + $c2*$y + $c3*$x*$x + $c4*$y*$y + $c5*$x*$y
+                  + $c6*$x*$x*$y + $c7*$x*$y*$y + $c8*$x*$x*$y*$y}
+        }
+        dict with cal {
+            foreach rec $eye_recs {
+                lassign $rec ts vals
+                set si 0
+                foreach {h v} $vals {
+                    set t [expr {($ts + $si * $spacing + $tick_off) / 1000.0}]
+                    incr si
+                    if {$h == 0 && $v == 0} { incr eye_zero; continue }
+                    set mode $opt(eye)
+                    if {$mode eq "auto"} { set mode [expr {abs($h) <= 90 && abs($v) <= 90 ? "degrees" : "analog"}] }
+                    if {$mode eq "degrees"} { set x $h; set y $v; incr eye_deg_n } \
+                    elseif {$use_biquadratic} {
+                        set x [bq $h $v $bq_h_coeffs]; set y [bq $h $v $bq_v_coeffs]; incr eye_cal_n
+                    } else {
+                        set x [expr {$scale_h * ($h - $raw_center_h)}]
+                        set y [expr {$scale_v * ($v - $raw_center_v)}]
+                        if {$mode eq "analog"} {
+                            if {$invert_h} { set x [expr {-$x}] }
+                            if {$invert_v} { set y [expr {-$y}] }
+                        }
+                        incr eye_cal_n
+                    }
+                    lappend eye_t $t; lappend eye_x $x; lappend eye_y $y
+                }
+            }
+        }
+        # in time order (two sources interleave)
+        set order [lsort -indices -real $eye_t]
+        set eye_t [lmap i $order {lindex $eye_t $i}]
+        set eye_x [lmap i $order {lindex $eye_x $i}]
+        set eye_y [lmap i $order {lindex $eye_y $i}]
+    }
+    set n_eye [llength $eye_t]
 }
 
 puts "replay: $path"
@@ -364,10 +458,15 @@ if {[llength $bind_names] == 0 && [llength $opt(streams)] == 0} {
 if {$opt(render) ne ""} {
     puts "  render  $nf rig frames (swapcount $sc_first..$sc_last, $nmissing not logged),\
  movie $movie_frames frames at $opt(fps) fps = [format %.1f [expr {$movie_frames / double($opt(fps))}]] s\
-[expr {$opt(gap_given) ? ", gaps capped at $opt(gap) s" : ""}]"
+[expr {$opt(gap_given) ? ", gaps capped at $opt(gap) s" : ""}][expr {$blend > 1 ? ", each the mean of $blend rig ticks" : ""}]"
     puts "          commands placed by ACK stamp: [expr {$ncmd - $cmd_after}][expr {$cmd_before ? " ($cmd_before applied before the first frame)" : ""}][expr {$cmd_after ? ", $cmd_after after the last frame (not drawn)" : ""}]"
     puts "          datapoints placed by ds_dispatched: $k of $ndps[expr {$dp_after ? ", $dp_after after the last frame" : ""}]; $dp_foreign forwarded datapoints were not in the file's streams"
     puts "          stim clock - dserv clock: [format %.3f [expr {$tick_off / 1e6}]] s"
+    if {$n_eye} {
+        puts "  gaze    $n_eye samples ([expr {$eye_deg_n ? "$eye_deg_n already degrees" : ""}][expr {$eye_deg_n && $eye_cal_n ? ", " : ""}][expr {$eye_cal_n ? "$eye_cal_n calibrated via em/settings" : ""}]), $eye_zero exact 0,0 dropped, -eye $opt(eye)"
+    } elseif {[llength $eye_recs] && $opt(eye) eq "off"} {
+        puts "  gaze    off (-eye off)"
+    }
     if {$opt(fps) > 60} {
         puts "  NOTE: QuickTime Player plays movies above 60 fps in slow motion after the\
  first seconds (browsers and mrv2 play them right); -fps 60 makes a copy for it"
@@ -452,9 +551,11 @@ if {$opt(render) ne ""} {
     }
     set out $opt(render)
     # "|command" is always a command (it may well end in .mp4 itself)
-    if {[string index $out 0] ne "|" && [regexp -nocase {\.(mp4|mov|mkv)$} $out]} {
+    if {$movie_out} {
+        set vf [expr {$blend > 1 ? "-vf tmix=frames=$blend,fps=$opt(fps)" : ""}]
         set target "|ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgba -s ${win_w}x${win_h}\
- -r $opt(fps) -i - -pix_fmt yuv420p [list [file normalize $out]]"
+ -r $render_fps -i - $vf -c:v libx264 -preset medium -tune animation -crf $opt(crf)\
+ -pix_fmt yuv420p -movflags +faststart [list [file normalize $out]]"
     } else { set target $out }
     set r [stim_send $sock [list frameSink open -manual $target]]
     if {[is_error $r]} { puts stderr "frameSink: $r"; exit 1 }
@@ -463,6 +564,29 @@ if {$opt(render) ne ""} {
     set t_start [expr {$t_start - 1.0}]
     stim_send $sock [list stepMode 1 $t_start]
     set clock $t_start; set prevflip $t_start
+    # the gaze overlay: a disc at the newest sample, a fading trail behind
+    set gaze_trail_ms 150.0; set gaze_hold_ms 100.0
+    set eye_k 0; set gaze_last ""
+    proc gaze_at {t} {
+        # overlay commands for movie time t (rig ms): samples in (t - trail, t]
+        global eye_t eye_x eye_y eye_k n_eye gaze_trail_ms gaze_hold_ms
+        while {$eye_k < $n_eye && [lindex $eye_t $eye_k] <= $t} { incr eye_k }
+        set j [expr {$eye_k - 1}]
+        if {$j < 0 || $t - [lindex $eye_t $j] > $gaze_hold_ms} {
+            return "overlay set gaze -show 0; overlay set gaze_trail -show 0"
+        }
+        set pts {}
+        for {set i $j} {$i >= 0 && $t - [lindex $eye_t $i] <= $gaze_trail_ms} {incr i -1} {
+            lappend pts [format %.3f [lindex $eye_x $i]] [format %.3f [lindex $eye_y $i]]
+        }
+        return "overlay set gaze -show 1 -points {[format %.3f [lindex $eye_x $j]] [format %.3f [lindex $eye_y $j]]};\
+ overlay set gaze_trail -show 1 -points {$pts}"
+    }
+    if {$n_eye} {
+        stim_send $sock {overlay set gaze_trail -size 0.25 -color {1 0.55 0.1 0.35} -show 0;
+                         overlay set gaze -size 0.7 -color {1 0.55 0.1 0.9} -show 0}
+    }
+    set repaints 0
     set sent 0; set errors 0; set skipped 0
     set kinds [dict create]
     set wall0 [clock microseconds]
@@ -484,21 +608,49 @@ if {$opt(render) ne ""} {
         set flip [expr {[lindex $frames $i 4] / 1000.0}]
         set eval [expr {max($clock, $prevflip)}]
         if {$flip < $eval} { set flip $eval }
+        set nw [lindex $writes $i]
+        if {$n_eye} {
+            # the gaze at this frame's first movie tick, drawn with the frame
+            set g [gaze_at $flip]
+            if {$g ne $gaze_last} { stim_send $sock $g; set gaze_last $g }
+        }
         set r [stim_send $sock [list stepFrame $eval $flip]]
         if {[is_error $r]} { incr errors; puts "  ERROR stepFrame $eval $flip -> $r"; break }
         dict incr kinds [dict get $r kind]
         set clock $flip; set prevflip $flip
-        set r [stim_send $sock [list frameSink write [lindex $writes $i]]]
-        if {[is_error $r]} { incr errors; puts "  ERROR frameSink write -> $r"; break }
+        if {!$n_eye || $nw <= 1} {
+            set r [stim_send $sock [list frameSink write $nw]]
+            if {[is_error $r]} { incr errors; puts "  ERROR frameSink write -> $r"; break }
+        } else {
+            # the rig held this frame for nw ticks; the eye did not stop:
+            # repaint the overlay over the same scene at each tick's time
+            stim_send $sock {frameSink write 1}
+            set same 0
+            for {set k 1} {$k < $nw} {incr k} {
+                set g [gaze_at [expr {$flip + $k * $period}]]
+                if {$g eq $gaze_last} { incr same; continue }
+                if {$same} { stim_send $sock [list frameSink write $same]; set same 0 }
+                stim_send $sock $g; set gaze_last $g
+                set r [stim_send $sock frameRepaint]
+                if {[is_error $r]} { incr errors; puts "  ERROR frameRepaint -> $r"; break }
+                incr repaints
+                stim_send $sock {frameSink write 1}
+            }
+            if {$same} { stim_send $sock [list frameSink write $same] }
+        }
         if {$opt(verbose) && $i % 600 == 0} { puts "  frame $i of $nf" }
     }
     set elapsed [expr {([clock microseconds] - $wall0)/1e6}]
     set st [stim_send $sock {frameSink close}]
     stim_send $sock {stepMode 0}
+    if {$n_eye} { stim_send $sock {overlay delete gaze; overlay delete gaze_trail} }
     puts "done: $i rig frames drawn ([join [lmap {k v} $kinds {list $k $v}] {, }]), $sent events\
  ($errors errors, $skipped configure-time commands skipped) in [format %.1f $elapsed] s"
-    puts "  movie: [dict get $st frames] frames at $opt(fps) fps\
- ([format %.1f [expr {[dict get $st frames] / double($opt(fps))}]] s) -> $out, status [dict get $st status]"
+    if {$n_eye} { puts "  gaze: $n_eye samples over the movie, $repaints held-frame repaints" }
+    set mf [expr {[dict get $st frames] / $blend}]
+    puts "  movie: $mf frames at $opt(fps) fps\
+ ([format %.1f [expr {$mf / double($opt(fps))}]] s)[expr {$blend > 1 ? ", each the mean of $blend rig ticks" : ""}]\
+ -> $out, status [dict get $st status]"
     foreach n [dict keys $stream_set] {
         catch { puts "  $n: [stim_send $sock [list stim::count $n]] injected, last [stim_send $sock [list stim::get $n]]" }
     }

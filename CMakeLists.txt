@@ -162,6 +162,7 @@ set(STIM2_SOURCES
     src/timer.cpp
     src/swapsync.cpp
     src/framelog.cpp
+    src/overlay.cpp
     src/latedraw.cpp
     src/glad.c
     src/rawapi.c
