@@ -451,6 +451,26 @@ static int stimVersionCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 /*
+ * setWindowTitle ?title?
+ *   Set the window title (the string --title set at startup, "Stim" by
+ *   default); with no argument, return the current one.  A replay labels
+ *   its window with the data file and trial so it is never mistaken for a
+ *   live display.  Takes effect at once in a window, and is the title the
+ *   window gets back when it leaves fullscreen.
+ */
+static int setWindowTitleCmd(ClientData clientData, Tcl_Interp *interp,
+			     int argc, char *argv[])
+{
+  if (argc > 2) {
+    Tcl_SetResult(interp, "usage: setWindowTitle ?title?", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  if (argc == 2) stimSetWindowTitle(argv[1]);
+  Tcl_SetResult(interp, (char *) stimGetWindowTitle(), TCL_VOLATILE);
+  return TCL_OK;
+}
+
+/*
  * stimFrameLog ?host? ?0|1?
  *   Per-swap frame record streamed to dserv as the datapoint "stim/frame"
  *   (see framelog.h for the seven int64 fields).  host is "host" or
@@ -2860,6 +2880,8 @@ void addTclCommands(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "stimAckHeader", (Tcl_CmdProc *) stimAckHeaderCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "stimVersion", (Tcl_CmdProc *) stimVersionCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "setWindowTitle", (Tcl_CmdProc *) setWindowTitleCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "stimFrameLog", (Tcl_CmdProc *) stimFrameLogCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);

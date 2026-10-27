@@ -2583,6 +2583,27 @@ void stimLateDrawStatus(latedraw_status_t *st)
   st->gpu_timed = app.latedraw_gpu_timed;
 }
 
+/* The window title, from --title or the default "Stim", changed at run time
+   by the Tcl command setWindowTitle (tclproc.c).  A replay labels its
+   window with the file and trial so it is never taken for a live display;
+   toggleFullscreen reapplies app.title when leaving fullscreen, so the
+   stored string is what must change, not just the GLFW title.  Tcl runs
+   on the render thread, which is the main thread, where GLFW wants
+   window calls. */
+void stimSetWindowTitle(const char *title)
+{
+  char *t = strdup(title ? title : "");
+  if (!t) return;
+  free((void *) app.title);
+  app.title = t;
+  if (app.window) glfwSetWindowTitle(app.window, app.title);
+}
+
+const char *stimGetWindowTitle(void)
+{
+  return app.title ? app.title : "";
+}
+
 void Application::start_tcp_server(void)
 {
   struct sockaddr_in address;
@@ -3749,10 +3770,14 @@ main(int argc, char *argv[]) {
     return 0;
   }
   
+  std::string title_opt = "Stim";
+
   cxxopts::Options options("stim2","multiplatform OpenGL presentation program");
 
   options.add_options()
     ("v,verbose", "Verbose mode", cxxopts::value<bool>(verbose))
+    ("title", "Window title (also settable at run time with setWindowTitle)",
+     cxxopts::value<std::string>(title_opt)->default_value("Stim"))
     ("b,borderless", "Borderless", cxxopts::value<bool>(borderless))
     ("w,width", "width", cxxopts::value<int>(width))
     ("h,height", "height", cxxopts::value<int>(height))
@@ -3833,8 +3858,9 @@ main(int argc, char *argv[]) {
     glfwWindowHint( GLFW_DECORATED, GL_FALSE );
   }
   
-  app.title = ("Stim");
-  
+  /* strdup'd so setWindowTitle can free and replace it later */
+  app.title = strdup(title_opt.c_str());
+
   GLFWmonitor* primary = glfwGetPrimaryMonitor();
   const GLFWvidmode* mode = glfwGetVideoMode(primary);
   

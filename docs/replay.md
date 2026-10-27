@@ -5,13 +5,15 @@ back into a running stim2, standing in for ESS. The stim script that ran on
 the rig runs again, unchanged, fed the same commands and the same bound
 datapoints in the same order and at the same pace.
 
-    dlsh tools/replay/replay.tcl FILE.ess -trial 7 -port 5612
+    stim2 --port-base 5610 -w 960 -h 540 &      # a second stim2, rig aspect
+    dlsh tools/replay/replay.tcl FILE.ess -trial 7
     dlsh tools/replay/replay.tcl FILE.ess -trials 1-20 -speed 2
     dlsh tools/replay/replay.tcl FILE.ess -dry
 
 | option | |
 |---|---|
-| `-host H`, `-port P` | the stim2 to drive (default `localhost:4612`). Never a stim2 that is running an experiment: start a second one with `--port-base 5610` and use `-port 5612`. |
+| `-host H`, `-port P` | the stim2 to drive (default `localhost:5612`, a stim2 started with `--port-base 5610`). Port 4612 is the live display's and is refused unless `-live` is given. |
+| `-live` | allow `-port 4612`. Only when you mean to draw on the live display. |
 | `-trial N`, `-trials A-B` | one trial or a range, 1-based by observation period. A trial's window runs from the previous period's end to its own, so the commands that set it up (`nexttrial`, `targets_on`) travel with it. Default: the whole file. |
 | `-speed X` | playback rate, default 1.0. `0` sends as fast as stim2 takes it. |
 | `-gap S` | longest pause kept between two events (default 1 s). Idle time between trials is compressed to this. |
@@ -34,7 +36,15 @@ In the order ESS's `configure_stim` does it:
    `stim_init`: the exact text the rig ran, from the file.
 3. `stim::inject stimdg <base64> 6`: the trial table as logged, through the
    same `readdg` handler the rig used.
-4. The timeline. Every `stim/cmd` record goes out as the command text that
+4. The rig's degree mapping: `screen_set HalfScreenDegreeX` and `...Y` from
+   the file's `ess/screen_halfx` and `ess/screen_halfy`, so a target at
+   10 degrees lands where it did relative to the rig's screen edges. The
+   window's pixel size is stim2's own (`-w`/`-h` at startup); the script
+   warns when its aspect differs from the rig's by more than 5%, since
+   circles would then draw as ellipses, and suggests a size.
+5. The window is retitled `replay: <file> (<trials>)` through
+   `setWindowTitle` (stim2 0.28.2 or newer; older ones keep "Stim").
+6. The timeline. Every `stim/cmd` record goes out as the command text that
    was sent; every record of a bound stream goes in with `stim::inject`,
    which delivers it exactly as stim2's render thread would. Both are
    ordered and paced by their dserv timestamps (`t_send` for commands).
@@ -52,11 +62,11 @@ errors and 225 frames swapped; the cursor binding reported all 170 arrivals.
 - **Reproduced:** what the script drew in response to what, in order and
   at the recorded pace. The commands, the trial table, the cursor path
   (and any other bound stream), the script's own frame logic.
-- **The display is this machine's.** Refresh rate and screen geometry
-  are stim2's own; degrees map to pixels through its settings, not the
-  rig's. A frame on the rig is not a frame here, so the replay is paced by
-  time, not by `stim/frame`. The frame record is still the authority on
-  what the rig showed when; it is not used to drive the replay.
+- **The display is this machine's.** The degree mapping is the rig's (step
+  4), but the refresh rate and pixel size are stim2's own. A frame on the
+  rig is not a frame here, so the replay is paced by time, not by
+  `stim/frame`. The frame record is still the authority on what the rig
+  showed when; it is not used to drive the replay.
 - **Nothing leaves stim2.** `dserv_send` and friends do nothing, so a
   script that reports outcomes back (planko's `complete`) reports to no
   one, which is correct: the outcome is already in the file.

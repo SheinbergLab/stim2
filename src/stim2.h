@@ -207,6 +207,8 @@ typedef struct latedraw_status_s {
 extern int stimLateDrawEnable(double budget_ms, char *err, int errlen);
 extern void stimLateDrawDisable(void);
 extern void stimLateDrawStatus(latedraw_status_t *st);
+extern void stimSetWindowTitle(const char *title);
+extern const char *stimGetWindowTitle(void);
 extern double getFrameDuration(void);
 extern int getStereoMode(void);
 extern int setStereoMode(int);

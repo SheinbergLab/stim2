@@ -5,8 +5,10 @@
 #     dlsh tools/replay/replay.tcl FILE.ess ?options?
 #
 #       -host H        stim2 host (default localhost)
-#       -port P        stim2 message port (default 4612; 5612 for a stim2
-#                      started with --port-base 5610 beside a live one)
+#       -port P        stim2 message port (default 5612: a stim2 started with
+#                      --port-base 5610, beside any live one). Port 4612 is
+#                      the live display's and is refused without -live.
+#       -live          allow -port 4612 (you really do mean the live stim2)
 #       -trial N       play one trial: the Nth observation period, 1-based,
 #                      with the setup commands that preceded it
 #       -trials A-B    play trials A through B
@@ -27,18 +29,24 @@
 #   2. source each stim/lib/<name> body, then the stim/script body, then
 #      stim_init -- the exact text the rig ran
 #   3. stim::inject stimdg <base64> 6 (the trial table as logged)
-#   4. walk the timeline: every stim/cmd goes out as the command text that
+#   4. the rig's screen geometry: screen_set HalfScreenDegreeX/Y from the
+#      file's ess/screen_halfx/halfy, so degrees map onto this window the
+#      way they mapped onto the rig's display (start stim2 with -w/-h in the
+#      rig's aspect for the picture to match; the script warns otherwise)
+#   5. walk the timeline: every stim/cmd goes out as the command text that
 #      was sent, every record of a bound stream goes in with stim::inject,
 #      in dserv-timestamp order, paced by those timestamps
 #
 # The stim script therefore runs unchanged: its bindings fill from the
 # injected records, its frame script draws the cursor, its procs answer the
-# commands. What differs from the rig is the display (its refresh, its
-# geometry) and that nothing leaves stim2.
+# commands. What differs from the rig is the display's refresh and pixel
+# size, and that nothing leaves stim2. The window is retitled with the file
+# and trials (setWindowTitle, stim2 >= 0.28.2) so it cannot be taken for a
+# live display.
 #
 # Needs dlsh with the dslog and tcljson packages (dlsh.zip 0.20.4 or newer)
 # and a stim2 with stimess 1.1 or newer. Never touch a stim2 that is driving
-# an experiment: start one with --port-base 5610 and use -port 5612.
+# an experiment: start one with --port-base 5610 (the default -port here).
 
 package require dslog
 package require tcljson
@@ -47,7 +55,8 @@ package require tcljson
 # options
 # ---------------------------------------------------------------------------
 set opt(host)    localhost
-set opt(port)    4612
+set opt(port)    5612
+set opt(live)    0
 set opt(trial)   ""
 set opt(speed)   1.0
 set opt(gap)     1.0
@@ -56,7 +65,7 @@ set opt(dry)     0
 set opt(verbose) 0
 
 if {[llength $argv] < 1} {
-    puts stderr "usage: dlsh replay.tcl FILE.ess ?-host H? ?-port P? ?-trial N | -trials A-B?\
+    puts stderr "usage: dlsh replay.tcl FILE.ess ?-host H? ?-port P? ?-live? ?-trial N | -trials A-B?\
  ?-speed X? ?-gap S? ?-stream NAME ...? ?-dry? ?-verbose?"
     exit 2
 }
@@ -67,6 +76,7 @@ while {[llength $args]} {
     switch -- $a {
         -host    { set opt(host)  [lindex $args 0]; set args [lrange $args 1 end] }
         -port    { set opt(port)  [lindex $args 0]; set args [lrange $args 1 end] }
+        -live    { set opt(live) 1 }
         -trial   { set v [lindex $args 0]; set args [lrange $args 1 end]; set opt(trial) [list $v $v] }
         -trials  { set v [lindex $args 0]; set args [lrange $args 1 end]
                    if {![regexp {^(\d+)-(\d+)$} $v -> a b]} { puts stderr "-trials wants A-B"; exit 2 }
@@ -78,6 +88,13 @@ while {[llength $args]} {
         -verbose { set opt(verbose) 1 }
         default  { puts stderr "unknown option $a"; exit 2 }
     }
+}
+# 4612 is where ESS drives the rig's display; a replay sent there would
+# draw over an experiment. A second stim2 (--port-base 5610) is the target.
+if {$opt(port) == 4612 && !$opt(live)} {
+    puts stderr "replay: port 4612 is the live display's message port; start a stim2 with\
+ --port-base 5610 and use -port 5612 (the default), or pass -live if you mean it"
+    exit 2
 }
 
 # ---------------------------------------------------------------------------
@@ -138,6 +155,11 @@ while {1} {
             foreach b [dict get $j bindings] { lappend bind_names [dict get $b name] }
         }
         stimdg { set stimdg [dict get $d data] }
+        ess/screen_halfx { set geom(halfx) [string trim [dict get $d data]] }
+        ess/screen_halfy { set geom(halfy) [string trim [dict get $d data]] }
+        ess/screen_w     { set geom(w)     [string trim [dict get $d data]] }
+        ess/screen_h     { set geom(h)     [string trim [dict get $d data]] }
+        ess/screen_refresh_rate { set geom(hz) [string trim [dict get $d data]] }
         logger:beginobs { lappend obs_begin [dict get $d timestamp] }
         logger:endobs   { lappend obs_end   [dict get $d timestamp] }
         stim/cmd {
@@ -194,6 +216,11 @@ foreach e $events { if {[lindex $e 1] eq "cmd"} { incr ncmd } else { incr ndp } 
 puts "replay: $path"
 puts "  script  $script_path ([string length $script] bytes), libs: [expr {[dict size $libs] ? [dict keys $libs] : "none"}]"
 puts "  stimdg  [string length $stimdg] bytes; bound streams: [expr {[llength $bind_names] ? $bind_names : "none"}][expr {[llength $opt(streams)] ? " + $opt(streams)" : ""}]"
+if {[info exists geom(halfx)] && [info exists geom(halfy)]} {
+    puts "  screen  rig: +/-$geom(halfx) x +/-$geom(halfy) deg[expr {[info exists geom(w)] ? ", $geom(w)x$geom(h) px" : ""}][expr {[info exists geom(hz)] ? ", $geom(hz) Hz" : ""}]"
+} else {
+    puts "  screen  no ess/screen_* records: this stim2's own degree mapping will be used"
+}
 puts "  file    [format %.1f [expr {($t_last - $t_first)/6e7}]] min, $ntrials observation periods, [dict get $counts stim/cmd] commands ($hashed hash-only, skipped)"
 puts "  playing $span_note: $ncmd commands, $ndp datapoints, span [format %.1f [expr {([lindex $events end 0] - [lindex $events 0 0])/1e6}]] s, speed $opt(speed), gaps capped at $opt(gap) s"
 if {[llength $bind_names] == 0 && [llength $opt(streams)] == 0} {
@@ -236,6 +263,32 @@ puts "  sourced [file tail $script_path]; bindings: [stim_send $sock {stim::bind
 set r [stim_send $sock [list stim::inject stimdg [binary encode base64 $stimdg] 6]]
 if {[is_error $r]} { puts stderr "stimdg inject failed: $r"; exit 1 }
 puts "  stimdg loaded: [stim_send $sock {dl_length stimdg:stimtype}] trials"
+
+# the rig's degree mapping onto this window; the pixel size is stim2's own
+# (-w/-h at startup), so say when the aspect does not match the rig's
+set win_w [stim_send $sock {screen_set WinWidth}]
+set win_h [stim_send $sock {screen_set WinHeight}]
+if {[info exists geom(halfx)] && [info exists geom(halfy)]} {
+    set r1 [stim_send $sock [list screen_set HalfScreenDegreeX $geom(halfx)]]
+    set r2 [stim_send $sock [list screen_set HalfScreenDegreeY $geom(halfy)]]
+    if {[is_error $r1] || [is_error $r2]} {
+        puts "  WARNING: could not set the rig's degree mapping: $r1 $r2"
+    } else {
+        puts "  geometry: +/-$geom(halfx) x +/-$geom(halfy) deg onto this ${win_w}x${win_h} window"
+        if {[info exists geom(w)] && $win_h > 0 && $geom(h) > 0} {
+            set rig_aspect [expr {double($geom(w)) / $geom(h)}]
+            set win_aspect [expr {double($win_w) / $win_h}]
+            if {abs($rig_aspect - $win_aspect) / $rig_aspect > 0.05} {
+                puts [format "  WARNING: window aspect %.2f vs rig %.2f -- circles will be ellipses;\
+ start stim2 with -w %d -h %d (or any %dx%d multiple)" $win_aspect $rig_aspect \
+                          [expr {int($geom(w)/2)}] [expr {int($geom(h)/2)}] $geom(w) $geom(h)]
+            }
+        }
+    }
+}
+# label the window; an older stim2 has no setWindowTitle, which is fine
+catch { stim_send $sock [list setWindowTitle "replay: [file tail $path] ($span_note)"] }
+
 if {$opt(trial) ne "" && [lindex $opt(trial) 0] > 1} { stim_send $sock reset }
 
 # ---------------------------------------------------------------------------
