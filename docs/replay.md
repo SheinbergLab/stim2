@@ -9,6 +9,8 @@ datapoints in the same order and at the same pace.
     dlsh tools/replay/replay.tcl FILE.ess -trial 7
     dlsh tools/replay/replay.tcl FILE.ess -trials 1-20 -speed 2
     dlsh tools/replay/replay.tcl FILE.ess -dry
+    stim2 --headless -w 1920 -h 1080 -r 120 --port-base 5610 &
+    dlsh tools/replay/replay.tcl FILE.ess -render movie.mp4     # frame-locked
 
 | option | |
 |---|---|
@@ -20,6 +22,8 @@ datapoints in the same order and at the same pace.
 | `-stream NAME` | also inject records named `NAME`. The streams named in the file's `stim/bind` table are always injected. |
 | `-dry` | read and plan, print the summary and the first events, send nothing. |
 | `-verbose` | print every event as it goes out. |
+| `-render OUT` | frame-locked into a movie on the rig's timeline (below). `OUT` ending `.mp4`/`.mov`/`.mkv` goes through ffmpeg; anything else gets raw RGBA (a file, or `"|command"`). `-speed` is ignored; `-gap` compresses only when given. |
+| `-fps F` | the movie's frame rate with `-render`, default the rig's refresh. |
 
 Needs `dlsh` with the `dslog` and `tcljson` packages (dlsh.zip 0.20.4 or
 newer) and a stim2 with stimess 1.1 or newer (`stim::prelude playback`).
@@ -57,18 +61,54 @@ Measured 2026-10-27 on the dev Mac against a throwaway stim2 (`--port-base
 170 pointer records over a recorded 6.4 s, played at 2x in 3.2 s with no
 errors and 225 frames swapped; the cursor binding reported all 170 arrivals.
 
+## Frame-locked: `-render`
+
+Uses stim2's step mode and manual frame sink (`docs/headless.md`), and
+needs a file with `stim/frame` records and ACK-stamped `stim/cmd`
+records. Each rig frame is drawn once, after exactly the inputs it saw:
+
+- **Commands** by their ACK stamp. stim2 applied each one with
+  `SwapCount = swap`, so it first shows in frame `swap+1`. A `!` command,
+  answered after its swap and carrying a flip, shows in frame `swap`. The
+  clock is set to the command's `dq` tick before it goes out.
+- **Datapoints** by the frame's `ds_dispatched` advance: that many records,
+  in order, among those dserv already had before the frame's record. A
+  shortfall means a forwarded datapoint that is not in the file's streams.
+  Their times go onto the rig clock through the median of ticks minus
+  dserv time across the frames. A trial window starts from each stream's
+  last record before it.
+- **The frame:** `stepFrame` at max(clock, previous flip), with the
+  frame's own flip.
+- **The movie:** each frame is written once per movie tick it spans on the
+  rig's flips. Static stretches hold, a frame the rig showed for two
+  refreshes shows for two ticks, and frames shorter than a tick drop.
+
+Measured 2026-10-27 with `momo_joystick_motiondir_261026195800.ess` at
+the rig's 1920x1080 and 120 Hz:
+- 3654 rig frames (no swapcount gaps) were drawn with 0 errors. All 51
+  commands were placed by ACK stamp, and 1233 of 1233 pointer records by
+  `ds_dispatched`; one forwarded datapoint was not in the file.
+- The movie has 5702 frames, 47.5 s, which is the session's span.
+- It took 25.1 s headless on the Linux box's Radeon and 27.7 s on the dev
+  Mac.
+- The check: the first correct-feedback command has `swap` 10072. Rig
+  frame 10073 flips 5558.4 ms after the first frame, which is movie
+  frame 667. Movie frame 667 is the first to show the green target.
+
 ## What is and is not reproduced
 
 - **Reproduced:** what the script drew in response to what, in order and
   at the recorded pace. The commands, the trial table, the cursor path
   (and any other bound stream), the script's own frame logic.
+- **Not reproduced: random draws.** motionpatch places its dots with the
+  process-wide, unseeded `rand()`, so a replay shows the same stimulus
+  parameters with a different sample of dots. Matching the rig dot for dot
+  needs a per-object seeded generator in the stimdll with the seed logged;
+  with `-render` the frame count already matches the rig's.
 - **The display is this machine's.** The degree mapping is the rig's (step
-  4), but the refresh rate and pixel size are stim2's own. A frame on the
-  rig is not a frame here, so the replay is paced by time, not by
-  `stim/frame`. The frame record is still the authority on what the rig
-  showed when; it is not used to drive the replay yet. stim2's step mode
-  and frame sink (`docs/headless.md`) are what a frame-locked, headless
-  replay into a movie will use.
+  4), but the refresh rate and pixel size are stim2's own. Paced by time,
+  a frame on the rig is not a frame here; with `-render` it is, one for
+  one, by `stim/frame`.
 - **Nothing leaves stim2.** `dserv_send` and friends do nothing, so a
   script that reports outcomes back (planko's `complete`) reports to no
   one, which is correct: the outcome is already in the file.
