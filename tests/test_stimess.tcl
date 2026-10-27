@@ -1,5 +1,5 @@
 #!/usr/bin/env tclsh
-# test_stimess.tcl -- unit test for the stimess package (modules/stimess-1.0.tm)
+# test_stimess.tcl -- unit test for the stimess package (modules/stimess-1.1.tm)
 # under plain tclsh, with no stim2 and no dserv:
 #
 #     tclsh tests/test_stimess.tcl
@@ -12,17 +12,22 @@
 # Prints OK/FAIL lines and a summary; exits non-zero on any failure.
 
 set here [file dirname [file normalize [info script]]]
-set pkg  [file join $here .. modules stimess-1.0.tm]
+set pkg  [file join $here .. modules stimess-1.1.tm]
 
 set ::fails 0
 set ::passes 0
+# The live prelude points `puts` at dserv (the recorder below), so the
+# report goes through the original command once that rename has happened.
+proc report {s} {
+    if {[info commands _puts] ne ""} { _puts $s } else { puts $s }
+}
 proc check {name cond {detail ""}} {
     if {$cond} {
         incr ::passes
-        puts "OK   $name"
+        report "OK   $name"
     } else {
         incr ::fails
-        puts "FAIL $name  $detail"
+        report "FAIL $name  $detail"
     }
 }
 
@@ -62,7 +67,7 @@ proc arrive {name value {type 1} {ts 1729000000000000}} {
 }
 
 source $pkg
-check "package provide" [expr {[package present stimess] eq "1.0"}]
+check "package provide" [expr {[package present stimess] eq "1.1"}]
 
 # ---- bind without dservhost: recorded, not matched -------------------------
 unset -nocomplain ::dservhost
@@ -248,7 +253,7 @@ stim::bind {ess/we"ird\name} [list plain "tab\there" "é"]
 
 set js [stim::bindings_json]
 check "json starts with package tag" \
-    [string match {\{"package":"stimess 1.0","bindings":\[*\]\}} $js] "got $js"
+    [string match {\{"package":"stimess 1.1","bindings":\[*\]\}} $js] "got $js"
 check "json is pure ASCII" [regexp {^[\x20-\x7e]*$} $js]
 check "json escapes quote and backslash" \
     [expr {[string first {"name":"ess/we\"ird\\name"} $js] >= 0}] "got $js"
@@ -265,7 +270,7 @@ proc json_check {js} {
     set script {
 import json, sys
 d = json.loads(sys.stdin.read())
-assert d["package"] == "stimess 1.0"
+assert d["package"] == "stimess 1.1"
 assert isinstance(d["bindings"], list)
 for b in d["bindings"]:
     assert set(b) == {"name", "fields", "mode", "sep"}
@@ -315,7 +320,7 @@ check "unbind_all drops our ::dsCmds entries" [expr {$leftover eq {}}] "left {$l
 check "unbind_all leaves unrelated ::dsCmds alone" \
     [expr {[info exists ::dsCmds(unrelated/thing)] && $::dsCmds(unrelated/thing) eq "some_other_proc"}]
 check "bindings_json empty table" \
-    [expr {[stim::bindings_json] eq {{"package":"stimess 1.0","bindings":[]}}}] \
+    [expr {[stim::bindings_json] eq {{"package":"stimess 1.1","bindings":[]}}}] \
     "got [stim::bindings_json]"
 lassign [json_check [stim::bindings_json]] st out
 if {$st ne "skip"} { check "python accepts empty table" [expr {$st eq "ok"}] $out }
@@ -338,5 +343,118 @@ check "unbind leaves a foreign ::dsCmds entry for our name alone" \
     [expr {[info exists ::dsCmds(ess/mine)] && $::dsCmds(ess/mine) eq "their_proc"}]
 unset ::dsCmds(ess/mine)
 
-puts "\n$::passes passed, $::fails failed"
+# ---- the prelude, playback form --------------------------------------------
+# A replay installs this instead of the rig's plumbing: no server, no socket,
+# the same global commands defined as no-ops, bindings recorded silently,
+# datapoints delivered by stim::inject.
+set ::dservhost 10.0.0.1
+set ::dsCmds(leftover) some_proc
+set ::dsVals(leftover) "leftover 1 0 1 {x}"
+stim::bind ess/old {a b}
+set ::deinit_calls 0
+proc stim_deinit {} { incr ::deinit_calls }
+proc stim_init {} { error "the previous script's stim_init must be reset" }
+set qpcs::added {}
+set r [stim::prelude playback]
+check "prelude playback returns its mode" [expr {$r eq "playback"}]
+check "prelude runs the outgoing script's stim_deinit once" [expr {$::deinit_calls == 1}]
+check "prelude resets stim_init to a no-op" [expr {[catch {stim_init}] == 0}]
+check "prelude resets stim_deinit to a no-op" \
+    [expr {[catch {stim_deinit}] == 0 && $::deinit_calls == 1}]
+check "prelude drops every ::dsCmds entry" [expr {![info exists ::dsCmds(leftover)]}]
+check "prelude drops every ::dsVals entry" [expr {![info exists ::dsVals(leftover)]}]
+check "prelude drops the previous bindings" [expr {[llength [stim::bindings]] == 0}]
+check "playback: ::dservhost is unset" [expr {![info exists ::dservhost]}]
+check "stim::playback reads 1" [expr {[stim::playback] == 1}]
+check "playback installs readdg for stimdg" \
+    [expr {[info exists ::dsCmds(stimdg)] && $::dsCmds(stimdg) eq "readdg"}]
+foreach p {dserv_send dserv_send_string dserv_send_evt dserv_tag_evt dserv_return_close
+           onMousePress onMouseRelease onMouseMove} {
+    check "playback defines $p" [expr {[info procs ::$p] ne ""}]
+}
+check "playback dserv_send is a no-op" [expr {[catch {dserv_send a/b 1} e] == 0 && $e eq ""}]
+check "playback dserv_send_string is a no-op" \
+    [expr {[catch {dserv_send_string a/b hi} e] == 0 && $e eq ""}]
+check "playback dserv_send_evt is a no-op" [expr {[catch {dserv_send_evt a/b {1 2}}] == 0}]
+check "playback dserv_tag_evt is a no-op" [expr {[catch {dserv_tag_evt {A B} 0 0 0 0}] == 0}]
+check "playback mouse handlers are no-ops" \
+    [expr {[catch {onMousePress; onMouseMove 3 4; onMouseRelease}] == 0}]
+
+# bind under playback: recorded, nothing asked of any server, no chatter
+set r [stim::bind ess/dial/pointer {x y show band}]
+check "playback bind returns 0" [expr {$r == 0}]
+check "playback bind asks no server" [expr {$qpcs::added eq {}}]
+check "playback bind is recorded" [expr {[llength [stim::bindings]] == 1}]
+
+# inject: the replay's delivery path, the same line stim2 would build
+set r [stim::inject ess/dial/pointer "2.5,-1,1,0" 1 1793000000000000]
+check "inject returns 1 when a handler ran" [expr {$r == 1}]
+check "inject dispatched into the binding" [expr {[stim::count ess/dial/pointer] == 1}]
+check "inject: fields read back" \
+    [expr {[stim::get ess/dial/pointer x] eq "2.5" && [stim::get ess/dial/pointer show] eq "1"}]
+check "inject stores stim2's line in ::dsVals" \
+    [expr {$::dsVals(ess/dial/pointer) eq [list ess/dial/pointer 1 1793000000000000 10 "2.5,-1,1,0"]}]
+check "inject of an unbound name returns 0" [expr {[stim::inject ess/nothing 1] == 0}]
+check "inject defaults the timestamp" \
+    [expr {[stim::inject ess/dial/pointer "1,1,0,0"] == 1 && [lindex $::dsVals(ess/dial/pointer) 2] > 0}]
+# a value with braces and spaces survives the list round trip
+stim::bind ess/text {t}
+stim::inject ess/text "a {b} c"
+check "inject preserves braces and spaces in the value" [expr {[stim::get ess/text t] eq "a {b} c"}]
+
+# ---- the prelude, live form ------------------------------------------------
+# Under tclsh with a local listener for the return socket and the qpcs
+# recorders: the registration, the stimdg match, the socket, the helpers.
+proc qpcs::dsStimRegister {server {port 4620}} { lappend ::registered $server; return 1 }
+proc qpcs::dsSocketSendBinary {sock varname dl} { lappend ::sent [list $varname $dl] }
+proc qpcs::dsSocketSendBytes {sock varname val {type 0}} { lappend ::sent [list $varname $val $type] }
+proc qpcs::dsPut {server varname val} { lappend ::put [list $varname $val] }
+package provide qpcs 3.43
+set ::registered {}; set ::sent {}; set ::put {}
+set ::accepted 0
+proc accept {chan addr port} { incr ::accepted; set ::server_chan $chan }
+set listener [socket -server accept 0]
+set lport [lindex [fconfigure $listener -sockname] 2]
+set qpcs::added {}
+set qpcs::unregistered 0
+set ::mouse_bridge_mouse 0
+set r [stim::prelude live -host 127.0.0.1 -port $lport]
+check "prelude live returns its mode" [expr {$r eq "live"}]
+check "live: ::dservhost set from -host" [expr {$::dservhost eq "127.0.0.1"}]
+check "stim::playback reads 0 again" [expr {[stim::playback] == 0}]
+check "live drops the playback bindings" [expr {[llength [stim::bindings]] == 0}]
+check "live: dsStimUnregister then dsStimRegister" \
+    [expr {$qpcs::unregistered == 1 && $::registered eq {127.0.0.1}}]
+check "live: the stimdg match is added" [expr {$qpcs::added eq {{127.0.0.1 stimdg}}}]
+check "live: readdg handles stimdg" [expr {$::dsCmds(stimdg) eq "readdg"}]
+update
+check "live: the return socket connected to -host:-port" \
+    [expr {$::accepted == 1 && [info exists ::dserv_return_sock]}]
+dserv_send a/b somedl
+dserv_send_string a/c hello
+check "live: dserv_send / dserv_send_string go through qpcs over the socket" \
+    [expr {$::sent eq {{a/b somedl} {a/c hello 1}}}] "sent {$::sent}"
+set ::put {}
+puts "hello stdout"
+check "live: puts goes to stim/stdout via dsPut" \
+    [expr {$::put eq [list [list stim/stdout "hello stdout\n"]]}] "put {$::put}"
+check "live: _puts is the original puts" [expr {[info commands _puts] ne ""}]
+set r [stim::bind ess/dial/pointer {x y show band}]
+check "live bind registers with the server again" \
+    [expr {$r == 1 && [lindex $qpcs::added end] eq {127.0.0.1 ess/dial/pointer}}]
+check "prelude live without -host errors" [catch {stim::prelude live}]
+check "prelude with an unknown mode errors" [catch {stim::prelude sideways}]
+check "prelude playback with options errors" [catch {stim::prelude playback -x 1}]
+
+# back to playback: the socket is closed and puts is plain again
+set sock_before $::dserv_return_sock
+stim::prelude playback
+check "playback after live closes the return socket" \
+    [expr {![info exists ::dserv_return_sock] && [catch {fconfigure $sock_before}]}]
+set ::put {}
+puts -nonewline ""
+check "playback after live: puts no longer goes to dsPut" [expr {$::put eq {}}]
+close $listener
+
+report "\n$::passes passed, $::fails failed"
 exit [expr {$::fails ? 1 : 0}]
