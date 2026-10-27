@@ -198,10 +198,10 @@ while {1} {
             lappend events [list [dict get $j t_send] cmd [dict get $j cmd] [dict get $j seq] $ack]
         }
         default {
-            # stream records: kept for now, filtered once bind_names is known
-            if {[string match "ess/*" $nm] || [dict exists $stream_set $nm]} {
-                lappend records [list [dict get $d timestamp] $nm [dict get $d type] [dict get $d data]]
-            }
+            # stream records: all kept for now, filtered once bind_names is
+            # known (stim/bind may come after them, and a bound stream can
+            # be named anything -- runner/press_cmd, not only ess/*)
+            lappend records [list [dict get $d timestamp] $nm [dict get $d type] [dict get $d data]]
         }
     }
 }
