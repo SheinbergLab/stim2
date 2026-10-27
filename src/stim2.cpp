@@ -1980,16 +1980,33 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
   /* Frame sink (frameSink in tclproc.c): every presented frame, as raw
      RGBA rows top-down with no header, written to a file or to a command's
      stdin -- for ffmpeg, -f rawvideo -pix_fmt rgba -s WxH -i - .  Read
-     from the drawn buffer just before it is presented, like frameGrab. */
+     from the drawn buffer just before it is presented, like frameGrab.
+     Manual (-manual): each presented frame is only held, and written when
+     frameSink write n says, n times -- a frame-locked replay writes each
+     rig frame once per movie tick it spans (0 to drop, >1 to hold). */
   struct FrameSink {
     FILE *fp = nullptr;
     bool is_pipe = false;
+    bool manual = false;
+    bool held = false;            /* rows holds a presented frame */
     std::string target;
     int w = 0, h = 0;
     long long frames = 0;
     bool failed = false;          /* a write failed; the sink stops writing */
     std::vector<unsigned char> buf, rows;
   } sink;
+
+  bool sinkWrite(void)
+  {
+    if (fwrite(sink.rows.data(), 1, sink.rows.size(), sink.fp) != sink.rows.size()) {
+      sink.failed = true;
+      log_message("error", "frameSink: write to %s failed after %lld frames",
+                  sink.target.c_str(), sink.frames);
+      return false;
+    }
+    sink.frames++;
+    return true;
+  }
 
   void sinkFrame()
   {
@@ -2004,13 +2021,8 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
       memcpy(&sink.rows[i * rowbytes], &sink.buf[(size_t) (sink.h - i - 1) * rowbytes],
              rowbytes);
     for (size_t i = 3; i < sink.rows.size(); i += 4) sink.rows[i] = 255;
-    if (fwrite(sink.rows.data(), 1, sink.rows.size(), sink.fp) != sink.rows.size()) {
-      sink.failed = true;
-      log_message("error", "frameSink: write to %s failed after %lld frames",
-                  sink.target.c_str(), sink.frames);
-      return;
-    }
-    sink.frames++;
+    sink.held = true;
+    if (!sink.manual) sinkWrite();
   }
 
   /* stepFrame bookkeeping: a redraw asked for while stepped is held here
@@ -2774,7 +2786,7 @@ int stimStepFrame(double t_ms, double flip_ms, stim_step_result_t *r,
   return 0;
 }
 
-int stimFrameSinkOpen(const char *target, char *err, int errlen)
+int stimFrameSinkOpen(const char *target, int manual, char *err, int errlen)
 {
   int status;
   if (app.sink.fp) stimFrameSinkClose(&status);
@@ -2803,6 +2815,22 @@ int stimFrameSinkOpen(const char *target, char *err, int errlen)
   app.sink.h = winHeight;
   app.sink.frames = 0;
   app.sink.failed = false;
+  app.sink.manual = manual != 0;
+  app.sink.held = false;
+  return 0;
+}
+
+/* Manual sink: write the last presented frame n times (0 is allowed). */
+int stimFrameSinkWrite(int n, char *err, int errlen)
+{
+  if (!app.sink.fp) { snprintf(err, errlen, "no sink open"); return -1; }
+  if (app.sink.failed) { snprintf(err, errlen, "an earlier write failed"); return -1; }
+  if (!app.sink.held) { snprintf(err, errlen, "no frame presented since the sink opened"); return -1; }
+  for (int i = 0; i < n; i++)
+    if (!app.sinkWrite()) {
+      snprintf(err, errlen, "write to %s failed", app.sink.target.c_str());
+      return -1;
+    }
   return 0;
 }
 
@@ -2831,6 +2859,7 @@ void stimFrameSinkStatus(stim_sink_status_t *st)
   st->height = app.sink.h;
   st->frames = app.sink.frames;
   st->failed = app.sink.failed;
+  st->manual = app.sink.manual;
 }
 
 

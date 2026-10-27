@@ -130,6 +130,24 @@ ck "frameGrab frame 1 == sink frame 1" [expr {$gbytes eq [string range $data 0 [
 binary scan $data cu4 corner
 ck "background is the set colour ($corner)" [expr {$corner eq {20 40 60 255}}]
 
+# --- manual sink: frames are held, written only by "frameSink write n" -------
+set fd [file tempfile mpath headless_manual.rgba]; close $fd
+set s [frameSink open -manual $mpath]
+ck "frameSink open -manual: manual 1" [dict get $s manual]
+ck "write before any frame is refused" [catch { frameSink write 1 }]
+set r [stepFrame]                        ;# held, not written
+ck "a manual sink writes nothing on present" [expr {[dict get [frameSink] frames] == 0}]
+frameSink write 0                        ;# dropped
+set r [stepFrame]
+set s [frameSink write 3]                ;# held for three movie ticks
+ck "write 0 then write 3: three frames" [expr {[dict get $s frames] == 3}]
+ck "write -1 refused" [catch { frameSink write -1 }]
+set s [frameSink close]
+set fd [open $mpath rb]; set mdata [read $fd]; close $fd
+file delete $mpath
+ck "manual file is three identical frames" [expr {[string length $mdata] == 3 * $fsz &&
+    [string range $mdata 0 [expr {$fsz - 1}]] eq [string range $mdata $fsz [expr {2 * $fsz - 1}]]}]
+
 # --- back to real time ------------------------------------------------------
 set st [stepMode 0]
 ck "stepMode 0: disabled" [expr {![dict get $st enabled]}]

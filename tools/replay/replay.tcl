@@ -22,6 +22,14 @@
 #                      injected
 #       -dry           read and plan, print the timeline summary, send nothing
 #       -verbose       print every event as it is sent
+#       -render OUT    frame-locked: draw each of the rig's frames (stim/frame)
+#                      in step mode and write a movie on the rig's timeline.
+#                      OUT ending .mp4/.mov/.mkv goes through ffmpeg; anything
+#                      else is raw RGBA to a file or "|command". -speed is
+#                      ignored; -gap compresses only when given. Needs a stim2
+#                      with stepFrame (headless or not) and a file with
+#                      stim/frame and ACK-stamped stim/cmd records.
+#       -fps F         the movie's frame rate (default: the rig's refresh)
 #
 # What it does, in the order ESS's configure_stim does it:
 #
@@ -35,7 +43,8 @@
 #      rig's aspect for the picture to match; the script warns otherwise)
 #   5. walk the timeline: every stim/cmd goes out as the command text that
 #      was sent, every record of a bound stream goes in with stim::inject,
-#      in dserv-timestamp order, paced by those timestamps
+#      in dserv-timestamp order, paced by those timestamps -- or, with
+#      -render, frame by frame on the rig's clock (see play_locked below)
 #
 # The stim script therefore runs unchanged: its bindings fill from the
 # injected records, its frame script draws the cursor, its procs answer the
@@ -63,10 +72,13 @@ set opt(gap)     1.0
 set opt(streams) {}
 set opt(dry)     0
 set opt(verbose) 0
+set opt(render)  ""
+set opt(fps)     ""
+set opt(gap_given) 0
 
 if {[llength $argv] < 1} {
     puts stderr "usage: dlsh replay.tcl FILE.ess ?-host H? ?-port P? ?-live? ?-trial N | -trials A-B?\
- ?-speed X? ?-gap S? ?-stream NAME ...? ?-dry? ?-verbose?"
+ ?-speed X? ?-gap S? ?-stream NAME ...? ?-dry? ?-verbose? ?-render OUT? ?-fps F?"
     exit 2
 }
 set path [lindex $argv 0]
@@ -82,7 +94,9 @@ while {[llength $args]} {
                    if {![regexp {^(\d+)-(\d+)$} $v -> a b]} { puts stderr "-trials wants A-B"; exit 2 }
                    set opt(trial) [list $a $b] }
         -speed   { set opt(speed) [lindex $args 0]; set args [lrange $args 1 end] }
-        -gap     { set opt(gap)   [lindex $args 0]; set args [lrange $args 1 end] }
+        -gap     { set opt(gap)   [lindex $args 0]; set args [lrange $args 1 end]; set opt(gap_given) 1 }
+        -render  { set opt(render) [lindex $args 0]; set args [lrange $args 1 end] }
+        -fps     { set opt(fps)   [lindex $args 0]; set args [lrange $args 1 end] }
         -stream  { lappend opt(streams) [lindex $args 0]; set args [lrange $args 1 end] }
         -dry     { set opt(dry) 1 }
         -verbose { set opt(verbose) 1 }
@@ -124,6 +138,7 @@ proc is_error {reply} { string match "!TCL_ERROR*" $reply }
 set script ""; set script_path ""; set libs {}; set bind_names {}
 set stimdg ""; set obs_begin {}; set obs_end {}
 set events {}          ;# {ts kind payload...}, kinds: cmd | dp
+set frames {}          ;# stim/frame: {dserv_ts frame swapcount flip_us ticks_us missed cmds ds}
 set counts [dict create]
 set hashed 0
 set stream_set [dict create]
@@ -161,12 +176,25 @@ while {1} {
         ess/screen_w     { set geom(w)     [string trim [dict get $d data]] }
         ess/screen_h     { set geom(h)     [string trim [dict get $d data]] }
         ess/screen_refresh_rate { set geom(hz) [string trim [dict get $d data]] }
+        stim/frame {
+            if {[binary scan [dict get $d data] w7 v] == 1 && [llength $v] == 7} {
+                lappend frames [list [dict get $d timestamp] {*}$v]
+            }
+        }
         logger:beginobs { lappend obs_begin [dict get $d timestamp] }
         logger:endobs   { lappend obs_end   [dict get $d timestamp] }
         stim/cmd {
             set j [json_to_dict [dict get $d data]]
             if {![dict exists $j cmd]} { incr hashed; continue }
-            lappend events [list [dict get $j t_send] cmd [dict get $j cmd] [dict get $j seq]]
+            # the ACK1 stamps, when the command was sent with them: swap is
+            # SwapCount when stim2 applied it (after the swap, for a '!'
+            # command, which then has a flip), dq the rig tick it was
+            # dequeued at, in ms
+            set ack {}
+            foreach k {swap flip dq} {
+                lappend ack [expr {[dict exists $j $k] ? [dict get $j $k] : ""}]
+            }
+            lappend events [list [dict get $j t_send] cmd [dict get $j cmd] [dict get $j seq] $ack]
         }
         default {
             # stream records: kept for now, filtered once bind_names is known
@@ -197,6 +225,8 @@ if {[llength $events] == 0} { puts stderr "no stim/cmd or bound-stream records i
 set ntrials [llength $obs_end]
 set t_first [lindex $events 0 0]
 set t_last  [lindex $events end 0]
+set all_events $events
+set w0 ""; set w1 ""
 if {$opt(trial) ne ""} {
     lassign $opt(trial) a b
     if {$a < 1 || $b > $ntrials || $a > $b} {
@@ -214,6 +244,108 @@ if {$opt(trial) ne ""} {
 set ncmd 0; set ndp 0
 foreach e $events { if {[lindex $e 1] eq "cmd"} { incr ncmd } else { incr ndp } }
 
+# ---------------------------------------------------------------------------
+# -render: the frame-locked plan.  stim/frame has one record per rig swap:
+# its swapcount, the stim clock at the flip (ticks_us), and how many
+# commands and forwarded datapoints stim2 had applied before drawing it.
+# Each rig frame is drawn here once, after exactly the inputs it saw:
+#   commands  by their ACK stamp -- applied with SwapCount = swap, so first
+#             shown in frame swap+1 (a '!' command answered after its swap,
+#             with a flip, in frame swap); clock set to its dq tick
+#   datapoints by the frame's ds_dispatched advance: that many records, in
+#             order, among those dserv had before the frame's record
+#             (a shortfall is a forwarded datapoint that is not in the
+#             file's streams); clock set to its dserv time on the rig clock
+# then stepFrame at max(clock, previous flip) with the frame's own flip.
+# The movie gets each frame once per movie tick it spans on the rig's
+# timeline: static stretches hold, frames shorter than a tick drop.
+# ---------------------------------------------------------------------------
+proc median {l} { set l [lsort -real $l]; lindex $l [expr {[llength $l] / 2}] }
+if {$opt(render) ne ""} {
+    if {![llength $frames]} {
+        puts stderr "-render needs stim/frame records, and $path has none (recorded before stimFrameLog)"; exit 1
+    }
+    set frames [lsort -integer -index 2 $frames]
+    if {$w0 ne ""} {
+        set sel {}
+        foreach f $frames { set ts [lindex $f 0]; if {$ts > $w0 && $ts <= $w1} { lappend sel $f } }
+        set frames $sel
+        if {![llength $frames]} { puts stderr "no stim/frame records in $span_note"; exit 1 }
+    }
+    set nf [llength $frames]
+    set sc_first [lindex $frames 0 2]; set sc_last [lindex $frames end 2]
+    set nmissing [expr {$sc_last - $sc_first + 1 - $nf}]
+    # stim clock minus dserv clock, us: places a datapoint on the rig's clock
+    set offs {}
+    foreach f $frames { lappend offs [expr {[lindex $f 4] - [lindex $f 0]}] }
+    set tick_off [median $offs]
+    for {set i 0} {$i < $nf} {incr i} { set fev($i) {} }
+    set idx [dict create]
+    for {set i 0} {$i < $nf} {incr i} { dict set idx [lindex $frames $i 2] $i }
+
+    # commands
+    set cmd_before 0; set cmd_after 0; set no_ack 0
+    foreach e $events {
+        if {[lindex $e 1] ne "cmd"} continue
+        lassign [lindex $e 4] swap flip dq
+        if {$swap eq "" || $dq eq ""} { incr no_ack; continue }
+        set tf [expr {$flip ne "" && $flip != 0 ? $swap : $swap + 1}]
+        if {$tf <= $sc_first} { set i 0; if {$tf < $sc_first} { incr cmd_before } } \
+        elseif {$tf > $sc_last} { incr cmd_after; continue } \
+        else {
+            # the first logged frame at or after tf (frames may have gaps)
+            while {![dict exists $idx $tf]} { incr tf }
+            set i [dict get $idx $tf]
+        }
+        lappend fev($i) [list $dq cmd [lindex $e 2]]
+    }
+    if {$no_ack} {
+        puts stderr "$no_ack commands carry no ACK stamps (swap, dq): -render cannot place them"; exit 1
+    }
+    # datapoints: for a trial window, each stream's last record before the
+    # window primes the first frame (a cursor stands where it stood)
+    set dps {}
+    if {$w0 ne ""} {
+        set last [dict create]
+        foreach e $all_events { if {[lindex $e 1] eq "dp" && [lindex $e 0] <= $w0} { dict set last [lindex $e 2] $e } }
+        foreach {n e} $last { lappend fev(0) [list [expr {([lindex $e 0] + $tick_off) / 1000.0}] dp {*}[lrange $e 2 end] [lindex $e 0]] }
+    }
+    foreach e $events { if {[lindex $e 1] eq "dp"} { lappend dps $e } }
+    set k 0; set ndps [llength $dps]; set dp_foreign 0
+    for {set i 0} {$i < $nf} {incr i} {
+        set fts [lindex $frames $i 0]
+        if {$i == 0} { set n -1 } else { set n [expr {[lindex $frames $i 7] - [lindex $frames [expr {$i - 1}] 7]}] }
+        while {$k < $ndps && $n != 0 && [lindex $dps $k 0] < $fts} {
+            set e [lindex $dps $k]
+            lappend fev($i) [list [expr {([lindex $e 0] + $tick_off) / 1000.0}] dp {*}[lrange $e 2 end] [lindex $e 0]]
+            incr k; incr n -1
+        }
+        if {$n > 0} { incr dp_foreign $n }
+    }
+    set dp_after [expr {$ndps - $k}]
+    # in time order within each frame
+    for {set i 0} {$i < $nf} {incr i} { set fev($i) [lsort -real -index 0 $fev($i)] }
+
+    # the movie: output ticks per rig frame, from the flips (ms)
+    if {$opt(fps) eq ""} {
+        set opt(fps) [expr {[info exists geom(hz)] && $geom(hz) > 0 ? $geom(hz) : 60}]
+    }
+    set period [expr {1000.0 / $opt(fps)}]
+    set gap_ms [expr {$opt(gap_given) ? $opt(gap) * 1000.0 : 1e300}]
+    set F0 [expr {[lindex $frames 0 4] / 1000.0}]
+    set shift 0.0; set pos {}; set prevF $F0
+    foreach f $frames {
+        set F [expr {[lindex $f 4] / 1000.0}]
+        if {$F - $prevF > $gap_ms} { set shift [expr {$shift + $F - $prevF - $gap_ms}] }
+        set prevF $F
+        lappend pos [expr {round(($F - $F0 - $shift) / $period)}]
+    }
+    set writes {}
+    for {set i 0} {$i < $nf - 1} {incr i} { lappend writes [expr {[lindex $pos [expr {$i + 1}]] - [lindex $pos $i]}] }
+    lappend writes 1
+    set movie_frames [tcl::mathop::+ {*}$writes]
+}
+
 puts "replay: $path"
 puts "  script  $script_path ([string length $script] bytes), libs: [expr {[dict size $libs] ? [dict keys $libs] : "none"}]"
 puts "  stimdg  [string length $stimdg] bytes; bound streams: [expr {[llength $bind_names] ? $bind_names : "none"}][expr {[llength $opt(streams)] ? " + $opt(streams)" : ""}]"
@@ -227,6 +359,14 @@ puts "  playing $span_note: $ncmd commands, $ndp datapoints, span [format %.1f [
 if {[llength $bind_names] == 0 && [llength $opt(streams)] == 0} {
     puts "  NOTE: the stim/bind table is empty (a script from before stim::bind): no datapoints will\
  be injected, so a cursor driven by them will not move. Use -stream to name the records anyway."
+}
+if {$opt(render) ne ""} {
+    puts "  render  $nf rig frames (swapcount $sc_first..$sc_last, $nmissing not logged),\
+ movie $movie_frames frames at $opt(fps) fps = [format %.1f [expr {$movie_frames / double($opt(fps))}]] s\
+[expr {$opt(gap_given) ? ", gaps capped at $opt(gap) s" : ""}]"
+    puts "          commands placed by ACK stamp: [expr {$ncmd - $cmd_after}][expr {$cmd_before ? " ($cmd_before applied before the first frame)" : ""}][expr {$cmd_after ? ", $cmd_after after the last frame (not drawn)" : ""}]"
+    puts "          datapoints placed by ds_dispatched: $k of $ndps[expr {$dp_after ? ", $dp_after after the last frame" : ""}]; $dp_foreign forwarded datapoints were not in the file's streams"
+    puts "          stim clock - dserv clock: [format %.3f [expr {$tick_off / 1e6}]] s"
 }
 if {$opt(dry)} {
     set shown 0
@@ -292,10 +432,77 @@ catch { stim_send $sock [list setWindowTitle "replay: [file tail $path] ($span_n
 
 if {$opt(trial) ne "" && [lindex $opt(trial) 0] > 1} { stim_send $sock reset }
 
-# ---------------------------------------------------------------------------
-# the timeline
-# ---------------------------------------------------------------------------
 set skip_prefixes {stim::prelude stimFrameLog {set dservhost}}
+proc skipped_cmd {cmd} {
+    foreach pre $::skip_prefixes { if {[string match "$pre*" $cmd]} { return 1 } }
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# -render: frame-locked, in step mode, into a manual frame sink
+# ---------------------------------------------------------------------------
+if {$opt(render) ne ""} {
+    if {[stim_send $sock {info commands stepFrame}] ne "stepFrame"} {
+        puts stderr "this stim2 has no stepFrame (step mode): -render needs the headless/step build"; exit 1
+    }
+    set out $opt(render)
+    if {[regexp -nocase {\.(mp4|mov|mkv)$} $out]} {
+        set target "|ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgba -s ${win_w}x${win_h}\
+ -r $opt(fps) -i - -pix_fmt yuv420p [list [file normalize $out]]"
+    } else { set target $out }
+    set r [stim_send $sock [list frameSink open -manual $target]]
+    if {[is_error $r]} { puts stderr "frameSink: $r"; exit 1 }
+    set t_start [expr {[lindex $frames 0 4] / 1000.0}]
+    if {[llength $fev(0)]} { set t_start [expr {min($t_start, [lindex $fev(0) 0 0])}] }
+    set t_start [expr {$t_start - 1.0}]
+    stim_send $sock [list stepMode 1 $t_start]
+    set clock $t_start; set prevflip $t_start
+    set sent 0; set errors 0; set skipped 0
+    set kinds [dict create]
+    set wall0 [clock microseconds]
+    for {set i 0} {$i < $nf} {incr i} {
+        foreach ev $fev($i) {
+            lassign $ev t kind p1 p2 p3 p4
+            if {$t > $clock} { stim_send $sock [list stepClock $t]; set clock $t }
+            if {$kind eq "cmd"} {
+                if {[skipped_cmd $p1]} { incr skipped; continue }
+                set r [stim_send $sock $p1]
+                if {[is_error $r]} { incr errors; puts "  ERROR [string range $p1 0 60] -> $r" } \
+                elseif {$opt(verbose)} { puts [format "  frame %6d cmd %s" $i [string range $p1 0 70]] }
+            } else {
+                set r [stim_send $sock [list stim::inject $p1 $p3 $p2 $p4]]
+                if {[is_error $r]} { incr errors; puts "  ERROR inject $p1 -> $r" }
+            }
+            incr sent
+        }
+        set flip [expr {[lindex $frames $i 4] / 1000.0}]
+        set eval [expr {max($clock, $prevflip)}]
+        if {$flip < $eval} { set flip $eval }
+        set r [stim_send $sock [list stepFrame $eval $flip]]
+        if {[is_error $r]} { incr errors; puts "  ERROR stepFrame $eval $flip -> $r"; break }
+        dict incr kinds [dict get $r kind]
+        set clock $flip; set prevflip $flip
+        set r [stim_send $sock [list frameSink write [lindex $writes $i]]]
+        if {[is_error $r]} { incr errors; puts "  ERROR frameSink write -> $r"; break }
+        if {$opt(verbose) && $i % 600 == 0} { puts "  frame $i of $nf" }
+    }
+    set elapsed [expr {([clock microseconds] - $wall0)/1e6}]
+    set st [stim_send $sock {frameSink close}]
+    stim_send $sock {stepMode 0}
+    puts "done: $i rig frames drawn ([join [lmap {k v} $kinds {list $k $v}] {, }]), $sent events\
+ ($errors errors, $skipped configure-time commands skipped) in [format %.1f $elapsed] s"
+    puts "  movie: [dict get $st frames] frames at $opt(fps) fps\
+ ([format %.1f [expr {[dict get $st frames] / double($opt(fps))}]] s) -> $out, status [dict get $st status]"
+    foreach n [dict keys $stream_set] {
+        catch { puts "  $n: [stim_send $sock [list stim::count $n]] injected, last [stim_send $sock [list stim::get $n]]" }
+    }
+    close $sock
+    exit [expr {$errors || [dict get $st status] != 0 ? 1 : 0}]
+}
+
+# ---------------------------------------------------------------------------
+# the timeline, paced by time
+# ---------------------------------------------------------------------------
 set t0 [lindex $events 0 0]
 set wall0 [clock microseconds]
 set offset 0.0            ;# recorded time removed by gap compression, us
@@ -314,9 +521,7 @@ foreach e $events {
     }
     lassign $e _ kind p1 p2 p3
     if {$kind eq "cmd"} {
-        set skip 0
-        foreach pre $skip_prefixes { if {[string match "$pre*" $p1]} { set skip 1 } }
-        if {$skip} { incr skipped; continue }
+        if {[skipped_cmd $p1]} { incr skipped; continue }
         set r [stim_send $sock $p1]
         if {[is_error $r]} { incr errors; puts "  ERROR [string range $p1 0 60] -> $r" } \
         elseif {$opt(verbose)} { puts [format "  %+8.3f cmd %s" [expr {($ts - $t0)/1e6}] [string range $p1 0 70]] }

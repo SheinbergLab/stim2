@@ -1163,15 +1163,18 @@ static int stepFrameCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 /*
- * frameSink ?open target | close?
+ * frameSink ?open ?-manual? target | write ?n? | close?
  *   Write every presented frame -- whole window (headless: the offscreen
  *   target), raw RGBA rows top-down, no header, alpha 255 -- to target: a
  *   file, or with a leading | a command reading stdin, e.g.
  *     frameSink open "|ffmpeg -y -f rawvideo -pix_fmt rgba -s 1920x1080
  *                     -r 60 -i - -pix_fmt yuv420p out.mp4"
  *   The size is the window's when opened.  close waits for a command to
- *   finish.  Every form returns
+ *   finish.  -manual: each presented frame is only held, and "write n"
+ *   writes it n times (0 drops it) -- how a frame-locked replay puts each
+ *   rig frame on the movie's clock.  Every form returns
  *       open 0|1 target <t> width <w> height <h> frames <n> failed 0|1
+ *       manual 0|1
  *   and close adds  status <exit status>.
  */
 static int frameSinkCmd(ClientData clientData, Tcl_Interp *interp,
@@ -1181,8 +1184,25 @@ static int frameSinkCmd(ClientData clientData, Tcl_Interp *interp,
   int status = 0, closed = 0;
   stim_sink_status_t st;
   Tcl_Obj *d;
-  if (argc == 3 && !strcmp(argv[1], "open")) {
-    if (stimFrameSinkOpen(argv[2], err, sizeof(err))) {
+  if ((argc == 3 || argc == 4) && !strcmp(argv[1], "open")) {
+    int manual = argc == 4;
+    if (manual && strcmp(argv[2], "-manual")) {
+      Tcl_SetResult(interp, "usage: frameSink open ?-manual? target", TCL_STATIC);
+      return TCL_ERROR;
+    }
+    if (stimFrameSinkOpen(argv[argc - 1], manual, err, sizeof(err))) {
+      Tcl_AppendResult(interp, argv[0], ": ", err, NULL);
+      return TCL_ERROR;
+    }
+  }
+  else if ((argc == 2 || argc == 3) && !strcmp(argv[1], "write")) {
+    int n = 1;
+    if (argc == 3 && Tcl_GetInt(interp, argv[2], &n) != TCL_OK) return TCL_ERROR;
+    if (n < 0) {
+      Tcl_SetResult(interp, "frameSink write: n must be >= 0", TCL_STATIC);
+      return TCL_ERROR;
+    }
+    if (stimFrameSinkWrite(n, err, sizeof(err))) {
       Tcl_AppendResult(interp, argv[0], ": ", err, NULL);
       return TCL_ERROR;
     }
@@ -1191,7 +1211,7 @@ static int frameSinkCmd(ClientData clientData, Tcl_Interp *interp,
     closed = stimFrameSinkClose(&status);
   }
   else if (argc != 1) {
-    Tcl_SetResult(interp, "usage: frameSink ?open target | close?", TCL_STATIC);
+    Tcl_SetResult(interp, "usage: frameSink ?open ?-manual? target | write ?n? | close?", TCL_STATIC);
     return TCL_ERROR;
   }
   stimFrameSinkStatus(&st);
@@ -1204,6 +1224,7 @@ static int frameSinkCmd(ClientData clientData, Tcl_Interp *interp,
   Tcl_DictObjPut(interp, d, Tcl_NewStringObj("frames", -1),
 		 Tcl_NewWideIntObj((Tcl_WideInt) st.frames));
   Tcl_DictObjPut(interp, d, Tcl_NewStringObj("failed", -1), Tcl_NewIntObj(st.failed));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("manual", -1), Tcl_NewIntObj(st.manual));
   if (closed)
     Tcl_DictObjPut(interp, d, Tcl_NewStringObj("status", -1), Tcl_NewIntObj(status));
   Tcl_SetObjResult(interp, d);
