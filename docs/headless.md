@@ -105,6 +105,39 @@ fixed when the sink opens. A failed write (the reader exited) stops the
 sink and sets `failed`; SIGPIPE is ignored, so it cannot kill stim2. A
 sink still open at exit is closed, so ffmpeg finishes the file.
 
+## In a container
+
+`docker/headless/Dockerfile` builds a Debian trixie image. It contains:
+- Tcl 9 and GLFW (null platform only, so there is no X or Wayland) from
+  stim2's submodules;
+- spine-c and box2d at the pinned commits;
+- dlsh from its release .debs: `dlsh-interp` provides `dlsh.zip` and
+  the `dlsh` interpreter, so `replay.tcl` runs inside the container;
+- stim2 and the stimdlls.
+
+It starts the way a Linux rig does, with
+`-f /usr/local/stim2/config/linux.cfg`, which loads the stimdlls and runs
+`screen_config`. On Linux stim2 sources no config unless given `-f`, and
+dlsh is what defines `::pi`, which `screen_config` uses. The build context
+is a directory holding `stim2/` and `dlsh/` side by side:
+
+    docker build -f stim2/docker/headless/Dockerfile -t stim2-headless .
+    docker run -d --name hl --device /dev/dri/renderD128 stim2-headless \
+        -w 1920 -h 1080 -r 120 -f /usr/local/stim2/config/linux.cfg
+    docker exec hl dlsh /path/to/replay.tcl FILE.ess
+
+Mesa prints an `amdgpu: os_same_file_description` warning in a container
+because the default seccomp profile blocks `kcmp`. The warning is harmless.
+
+## Clients: one write per message
+
+Send a message-port request as one write: the 4-byte length and the
+payload together. Two writes on an unbuffered Tcl socket run into Nagle's
+algorithm and the server's delayed ACK on Linux, which costs about 40 ms
+per request. A stepped replay sends one request per frame, so this is the
+difference between 48 ms and 1.6 ms a frame. `replay.tcl` and the test
+clients write once.
+
 ## Measured
 
 2026-10-27, dev Mac (M3), headless 640x360, driven over the message port
@@ -117,3 +150,19 @@ from dlsh:
 
 `tests/test_headless_step.tcl` passes 29/29, and `test_frame_grab.tcl`
 passes headless as well as windowed.
+
+2026-10-27, Linux box 10.2.145.42 (Ryzen 9 9950X3D, its integrated Radeon),
+in the container, with renderer `AMD Radeon Graphics (radeonsi, ...)` and
+no display server:
+- `test_headless_step` passes 29/29 and `test_frame_grab` 24/24.
+- 1920x1080 `stepFrame` with readback to `/dev/null` takes 1.62 ms a
+  frame. Into ffmpeg's default x264 it takes 5.58 ms a frame (600 frames,
+  about 180 fps).
+- `replay.tcl` (paced by time) played a whole motiondir session,
+  `momo_joystick_motiondir_261026195800.ess`: 13 trials, 51 commands and
+  1233 `ess/dial/pointer` records, at the rig's 1920x1080, 120 Hz and
+  degree mapping. It finished with no errors and fed 3471 frames to the
+  sink, with the motionpatch dots, the targets, the cursor and the
+  feedback drawn as on the rig. The movie is shorter than the session,
+  because stim2 swaps only when something changes; a frame-locked replay
+  places frames on the rig's timeline.

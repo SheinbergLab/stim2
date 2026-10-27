@@ -34,8 +34,7 @@ proc check {name cond {detail ""}} {
 }
 
 proc msg_send {sock s} {
-    puts -nonewline $sock [binary format I [string length $s]]
-    puts -nonewline $sock $s
+    puts -nonewline $sock [binary format I [string length $s]]$s   ;# one write (Nagle)
     flush $sock
     set hdr [read $sock 4]
     if {[string length $hdr] != 4} { error "connection closed" }

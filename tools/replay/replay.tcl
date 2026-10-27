@@ -106,8 +106,9 @@ proc stim_open {host port} {
     return $s
 }
 proc stim_send {sock cmd} {
-    puts -nonewline $sock [binary format I [string length $cmd]]
-    puts -nonewline $sock $cmd
+    # one write: header and payload as two writes on an unbuffered socket
+    # meet Nagle and the server's delayed ACK on Linux, ~40 ms per command
+    puts -nonewline $sock [binary format I [string length $cmd]]$cmd
     flush $sock
     set hdr [read $sock 4]
     if {[string length $hdr] != 4} { error "stim2 closed the connection" }
