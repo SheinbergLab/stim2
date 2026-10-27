@@ -15,7 +15,10 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <limits.h>
+#include <sys/wait.h>
 #endif
+#include <cerrno>
+#include <cstring>
 
 #if defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
@@ -155,6 +158,31 @@ double StimTicksF = 0.0;       /* float free-running ms */
 double StimDeltaTimeF = 0.0;   /* float ms since last frame */
 
 int NextFrameTime = -1;
+
+/* Headless rendering and the stepped clock (docs/headless.md).
+   Headless (--headless): the display is an offscreen framebuffer of exactly
+   -w x -h pixels, nothing is swapped or flipped, and frames are paced by a
+   sleep to the next refresh period instead of vsync.  On Linux the context
+   comes from GLFW's null platform over Mesa's surfaceless EGL, so no display
+   server is needed; elsewhere from a hidden native window.
+   Step mode (stepMode): the stim clock stops following glfwGetTime() and
+   moves only when stepClock/stepFrame set it, the timer thread is stopped,
+   and the main loop never draws on its own -- each stepFrame is one frame.
+   Everything that reads stim time (StimTime/StimTicks and their F forms,
+   getStimTime*, resetStimTime, the stim/frame ticks) goes through
+   stimClockNow(); swapsync and late-draw keep the real clock. */
+static int Headless = 0;
+static std::atomic<int> StepMode{0};
+static double StepClockSec = 0.0;  /* the stepped clock, glfwGetTime() domain */
+
+static inline double stimClockNow(void)
+{
+  return StepMode ? StepClockSec : glfwGetTime();
+}
+
+/* the buffer holding the frame being drawn, and the one last shown */
+static inline GLenum drawnBuffer(void) { return Headless ? GL_COLOR_ATTACHMENT0 : GL_BACK; }
+static inline GLenum shownBuffer(void) { return Headless ? GL_COLOR_ATTACHMENT0 : GL_FRONT; }
 
 int SwapPulse = 1;      /* Put out reg. pulse on line 1 at swap? */
 int SwapAcknowledge = 0;    /* Put out onetime pulse on line at swap */
@@ -362,9 +390,9 @@ static int dumpWindowAsRaw(DUMP_INFO *dinfo)
   }
   
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
-  glReadBuffer(GL_FRONT);
+  glReadBuffer(shownBuffer());
   glReadPixels(x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-  glReadBuffer(GL_BACK);
+  glReadBuffer(drawnBuffer());
   
   raw_writeHeader(w, h, 4, fp);
 
@@ -397,9 +425,9 @@ static int dumpWindowAsPS(char *filename)
     return 0;
   }
 
-  glReadBuffer(GL_FRONT);
+  glReadBuffer(shownBuffer());
   glReadPixels(0, 0, winWidth, winHeight, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-  glReadBuffer(GL_BACK);
+  glReadBuffer(drawnBuffer());
 
   raw_bufToPS(pixels, winWidth, winHeight, 4, fp, RAW_FLAGS_FLIP);
 
@@ -417,14 +445,14 @@ int setWakeUp(int ms) {
 
 void resetStimTime(void)
 {
-  StimStart = glfwGetTime();
+  StimStart = stimClockNow();
   StimTime = 0;
   StimTimeF = 0.0;
 }
 
 void updateTimes(void)
 {
-  double curtime = glfwGetTime();
+  double curtime = stimClockNow();
   unsigned int prevTicks = StimTicks;
   double prevTicksF = StimTicksF;
   StimTicks = (int) (1000*curtime);
@@ -691,7 +719,7 @@ int stimClockSample(double *ticks_ms, long long *wall_us, long long *span_us)
 {
   struct timespec t0, t1;
   if (timespec_get(&t0, TIME_UTC) != TIME_UTC) return 0;
-  double ticks = 1000.0 * glfwGetTime();
+  double ticks = 1000.0 * stimClockNow();
   if (timespec_get(&t1, TIME_UTC) != TIME_UTC) return 0;
   long long w0 = (long long) t0.tv_sec * 1000000LL + t0.tv_nsec / 1000;
   long long w1 = (long long) t1.tv_sec * 1000000LL + t1.tv_nsec / 1000;
@@ -1871,15 +1899,159 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
     glfwSetCursor(window, standard_cursor);
   }
 
+  /* Put the drawn frame on the display.  Headless, the offscreen target
+     is the display, so there is nothing to flip. */
+  void presentFrame()
+  {
+    if (Headless) { glFlush(); return; }
+    lateDrawBeforeSwap();
+    swapsyncBeforeSwap();
+    glfwSwapBuffers(window);
+    lateDrawAfterSwap();
+  }
+
   void waitForSwap()
   {
-    // Strategy chosen at startup by swapsyncInit(): presentation feedback
-    // (X11 OML sync control / Wayland wp_presentation) where the platform
-    // can report the actual flip, glFinish() otherwise.  The old
-    // JETSON_XAVIER fence variant is gone: it leaked one GLsync per frame
-    // and, like glFinish, only proved GPU completion -- not the flip.
-    swapsyncAfterSwap();
+    if (Headless) {
+      headlessPace();
+    }
+    else {
+      // Strategy chosen at startup by swapsyncInit(): presentation feedback
+      // (X11 OML sync control / Wayland wp_presentation) where the platform
+      // can report the actual flip, glFinish() otherwise.  The old
+      // JETSON_XAVIER fence variant is gone: it leaked one GLsync per frame
+      // and, like glFinish, only proved GPU completion -- not the flip.
+      swapsyncAfterSwap();
+    }
+    /* stepFrame's flip time: the clock reads it from here on, as the rig's
+       clock read the flip once its swap wait returned */
+    if (StepMode && step_flip_sec >= 0.0) {
+      StepClockSec = step_flip_sec;
+      step_flip_sec = -1.0;
+    }
   }
+
+  /* Headless and not stepped: stand in for vsync by holding each frame to
+     one refresh period of the real clock, so a dynamic display runs at the
+     rate it would on a monitor instead of as fast as the GPU allows.
+     Stepped, frames come when stepFrame asks and are not held. */
+  double headless_next_frame = 0.0;
+
+  /* headlessStats: how well an unstepped headless stim2 keeps its refresh
+     (what a live mirror must do).  busy is a frame's draw + readback + sink
+     write, from updateDisplay's start to here; a frame is late when it
+     started in time (before its deadline) and finished after it. */
+  struct HeadlessStats {
+    double frame_t0 = 0.0;          /* glfwGetTime() at updateDisplay start */
+    long long frames = 0, late = 0;
+    double worst_late = 0.0;        /* s past the deadline */
+    double since = 0.0;             /* glfwGetTime() at the last reset */
+    std::vector<float> busy_ms;
+  } hl_stats;
+
+  void headlessPace()
+  {
+    if (StepMode) return;
+    double period = FrameDuration > 0.0f ? FrameDuration / 1000.0 : 1.0 / 60.0;
+    double now = glfwGetTime();
+    hl_stats.frames++;
+    if (hl_stats.busy_ms.size() < (1u << 20))   /* ~4.8 h at 60 Hz per window */
+      hl_stats.busy_ms.push_back((float) (1000.0 * (now - hl_stats.frame_t0)));
+    if (headless_next_frame > 0.0 && hl_stats.frame_t0 <= headless_next_frame &&
+        now > headless_next_frame) {
+      hl_stats.late++;
+      if (now - headless_next_frame > hl_stats.worst_late)
+        hl_stats.worst_late = now - headless_next_frame;
+    }
+    if (headless_next_frame > now) {
+      std::this_thread::sleep_for(std::chrono::duration<double>(headless_next_frame - now));
+      headless_next_frame += period;
+    }
+    else headless_next_frame = now + period;   /* late or idle: restart */
+  }
+
+  /* The headless display: a framebuffer of exactly w x h pixels (no
+     Retina or desktop scaling), bound for the life of the process in place
+     of the window's default framebuffer.  Code that binds its own FBO must
+     restore the previous binding rather than 0. */
+  GLuint headless_fbo = 0, headless_color = 0, headless_depth = 0;
+  bool initHeadlessTarget(int w, int h)
+  {
+    glGenFramebuffers(1, &headless_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, headless_fbo);
+    glGenRenderbuffers(1, &headless_color);
+    glBindRenderbuffer(GL_RENDERBUFFER, headless_color);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                              GL_RENDERBUFFER, headless_color);
+    glGenRenderbuffers(1, &headless_depth);
+    glBindRenderbuffer(GL_RENDERBUFFER, headless_depth);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                              GL_RENDERBUFFER, headless_depth);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+      return false;
+    GLenum bufs[1] = { GL_COLOR_ATTACHMENT0 };
+    glDrawBuffers(1, bufs);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glViewport(0, 0, w, h);
+    return true;
+  }
+
+  /* Frame sink (frameSink in tclproc.c): every presented frame, as raw
+     RGBA rows top-down with no header, written to a file or to a command's
+     stdin -- for ffmpeg, -f rawvideo -pix_fmt rgba -s WxH -i - .  Read
+     from the drawn buffer just before it is presented, like frameGrab.
+     Manual (-manual): each presented frame is only held, and written when
+     frameSink write n says, n times -- a frame-locked replay writes each
+     rig frame once per movie tick it spans (0 to drop, >1 to hold). */
+  struct FrameSink {
+    FILE *fp = nullptr;
+    bool is_pipe = false;
+    bool manual = false;
+    bool held = false;            /* rows holds a presented frame */
+    std::string target;
+    int w = 0, h = 0;
+    long long frames = 0;
+    bool failed = false;          /* a write failed; the sink stops writing */
+    std::vector<unsigned char> buf, rows;
+  } sink;
+
+  bool sinkWrite(void)
+  {
+    if (fwrite(sink.rows.data(), 1, sink.rows.size(), sink.fp) != sink.rows.size()) {
+      sink.failed = true;
+      log_message("error", "frameSink: write to %s failed after %lld frames",
+                  sink.target.c_str(), sink.frames);
+      return false;
+    }
+    sink.frames++;
+    return true;
+  }
+
+  void sinkFrame()
+  {
+    if (!sink.fp || sink.failed) return;
+    size_t rowbytes = (size_t) sink.w * 4;
+    sink.buf.resize(rowbytes * sink.h);
+    sink.rows.resize(rowbytes * sink.h);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadBuffer(drawnBuffer());
+    glReadPixels(0, 0, sink.w, sink.h, GL_RGBA, GL_UNSIGNED_BYTE, sink.buf.data());
+    for (int i = 0; i < sink.h; i++)      /* GL rows are bottom-up */
+      memcpy(&sink.rows[i * rowbytes], &sink.buf[(size_t) (sink.h - i - 1) * rowbytes],
+             rowbytes);
+    for (size_t i = 3; i < sink.rows.size(); i += 4) sink.rows[i] = 255;
+    sink.held = true;
+    if (!sink.manual) sinkWrite();
+  }
+
+  /* stepFrame bookkeeping: a redraw asked for while stepped is held here
+     for the next stepFrame instead of drawing at once, and the flip time
+     that stepFrame gave is applied by waitForSwap */
+  bool step_redraw = false;
+  double step_flip_sec = -1.0;
 
 private:  
   void
@@ -1900,7 +2072,10 @@ private:
 public:
 
   void startTimer() {
-    if (!systemIsSleeping) {
+    /* stepped, the clock moves only by stepClock/stepFrame (stepAdvance
+       does the timer's work); main starts the timer after the startup
+       file, which may already have turned step mode on */
+    if (!systemIsSleeping && !StepMode) {
       startTimerImpl();
     }    
   }
@@ -2223,7 +2398,7 @@ proc screen_config {} {
 
       /* Dequeue stamp for the ACK1 header: read the clock directly rather
          than StimTicksF, which the timer thread only refreshes every ms. */
-      if (req->ack_header) req->ticks_dequeue = 1000.0 * glfwGetTime();
+      if (req->ack_header) req->ticks_dequeue = 1000.0 * stimClockNow();
 
       // std::cout << "processing tcl request: " << req->script << std::endl;
 
@@ -2248,7 +2423,7 @@ proc screen_config {} {
            back to its client thread, so nothing touches req after it. */
         const char *res = rcstr ? rcstr : "";
         req->rqueue->push_back(ack_header_reply(req->ticks_dequeue,
-                                                1000.0 * glfwGetTime(),
+                                                1000.0 * stimClockNow(),
                                                 SwapCount, 0,
                                                 res, strlen(res)));
       }
@@ -2273,7 +2448,7 @@ proc screen_config {} {
                                 : std::string("Error:");
         if (rcstr) log.AddLog("[error]: %s\n", rcstr);
         req->rqueue->push_back(ack_header_reply(req->ticks_dequeue,
-                                                1000.0 * glfwGetTime(),
+                                                1000.0 * stimClockNow(),
                                                 SwapCount, 0,
                                                 err.data(), err.size()));
       }
@@ -2371,7 +2546,7 @@ proc screen_config {} {
 	/* '@!' reply: done stamp, SwapCount and the hardware flip time are
 	   read here, after the swap this command caused. */
 	req->rqueue->push_back(ack_header_reply(req->ticks_dequeue,
-						1000.0 * glfwGetTime(),
+						1000.0 * stimClockNow(),
 						SwapCount,
 						swapsyncLastFlipWallUs(),
 						req->script.data(),
@@ -2413,14 +2588,18 @@ proc screen_config {} {
       int msg = MessageQueue.front();
       MessageQueue.pop_front();
 
+      /* Stepped, a frame is drawn only by stepFrame: what would draw now
+         is applied and the redraw held for the next step. */
       switch (msg) {
       case SET_BACKGROUND:
     setBackgroundColor();
+    if (StepMode) { step_redraw = true; break; }
     updateDisplay(log_events);
     did_update = 1;
     do_wakeup();
     break;
       case UPDATE_DISPLAY:
+    if (StepMode) { step_redraw = true; break; }
     updateDisplay(log_events);
     did_update = 1;
     break;
@@ -2432,6 +2611,7 @@ proc screen_config {} {
     glViewport(0, 0, winWidth, winHeight);
     PIX_PER_DEG_X = (ScreenWidth/2)/HALF_SCREEN_DEG_X;
     PIX_PER_DEG_Y = (ScreenHeight/2)/HALF_SCREEN_DEG_Y;
+    if (StepMode) { step_redraw = true; break; }
     updateDisplay(log_events);
     did_update = 1;
     do_wakeup();
@@ -2506,6 +2686,227 @@ void frameGrabAdd(const char *script, int x, int y, int w, int h,
   g.x = x; g.y = y; g.w = w; g.h = h; g.keep_alpha = keep_alpha;
   app.frame_grabs.push_back(std::move(g));
   do_wakeup();
+}
+
+/*
+ * Headless, step mode and the frame sink: the backing for stepMode,
+ * stepClock, stepFrame and frameSink (tclproc.c).  All on the render
+ * thread, where Tcl runs; the timer thread is stopped while stepped, so
+ * nothing else moves the clock.
+ */
+int stimHeadless(void) { return Headless; }
+int stimStepMode(void) { return StepMode; }
+double stimStepClockMs(void) { return 1000.0 * stimClockNow(); }
+
+/* What the timer thread does every tick, done on each move of the stepped
+   clock instead: refresh the stim times, kick a time-based group whose
+   next frame is due, run the objects' timer functions. */
+static void stepAdvance(void)
+{
+  updateTimes();
+  if (NextFrameTime >= 0 && StimTime >= (unsigned int) NextFrameTime) {
+    NextFrameTime = -1;
+    kickAnimation();
+  }
+  OBJ_GROUP *g = NULL;
+  if (OGL_NGROUPS(GList)) g = OGL_GROUP(GList, OGL_CURGROUP(GList));
+  execTimerFuncs(g);
+}
+
+/* The stepped clock only moves forward: StimTime is unsigned and the
+   scripts' own frame logic assumes time does not run backwards. */
+static int stepCheckForward(double t_ms, char *err, int errlen)
+{
+  if (t_ms < 1000.0 * StepClockSec - 1e-6) {
+    snprintf(err, errlen, "the stepped clock is at %.3f ms and cannot go back to %.3f",
+             1000.0 * StepClockSec, t_ms);
+    return -1;
+  }
+  return 0;
+}
+
+int stimStepModeSet(int on, int have_t, double t_ms, char *err, int errlen)
+{
+  if (on) {
+    if (!StepMode) {
+      StepClockSec = have_t ? t_ms / 1000.0 : glfwGetTime();
+      app.stopTimer();
+      StepMode = 1;
+      if (StimStart > StepClockSec) StimStart = StepClockSec;
+      app.step_redraw = false;
+      app.step_flip_sec = -1.0;
+      stepAdvance();
+    }
+    else if (have_t) {
+      if (stepCheckForward(t_ms, err, errlen)) return -1;
+      StepClockSec = t_ms / 1000.0;
+      stepAdvance();
+    }
+  }
+  else if (StepMode) {
+    bool pending = app.step_redraw;
+    app.step_redraw = false;
+    StepMode = 0;
+    /* back on the real clock, which may be behind the stepped one */
+    if (StimStart > glfwGetTime()) resetStimTime();
+    updateTimes();
+    app.startTimer();
+    if (pending) redraw();
+    do_wakeup();
+  }
+  return 0;
+}
+
+int stimStepClockSet(double t_ms, char *err, int errlen)
+{
+  if (!StepMode) { snprintf(err, errlen, "not in step mode (stepMode 1)"); return -1; }
+  if (stepCheckForward(t_ms, err, errlen)) return -1;
+  StepClockSec = t_ms / 1000.0;
+  stepAdvance();
+  return 0;
+}
+
+/* One frame, as the rig's loop would have drawn it at t_ms: move the clock
+   there, apply what the messages queued (a held redraw draws as is; with
+   none, a dynamic group steps its objects first, like the loop's
+   doUpdate), draw, put the frame in the sink, and present.  flip_ms, when
+   given (>= t_ms), is where the clock stands after the frame's swap, as
+   the rig's clock stood at its flip. */
+int stimStepFrame(double t_ms, double flip_ms, stim_step_result_t *r,
+                  char *err, int errlen)
+{
+  if (!StepMode) { snprintf(err, errlen, "not in step mode (stepMode 1)"); return -1; }
+  if (stepCheckForward(t_ms, err, errlen)) return -1;
+  if (flip_ms >= 0.0 && flip_ms < t_ms) {
+    snprintf(err, errlen, "flip time %.3f is before the frame time %.3f", flip_ms, t_ms);
+    return -1;
+  }
+  StepClockSec = t_ms / 1000.0;
+  stepAdvance();
+  app.processMessages(false);       /* stepped: applies, holds the redraw */
+
+  const char *kind;
+  if (app.step_redraw) { app.step_redraw = false; kind = "redraw"; }
+  else if (app.doUpdate()) kind = "update";
+  else kind = "static";
+
+  int swap0 = SwapCount;
+  app.step_flip_sec = flip_ms >= 0.0 ? flip_ms / 1000.0 : -1.0;
+  app.updateDisplay(false);
+  app.count_frame();
+  if (app.step_flip_sec >= 0.0) {   /* NO_SWAP: no swap wait applied it */
+    StepClockSec = app.step_flip_sec;
+    app.step_flip_sec = -1.0;
+    updateTimes();
+  }
+
+  r->kind = kind;
+  r->swapped = SwapCount != swap0;
+  r->swapcount = SwapCount;
+  r->ticks_ms = 1000.0 * StepClockSec;
+  r->sink_frames = app.sink.frames;
+  return 0;
+}
+
+int stimFrameSinkOpen(const char *target, int manual, char *err, int errlen)
+{
+  int status;
+  if (app.sink.fp) stimFrameSinkClose(&status);
+  if (!target || !*target) { snprintf(err, errlen, "empty target"); return -1; }
+  FILE *fp;
+  bool is_pipe = target[0] == '|';
+  if (is_pipe) {
+#ifdef _WIN32
+    fp = _popen(target + 1, "wb");
+#else
+    /* a reader that exits (ffmpeg on a bad option) must fail the write,
+       not kill stim2 */
+    signal(SIGPIPE, SIG_IGN);
+    fp = popen(target + 1, "w");
+#endif
+  }
+  else fp = fopen(target, "wb");
+  if (!fp) {
+    snprintf(err, errlen, "cannot open %s: %s", target, strerror(errno));
+    return -1;
+  }
+  app.sink.fp = fp;
+  app.sink.is_pipe = is_pipe;
+  app.sink.target = target;
+  app.sink.w = winWidth;
+  app.sink.h = winHeight;
+  app.sink.frames = 0;
+  app.sink.failed = false;
+  app.sink.manual = manual != 0;
+  app.sink.held = false;
+  return 0;
+}
+
+/* Manual sink: write the last presented frame n times (0 is allowed). */
+int stimFrameSinkWrite(int n, char *err, int errlen)
+{
+  if (!app.sink.fp) { snprintf(err, errlen, "no sink open"); return -1; }
+  if (app.sink.failed) { snprintf(err, errlen, "an earlier write failed"); return -1; }
+  if (!app.sink.held) { snprintf(err, errlen, "no frame presented since the sink opened"); return -1; }
+  for (int i = 0; i < n; i++)
+    if (!app.sinkWrite()) {
+      snprintf(err, errlen, "write to %s failed", app.sink.target.c_str());
+      return -1;
+    }
+  return 0;
+}
+
+/* Closing a pipe waits for the command to finish (ffmpeg writing the
+   file's trailer); *status is its exit status, or fclose's result. */
+int stimFrameSinkClose(int *status)
+{
+  if (!app.sink.fp) return 0;
+  int st;
+#ifdef _WIN32
+  st = app.sink.is_pipe ? _pclose(app.sink.fp) : fclose(app.sink.fp);
+#else
+  st = app.sink.is_pipe ? pclose(app.sink.fp) : fclose(app.sink.fp);
+  if (app.sink.is_pipe && st != -1 && WIFEXITED(st)) st = WEXITSTATUS(st);
+#endif
+  if (status) *status = st;
+  app.sink.fp = nullptr;
+  return 1;
+}
+
+void stimHeadlessStats(int reset, stim_headless_stats_t *st)
+{
+  Application::HeadlessStats &h = app.hl_stats;
+  std::vector<float> b = h.busy_ms;
+  std::sort(b.begin(), b.end());
+  auto q = [&](double p) { return b.empty() ? 0.0 : (double) b[(size_t) (p * (b.size() - 1))]; };
+  double mean = 0.0;
+  for (float v : b) mean += v;
+  st->frames = h.frames;
+  st->late = h.late;
+  st->worst_late_ms = 1000.0 * h.worst_late;
+  st->busy_mean_ms = b.empty() ? 0.0 : mean / b.size();
+  st->busy_p50_ms = q(0.50);
+  st->busy_p95_ms = q(0.95);
+  st->busy_max_ms = q(1.0);
+  st->period_ms = FrameDuration;
+  st->span_s = h.since > 0.0 ? glfwGetTime() - h.since : 0.0;
+  if (reset) {
+    h.frames = h.late = 0;
+    h.worst_late = 0.0;
+    h.busy_ms.clear();
+    h.since = glfwGetTime();
+  }
+}
+
+void stimFrameSinkStatus(stim_sink_status_t *st)
+{
+  st->open = app.sink.fp != nullptr;
+  st->target = app.sink.target.c_str();
+  st->width = app.sink.w;
+  st->height = app.sink.h;
+  st->frames = app.sink.frames;
+  st->failed = app.sink.failed;
+  st->manual = app.sink.manual;
 }
 
 
@@ -3019,6 +3420,7 @@ void Application::showAppLog(bool* p_open)
 
 void Application::toggleImgui(void)
 {
+    if (Headless) return;       /* no imgui context, and no one to see it */
     if (!show_imgui) {
       show_imgui = true;
       diagResetRefresh();
@@ -3142,7 +3544,7 @@ void Application::captureFrameGrabs(void)
     std::vector<unsigned char> buf((size_t) w * h * 4);
     if (w && h) {
       glPixelStorei(GL_PACK_ALIGNMENT, 1);
-      glReadBuffer(GL_BACK);
+      glReadBuffer(drawnBuffer());
       glReadPixels(x, winHeight - y - h, w, h, GL_RGBA, GL_UNSIGNED_BYTE,
 		   buf.data());
     }
@@ -3217,6 +3619,7 @@ void Application::updateDisplay(bool log_events)
 {
   OBJ_GROUP *g = NULL;
   long long frame_ticks_us;
+  if (Headless) hl_stats.frame_t0 = glfwGetTime();
   if (OGL_NGROUPS(GList)) g = OGL_GROUP(GList, OGL_CURGROUP(GList));
   if (!g) return;
 
@@ -3229,6 +3632,7 @@ void Application::updateDisplay(bool log_events)
       glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     }
     captureFrameGrabs();
+    sinkFrame();                /* like the grabs: before any overlay */
     
     if (!show_imgui)
       stopAnimation();
@@ -3236,12 +3640,9 @@ void Application::updateDisplay(bool log_events)
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());  
 
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PreSwap");
-    lateDrawBeforeSwap();
-    swapsyncBeforeSwap();
-    glfwSwapBuffers(window);
-    lateDrawAfterSwap();
+    presentFrame();
     waitForSwap();
-    frame_ticks_us = (long long) (1e6 * glfwGetTime());
+    frame_ticks_us = (long long) (1e6 * stimClockNow());
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PostSwap");
     SwapCount++;
     frameLogSwap(frame_ticks_us);
@@ -3269,19 +3670,17 @@ void Application::updateDisplay(bool log_events)
     drawGroup(g);
     executePostScripts(g);
     captureFrameGrabs();
+    sinkFrame();                /* like the grabs: before any overlay */
 
     if (show_imgui)
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PreSwap");
     /* Swap front and back buffers */
-    lateDrawBeforeSwap();
-    swapsyncBeforeSwap();
-    glfwSwapBuffers(window);
-    lateDrawAfterSwap();
+    presentFrame();
     /* Wait for swap */
     waitForSwap();
-    frame_ticks_us = (long long) (1e6 * glfwGetTime());
+    frame_ticks_us = (long long) (1e6 * stimClockNow());
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PostSwap");
 
     SwapCount++;
@@ -3311,13 +3710,11 @@ void Application::updateDisplay(bool log_events)
     break;
   case SWAP_ONLY:
     /* Only swap and acknowledge -- no clear, no draw */
-    lateDrawBeforeSwap();
-    swapsyncBeforeSwap();
-    glfwSwapBuffers(window);
-    lateDrawAfterSwap();
+    sinkFrame();
+    presentFrame();
     SwapCount++;
     waitForSwap();
-    frame_ticks_us = (long long) (1e6 * glfwGetTime());
+    frame_ticks_us = (long long) (1e6 * stimClockNow());
     frameLogSwap(frame_ticks_us);
 
     /* Call any installed post frame command */
@@ -3421,8 +3818,10 @@ int Application::doUpdate(void)
 static void Reshape(Application *app, int width, int height)
 {
   // this helps with High DPI displays, but might need to be adjusted
-  //  per platform
-  glfwGetFramebufferSize(app->window, &width, &height);
+  //  per platform.  Headless, the display is the offscreen target, whose
+  //  size was fixed at startup whatever the (hidden) window reports.
+  if (Headless) { width = app->width; height = app->height; }
+  else glfwGetFramebufferSize(app->window, &width, &height);
   //  glfwGetWindowSize(app->window, &width, &height);
   app->width = winWidth = width;
   winWidth_2 = width/2;
@@ -3742,6 +4141,7 @@ main(int argc, char *argv[]) {
   bool fullscreen = false;
   bool help = false;
   bool borderless = false;
+  bool headless = false;
   int width = 580, height = 340;
   int xpos = 30, ypos = 30;
   float refresh = 60;
@@ -3765,11 +4165,6 @@ main(int argc, char *argv[]) {
   // Use this GPIO pin for swap acknowledge on Jetson Hardware
   int gpio_output_pin = 13;
   
-  if (! glfwInit ()) {
-    std::cout << "ERROR: could not start GLFW3" << std::endl;
-    return 0;
-  }
-  
   std::string title_opt = "Stim";
 
   cxxopts::Options options("stim2","multiplatform OpenGL presentation program");
@@ -3786,6 +4181,9 @@ main(int argc, char *argv[]) {
     ("r,refresh", "refresh_rate", cxxopts::value<float>(refresh))
     ("t,timer", "timer interval", cxxopts::value<int>(interval))
     ("F,fullscreen", "Fullscreen mode", cxxopts::value<bool>(fullscreen))
+    ("headless", "No window: draw into an offscreen -w x -h framebuffer "
+     "(Linux: no display server, via EGL); see stepMode and frameSink",
+     cxxopts::value<bool>(headless))
     ("f,file", "File name", cxxopts::value<std::string>())
     ("port-base", "First of the four listener ports: command (N), "
      "dataserver (N+1), message (N+2), websocket (N+3)",
@@ -3808,6 +4206,20 @@ main(int argc, char *argv[]) {
   if (help) {
     std::cout << options.help({"", "Group"}) << std::endl;
     exit(0);
+  }
+
+  /* Headless on Linux: GLFW's null platform, whose EGL context is backed
+     by Mesa's surfaceless platform -- a GPU render node (or llvmpipe), no
+     X or Wayland.  Elsewhere the native platform with a hidden window
+     supplies the context (macOS has no EGL); either way the drawing goes
+     to an offscreen framebuffer (initHeadlessTarget). */
+  Headless = headless;
+#if defined(GLFW_PLATFORM_NULL) && !defined(__APPLE__) && !defined(_WIN32)
+  if (headless) glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_NULL);
+#endif
+  if (! glfwInit ()) {
+    std::cout << "ERROR: could not start GLFW3" << std::endl;
+    return 0;
   }
 
   /* All four listeners move together so a second stim2 (a test build,
@@ -3853,7 +4265,15 @@ main(int argc, char *argv[]) {
 
   glfwWindowHint (GLFW_SAMPLES, 0);
 
-  if (borderless) {
+  if (headless) {
+    fullscreen = false;
+    glfwWindowHint(GLFW_VISIBLE, GL_FALSE);
+#if defined(GLFW_PLATFORM_NULL) && !defined(__APPLE__) && !defined(_WIN32)
+    glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_EGL_CONTEXT_API);
+#endif
+    if (title_opt == "Stim") title_opt = "Stim (headless)";
+  }
+  else if (borderless) {
     glfwWindowHint( GLFW_VISIBLE, GL_FALSE );
     glfwWindowHint( GLFW_DECORATED, GL_FALSE );
   }
@@ -3878,11 +4298,17 @@ main(int argc, char *argv[]) {
   }
   
   if (!app.window) {
-    std::cerr << "Error opening window" << std::endl;
-    exit(0);
+    const char *desc = NULL;
+    glfwGetError(&desc);
+    std::cerr << "Error opening window" << (desc ? ": " : "") << (desc ? desc : "")
+              << std::endl;
+    if (headless)
+      std::cerr << "  (headless: needs EGL with EGL_MESA_platform_surfaceless and access "
+                   "to a render node, /dev/dri/renderD*, or Mesa's llvmpipe)" << std::endl;
+    exit(1);
   }
 
-  if (borderless && !fullscreen) {
+  if (borderless && !fullscreen && !headless) {
     glfwShowWindow(app.window);
   }
 
@@ -3895,6 +4321,18 @@ main(int argc, char *argv[]) {
   ScreenWidth = mode->width;
   ScreenHeight = mode->height;
   RefreshRate = mode->refreshRate;
+  /* Headless, the "screen" is the offscreen target and its refresh is
+     whatever -r says (60 by default): it paces the frames when not
+     stepped, and FrameDuration is what scripts read. */
+  if (headless) {
+    ScreenWidth = width;
+    ScreenHeight = height;
+    RefreshRate = (int) (refresh + 0.5f);
+    /* screen_config derives degrees from the physical size; keep the
+       pixels square, whatever monitor (or none) the machine has */
+    if (ScreenWidthCm <= 0.0f) ScreenWidthCm = 50.0f;
+    ScreenHeightCm = ScreenWidthCm * height / (float) width;
+  }
   FrameDuration = 1000./RefreshRate;
 
   app.xpos = xpos;
@@ -3936,9 +4374,23 @@ main(int argc, char *argv[]) {
   // Ensure tightly packed pixel data for all texture uploads
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+  if (headless) {
+    winWidth = app.width = width;
+    winHeight = app.height = height;
+    if (!app.initHeadlessTarget(width, height)) {
+      std::cerr << "headless: could not create a " << width << "x" << height
+                << " offscreen framebuffer" << std::endl;
+      exit(1);
+    }
+    std::cerr << "[info] headless " << width << "x" << height << " @ "
+              << RefreshRate << " Hz, renderer: " << glGetString(GL_RENDERER)
+              << std::endl;
+  }
   
   app.init();
-  app.init_imgui();
+  if (headless) XScale = YScale = 1.0f;   /* no desktop scaling offscreen */
+  else app.init_imgui();
 
   app.init_gpio(gpio_output_pin);
 
@@ -3955,8 +4407,9 @@ main(int argc, char *argv[]) {
     Reshape(&app, winWidth, winHeight);
   }
 
-  // Choose how waitForSwap() blocks (and timestamps) on this platform
-  swapsyncInit(app.window, RefreshRate, verbose);
+  // Choose how waitForSwap() blocks (and timestamps) on this platform;
+  // headless there is no flip to wait for (headlessPace stands in)
+  if (!headless) swapsyncInit(app.window, RefreshRate, verbose);
 
   // Initialize WebSocket server
   app.init_websocket();
@@ -4048,10 +4501,11 @@ main(int argc, char *argv[]) {
        loop as it always was. */
     Application::LateDrawFrame ldf;
     bool deferred = false;
-    if (!updated_display && app.lateDrawDefer(&ldf, &late_wait_ms)) {
+    if (!updated_display && !StepMode && app.lateDrawDefer(&ldf, &late_wait_ms)) {
       deferred = true;          /* nothing to draw this pass */
     }
-    else if (!updated_display && (app.doUpdate() || app.frameWorkPending())) {
+    else if (!updated_display && !StepMode &&
+             (app.doUpdate() || app.frameWorkPending())) {
       app.updateDisplay(app.wait_for_swap);
       app.count_frame();
       app.lateDrawAccount(ldf);
@@ -4081,6 +4535,9 @@ main(int argc, char *argv[]) {
 
   }
   
+  /* a sink still open gets its end of file (ffmpeg finishes the movie) */
+  { int st; stimFrameSinkClose(&st); }
+
   /* free allocated objects */
   setDynamicUpdate(0);
   objListReset(curobjlistp);

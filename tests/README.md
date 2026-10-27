@@ -6,12 +6,14 @@ Self-checking scripts that run inside a real stim2. Each prints `OK` /
 
     stim2 -w 640 -h 480 -f /abs/path/to/tests/test_frame_grab.tcl
     stim2 -w 600 -h 600 -f /abs/path/to/tests/test_dynlist_numeric.tcl
+    stim2 --headless -w 320 -h 180 --port-base 5610 -f /abs/path/to/tests/test_headless_step.tcl
 
 `-f` needs an absolute path.
 
 | test | covers |
 |---|---|
 | `test_frame_grab.tcl` | `frameGrab` (pixels, row order, `-rect`, `-alpha`, dlsh conversion) and `afterFrames` (exact swap counts on a static display; display messages are not delayed) |
+| `test_headless_step.tcl` | headless rendering, step mode and the frame sink (see `docs/headless.md`): the offscreen display's exact size, `stepMode` / `stepClock` / `stepFrame` arguments and clock rules, a held redraw then dynamic updates drawn at the stepped times, the flip time, a square moved by the clock alone found where its stepped time puts it in every frame the sink wrote, and `frameGrab` agreeing with the sink. `test_frame_grab.tcl` also passes headless |
 | `test_dynlist_numeric.tcl` | every numeric dynlist type through the modules that read coordinate, id and pixel lists |
 | `test_ack_header.tcl` | the `@` reply-header prefix on the message port (`ACK1 <dequeue> <done> <swapcount> <flipwall_us>\n<result>`), `@!` after-swap stamps, `stimAckHeader` probe, that plain and `!` commands are unchanged, and `stimClock` (`<ticks_ms> <wall_us> <span_us>`: tick lies between the surrounding `@` stamps, wall within 1 s of the client's clock, span small) |
 | `test_frame_log.tcl` | the per-swap frame record (`stimFrameLog host ?0|1?`, dserv datapoint `stim/frame`, see `docs/stim-frame.md`): stands in for dserv on a free port, decodes the 128-byte `>` frames, checks ordering and units of the seven fields, stop/restart, status counts, and that a dead sink only costs dropped records |

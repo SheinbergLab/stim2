@@ -478,7 +478,11 @@ static int init_gl_resources(MPV_VIDEO *v) {
     
     glBindVertexArray(0);
     
-    // Create framebuffer and texture for mpv rendering
+    // Create framebuffer and texture for mpv rendering.  Put back the
+    // framebuffer that was bound, not 0: headless stim2 draws into its own
+    // offscreen target, and 0 is not the display there.
+    GLint prev_framebuffer;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_framebuffer);
     glGenFramebuffers(1, &v->fbo);
     glGenTextures(1, &v->texture);
     
@@ -494,10 +498,11 @@ static int init_gl_resources(MPV_VIDEO *v) {
     
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         fprintf(stderr, "Framebuffer not complete!\n");
+        glBindFramebuffer(GL_FRAMEBUFFER, prev_framebuffer);
         return -1;
     }
     
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, prev_framebuffer);
     glBindTexture(GL_TEXTURE_2D, 0);
     
     return 0;

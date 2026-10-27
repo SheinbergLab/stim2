@@ -1037,6 +1037,235 @@ static int frameGrabCmd(ClientData clientData, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/*
+ * Step mode, for frame-exact replay (docs/headless.md).  Times are ms on
+ * the tick clock: StimTicksF, stimClock's ticks_ms, stim/frame's
+ * ticks_us / 1000.
+ *
+ * stepMode ?0|1? ?t_ms?
+ *   1: the stim clock stops following real time and moves only by
+ *   stepClock/stepFrame (starting at t_ms, or where it stands now); the
+ *   timer thread stops and stim2 draws no frame of its own -- a redraw
+ *   asked for meanwhile is held for the next stepFrame.  0: back to the
+ *   real clock and the normal loop.  Returns
+ *       enabled 0|1 clock <ms> headless 0|1
+ */
+static int stepStatus(Tcl_Interp *interp)
+{
+  Tcl_Obj *d = Tcl_NewDictObj();
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("enabled", -1),
+		 Tcl_NewIntObj(stimStepMode()));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("clock", -1),
+		 Tcl_NewDoubleObj(stimStepClockMs()));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("headless", -1),
+		 Tcl_NewIntObj(stimHeadless()));
+  Tcl_SetObjResult(interp, d);
+  return TCL_OK;
+}
+
+static int stepModeCmd(ClientData clientData, Tcl_Interp *interp,
+		       int argc, char *argv[])
+{
+  int on, have_t = 0;
+  double t = 0.0;
+  char err[256];
+  if (argc > 3) {
+    Tcl_SetResult(interp, "usage: stepMode ?0|1? ?t_ms?", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  if (argc >= 2) {
+    if (Tcl_GetBoolean(interp, argv[1], &on) != TCL_OK) return TCL_ERROR;
+    if (argc == 3) {
+      if (Tcl_GetDouble(interp, argv[2], &t) != TCL_OK) return TCL_ERROR;
+      have_t = 1;
+    }
+    if (stimStepModeSet(on, have_t, t, err, sizeof(err))) {
+      Tcl_AppendResult(interp, argv[0], ": ", err, NULL);
+      return TCL_ERROR;
+    }
+  }
+  return stepStatus(interp);
+}
+
+/*
+ * stepClock ?t_ms?
+ *   Set the stepped clock (forward only), with what the timer thread would
+ *   have done on the way: stim times refreshed, a due time-based group
+ *   kicked, timer functions run.  No frame is drawn.  Returns the clock.
+ *   A replay moves it to each command's rig time before sending it, so a
+ *   command that reads StimTime or resets it sees the rig's moment.
+ */
+static int stepClockCmd(ClientData clientData, Tcl_Interp *interp,
+			int argc, char *argv[])
+{
+  double t;
+  char err[256];
+  if (argc > 2) {
+    Tcl_SetResult(interp, "usage: stepClock ?t_ms?", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  if (argc == 2) {
+    if (Tcl_GetDouble(interp, argv[1], &t) != TCL_OK) return TCL_ERROR;
+    if (stimStepClockSet(t, err, sizeof(err))) {
+      Tcl_AppendResult(interp, argv[0], ": ", err, NULL);
+      return TCL_ERROR;
+    }
+  }
+  Tcl_SetObjResult(interp, Tcl_NewDoubleObj(stimStepClockMs()));
+  return TCL_OK;
+}
+
+/*
+ * stepFrame ?t_ms? ?flip_ms?
+ *   Draw one frame with the clock at t_ms (default: one FrameDuration on
+ *   from where it stands), the way the loop would have: a held redraw
+ *   draws as is, otherwise a dynamic group steps its objects first.  The
+ *   frame goes to the frame sink and frameGrab like any other, and its
+ *   post-frame scripts run with the clock at flip_ms (default t_ms), where
+ *   the rig's clock stood after its swap.  Returns
+ *       kind redraw|update|static swapped 0|1 swapcount <n>
+ *       ticks <ms> sink_frames <n>
+ */
+static int stepFrameCmd(ClientData clientData, Tcl_Interp *interp,
+			int argc, char *argv[])
+{
+  double t, flip = -1.0;
+  char err[256];
+  stim_step_result_t r;
+  Tcl_Obj *d;
+  if (argc > 3) {
+    Tcl_SetResult(interp, "usage: stepFrame ?t_ms? ?flip_ms?", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  if (argc >= 2) {
+    if (Tcl_GetDouble(interp, argv[1], &t) != TCL_OK) return TCL_ERROR;
+  }
+  else t = stimStepClockMs() + getFrameDuration();
+  if (argc == 3 && Tcl_GetDouble(interp, argv[2], &flip) != TCL_OK)
+    return TCL_ERROR;
+  if (stimStepFrame(t, flip, &r, err, sizeof(err))) {
+    Tcl_AppendResult(interp, argv[0], ": ", err, NULL);
+    return TCL_ERROR;
+  }
+  d = Tcl_NewDictObj();
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("kind", -1),
+		 Tcl_NewStringObj(r.kind, -1));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("swapped", -1),
+		 Tcl_NewIntObj(r.swapped));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("swapcount", -1),
+		 Tcl_NewIntObj(r.swapcount));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("ticks", -1),
+		 Tcl_NewDoubleObj(r.ticks_ms));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("sink_frames", -1),
+		 Tcl_NewWideIntObj((Tcl_WideInt) r.sink_frames));
+  Tcl_SetObjResult(interp, d);
+  return TCL_OK;
+}
+
+/*
+ * frameSink ?open ?-manual? target | write ?n? | close?
+ *   Write every presented frame -- whole window (headless: the offscreen
+ *   target), raw RGBA rows top-down, no header, alpha 255 -- to target: a
+ *   file, or with a leading | a command reading stdin, e.g.
+ *     frameSink open "|ffmpeg -y -f rawvideo -pix_fmt rgba -s 1920x1080
+ *                     -r 60 -i - -pix_fmt yuv420p out.mp4"
+ *   The size is the window's when opened.  close waits for a command to
+ *   finish.  -manual: each presented frame is only held, and "write n"
+ *   writes it n times (0 drops it) -- how a frame-locked replay puts each
+ *   rig frame on the movie's clock.  Every form returns
+ *       open 0|1 target <t> width <w> height <h> frames <n> failed 0|1
+ *       manual 0|1
+ *   and close adds  status <exit status>.
+ */
+static int frameSinkCmd(ClientData clientData, Tcl_Interp *interp,
+			int argc, char *argv[])
+{
+  char err[512];
+  int status = 0, closed = 0;
+  stim_sink_status_t st;
+  Tcl_Obj *d;
+  if ((argc == 3 || argc == 4) && !strcmp(argv[1], "open")) {
+    int manual = argc == 4;
+    if (manual && strcmp(argv[2], "-manual")) {
+      Tcl_SetResult(interp, "usage: frameSink open ?-manual? target", TCL_STATIC);
+      return TCL_ERROR;
+    }
+    if (stimFrameSinkOpen(argv[argc - 1], manual, err, sizeof(err))) {
+      Tcl_AppendResult(interp, argv[0], ": ", err, NULL);
+      return TCL_ERROR;
+    }
+  }
+  else if ((argc == 2 || argc == 3) && !strcmp(argv[1], "write")) {
+    int n = 1;
+    if (argc == 3 && Tcl_GetInt(interp, argv[2], &n) != TCL_OK) return TCL_ERROR;
+    if (n < 0) {
+      Tcl_SetResult(interp, "frameSink write: n must be >= 0", TCL_STATIC);
+      return TCL_ERROR;
+    }
+    if (stimFrameSinkWrite(n, err, sizeof(err))) {
+      Tcl_AppendResult(interp, argv[0], ": ", err, NULL);
+      return TCL_ERROR;
+    }
+  }
+  else if (argc == 2 && !strcmp(argv[1], "close")) {
+    closed = stimFrameSinkClose(&status);
+  }
+  else if (argc != 1) {
+    Tcl_SetResult(interp, "usage: frameSink ?open ?-manual? target | write ?n? | close?", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  stimFrameSinkStatus(&st);
+  d = Tcl_NewDictObj();
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("open", -1), Tcl_NewIntObj(st.open));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("target", -1),
+		 Tcl_NewStringObj(st.target, -1));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("width", -1), Tcl_NewIntObj(st.width));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("height", -1), Tcl_NewIntObj(st.height));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("frames", -1),
+		 Tcl_NewWideIntObj((Tcl_WideInt) st.frames));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("failed", -1), Tcl_NewIntObj(st.failed));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("manual", -1), Tcl_NewIntObj(st.manual));
+  if (closed)
+    Tcl_DictObjPut(interp, d, Tcl_NewStringObj("status", -1), Tcl_NewIntObj(status));
+  Tcl_SetObjResult(interp, d);
+  return TCL_OK;
+}
+
+/*
+ * headlessStats ?reset?
+ *   How an unstepped headless stim2 is keeping its refresh: frames drawn,
+ *   frames late (started before their deadline and finished after it),
+ *   the worst lateness, and per-frame busy time (draw + readback + frame
+ *   sink write) as mean/p50/p95/max in ms, with the frame period and the
+ *   seconds since the last reset.  reset starts a new window after
+ *   reporting the current one.
+ */
+static int headlessStatsCmd(ClientData clientData, Tcl_Interp *interp,
+			    int argc, char *argv[])
+{
+  stim_headless_stats_t st;
+  Tcl_Obj *d;
+  if (argc > 2 || (argc == 2 && strcmp(argv[1], "reset"))) {
+    Tcl_SetResult(interp, "usage: headlessStats ?reset?", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  stimHeadlessStats(argc == 2, &st);
+  d = Tcl_NewDictObj();
+#define PUTD(k, v) Tcl_DictObjPut(interp, d, Tcl_NewStringObj(k, -1), Tcl_NewDoubleObj(v))
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("frames", -1), Tcl_NewWideIntObj(st.frames));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("late", -1), Tcl_NewWideIntObj(st.late));
+  PUTD("worst_late_ms", st.worst_late_ms);
+  PUTD("busy_mean_ms", st.busy_mean_ms);
+  PUTD("busy_p50_ms", st.busy_p50_ms);
+  PUTD("busy_p95_ms", st.busy_p95_ms);
+  PUTD("busy_max_ms", st.busy_max_ms);
+  PUTD("period_ms", st.period_ms);
+  PUTD("span_s", st.span_s);
+#undef PUTD
+  Tcl_SetObjResult(interp, d);
+  return TCL_OK;
+}
+
 static int swapTagCallbackCmd(ClientData clientData, Tcl_Interp *interp,
 			      int argc, char *argv[])
 {
@@ -3149,6 +3378,16 @@ void addTclCommands(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "afterFrames", (Tcl_CmdProc *) afterFramesCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "frameGrab", (Tcl_CmdProc *) frameGrabCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "stepMode", (Tcl_CmdProc *) stepModeCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "stepClock", (Tcl_CmdProc *) stepClockCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "stepFrame", (Tcl_CmdProc *) stepFrameCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "frameSink", (Tcl_CmdProc *) frameSinkCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "headlessStats", (Tcl_CmdProc *) headlessStatsCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "swapTagCallback",
 		    (Tcl_CmdProc *) swapTagCallbackCmd,

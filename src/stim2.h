@@ -263,6 +263,45 @@ int  frameAfterPending(void);
 void frameGrabAdd(const char *script, int x, int y, int w, int h,
 		  int keep_alpha);
 
+/* Headless rendering, step mode and the frame sink (stepMode, stepClock,
+   stepFrame, frameSink in tclproc.c; docs/headless.md).  Times are ms on
+   the tick clock (StimTicksF, stim/frame's ticks_us / 1000).  The int
+   functions return 0, or -1 with err filled. */
+typedef struct stim_step_result_s {
+  const char *kind;        /* "redraw", "update" or "static" */
+  int swapped;             /* 0 when the group's swap mode is NO_SWAP */
+  int swapcount;
+  double ticks_ms;         /* the clock after the frame (its flip time) */
+  long long sink_frames;
+} stim_step_result_t;
+typedef struct stim_sink_status_s {
+  int open;
+  const char *target;
+  int width, height;
+  long long frames;
+  int failed;
+  int manual;              /* frames written only by frameSink write */
+} stim_sink_status_t;
+typedef struct stim_headless_stats_s {
+  long long frames, late;  /* late: started before its deadline, ended after */
+  double worst_late_ms;
+  double busy_mean_ms, busy_p50_ms, busy_p95_ms, busy_max_ms;
+  double period_ms;        /* FrameDuration */
+  double span_s;           /* since the last reset (0 before one) */
+} stim_headless_stats_t;
+void   stimHeadlessStats(int reset, stim_headless_stats_t *st);
+int    stimHeadless(void);
+int    stimStepMode(void);
+double stimStepClockMs(void);
+int    stimStepModeSet(int on, int have_t, double t_ms, char *err, int errlen);
+int    stimStepClockSet(double t_ms, char *err, int errlen);
+int    stimStepFrame(double t_ms, double flip_ms, stim_step_result_t *r,
+                     char *err, int errlen);
+int    stimFrameSinkOpen(const char *target, int manual, char *err, int errlen);
+int    stimFrameSinkWrite(int n, char *err, int errlen);
+int    stimFrameSinkClose(int *status);
+void   stimFrameSinkStatus(stim_sink_status_t *st);
+
 int  toggleAnimation(void);
 int  startAnimation(void);
 int  stopAnimation(void);

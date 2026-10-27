@@ -37,8 +37,7 @@ proc check {name cond {detail ""}} {
 # ---- stim2 message port ----------------------------------------------------
 set ::ncmds 0      ;# commands this script has had stim2 evaluate
 proc msg_send {sock s} {
-    puts -nonewline $sock [binary format I [string length $s]]
-    puts -nonewline $sock $s
+    puts -nonewline $sock [binary format I [string length $s]]$s   ;# one write (Nagle)
     flush $sock
     incr ::ncmds
     set hdr [read $sock 4]
