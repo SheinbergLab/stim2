@@ -28,17 +28,23 @@ int latedrawWaitMs(double now_s, double target_s)
   return (int) std::floor(remain_ms);
 }
 
+int latedrawIsWarmup(long swapcount, long governed_swapcount)
+{
+  if (governed_swapcount < 0) return 1;           /* nothing governed yet */
+  return swapcount != governed_swapcount;         /* someone else swapped */
+}
+
 static double cap_ms(double period_ms)
 {
   double cap = period_ms - LATEDRAW_CAP_MARGIN_MS;
   return cap > 0.0 ? cap : 0.0;
 }
 
-double latedrawRaise(double effective_ms, double draw_ms, double floor_ms,
+double latedrawRaise(double effective_ms, double work_ms, double floor_ms,
                      double period_ms)
 {
   double v = std::max(effective_ms * LATEDRAW_RAISE_FACTOR,
-                      draw_ms * LATEDRAW_DRAW_FACTOR);
+                      work_ms * LATEDRAW_DRAW_FACTOR);
   double cap = cap_ms(period_ms);
   double lo = std::min(floor_ms, cap);       /* floor above cap: cap wins */
   if (v > cap) v = cap;
@@ -61,19 +67,35 @@ int latedrawIsLate(long missed_before, long missed_after,
   return 0;
 }
 
-int latedrawOnFrame(latedraw_state_t *s, double draw_ms, int late,
-                    double period_ms)
+static void ring_push(double *ring, int *n, int *i, double v)
 {
-  s->draw_ring[s->draw_i] = draw_ms;
-  s->draw_i = (s->draw_i + 1) % LATEDRAW_DRAW_RING;
-  if (s->draw_n < LATEDRAW_DRAW_RING) s->draw_n++;
+  ring[*i] = v;
+  *i = (*i + 1) % LATEDRAW_DRAW_RING;
+  if (*n < LATEDRAW_DRAW_RING) (*n)++;
+}
+
+int latedrawOnFrame(latedraw_state_t *s, double draw_ms, double gpu_ms,
+                    int late, int warmup, double period_ms)
+{
+  if (gpu_ms < 0.0) gpu_ms = 0.0;
+  ring_push(s->draw_ring, &s->draw_n, &s->draw_i, draw_ms);
+  ring_push(s->gpu_ring, &s->gpu_n, &s->gpu_i, gpu_ms);
   s->draws++;
+
+  if (warmup) {
+    /* Drawn at once with the whole period ahead: a slip here is the
+       scene's first-frame cost, which no budget could have bought back.
+       Count it, leave the adaptation alone. */
+    s->warmups++;
+    if (late) s->warmup_late++;
+    return late ? 1 : 0;
+  }
 
   if (late) {
     s->late++;
     s->clean_run = 0;
-    s->effective_ms = latedrawRaise(s->effective_ms, draw_ms, s->floor_ms,
-                                    period_ms);
+    s->effective_ms = latedrawRaise(s->effective_ms, draw_ms + gpu_ms,
+                                    s->floor_ms, period_ms);
     return 1;
   }
 
@@ -101,6 +123,14 @@ static double median_of(const double *ring, int n)
   return (n & 1) ? tmp[n / 2] : 0.5 * (tmp[n / 2 - 1] + tmp[n / 2]);
 }
 
+static double max_of(const double *ring, int n)
+{
+  double m = 0.0;
+  for (int i = 0; i < n; i++)
+    if (ring[i] > m) m = ring[i];
+  return m;
+}
+
 double latedrawPeriodMs(const latedraw_state_t *s, double refresh_ms)
 {
   if (refresh_ms > 0.0) return refresh_ms;
@@ -115,8 +145,15 @@ double latedrawDrawMedianMs(const latedraw_state_t *s)
 
 double latedrawDrawMaxMs(const latedraw_state_t *s)
 {
-  double m = 0.0;
-  for (int i = 0; i < s->draw_n; i++)
-    if (s->draw_ring[i] > m) m = s->draw_ring[i];
-  return m;
+  return max_of(s->draw_ring, s->draw_n);
+}
+
+double latedrawGpuMedianMs(const latedraw_state_t *s)
+{
+  return median_of(s->gpu_ring, s->gpu_n);
+}
+
+double latedrawGpuMaxMs(const latedraw_state_t *s)
+{
+  return max_of(s->gpu_ring, s->gpu_n);
 }

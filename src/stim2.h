@@ -199,7 +199,10 @@ typedef struct latedraw_status_s {
   double effective_ms;     /* current adaptive budget */
   double period_ms;        /* 0 = unknown (scheduler dormant) */
   long draws, late;
+  long warmups, warmup_late; /* frames drawn at once after a foreign swap */
   double draw_ms_med, draw_ms_max;
+  double gpu_ms_med, gpu_ms_max;  /* GPU tail after the submit (fence) */
+  int gpu_timed;           /* 1 when the GL fence is available and used */
 } latedraw_status_t;
 extern int stimLateDrawEnable(double budget_ms, char *err, int errlen);
 extern void stimLateDrawDisable(void);

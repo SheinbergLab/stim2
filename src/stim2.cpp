@@ -1433,12 +1433,22 @@ public:
   latedraw_state_t latedraw = {};
   double latedraw_swap_submit = 0.0;  /* glfwGetTime() right after the last
                                          glfwSwapBuffers while enabled */
+  double latedraw_gpu_done = 0.0;     /* glfwGetTime() when the GPU passed
+                                         the fence placed before that swap;
+                                         < submit when no fence was timed */
+  long latedraw_governed_swap = -1;   /* SwapCount after the last swap the
+                                         scheduler governed; -1 none yet */
+  GLsync latedraw_fence = nullptr;    /* fence between draw and swap */
+  int latedraw_gpu_timed = 0;         /* fence entry points available */
 
   /* What lateDrawDefer() learned about this iteration, for the accounting
      after the frame it allowed.  active: the scheduler governed this frame
-     (enabled, dynamic, period and a flip timestamp known). */
+     (enabled, dynamic, period and a flip timestamp known).  warmup: it was
+     drawn at once rather than deferred, because the last swap was not one
+     the scheduler produced (see latedraw.h). */
   struct LateDrawFrame {
     bool active = false;
+    bool warmup = false;
     double t0 = 0.0;          /* clock just before the object step */
     double flip0 = 0.0;       /* flip the target was computed from */
     long missed0 = 0;         /* swapsyncMissedFrames() before the draw */
@@ -1447,7 +1457,12 @@ public:
   /* Decide whether the next dynamic frame must wait.  Returns true to skip
      the step+draw this iteration, with *wait_ms the whole milliseconds the
      next wait may block (0 = don't wait at all).  Costs one clock read and
-     a comparison on the governed path; a few plain loads otherwise. */
+     a comparison on the governed path; a few plain loads otherwise.
+
+     The first frame after a swap the scheduler did not make -- the static
+     redraw that ended an idle gap, a command's redraw, the first frame
+     after enable -- is a warm-up: drawn now, not at target, so a fresh
+     scene's first-frame GPU cost has the whole period in front of it. */
   bool lateDrawDefer(LateDrawFrame *f, int *wait_ms) {
     if (!latedraw.enabled || !OL_DYNAMIC(OBJList)) return false;
     double flip = swapsyncLastFlipTime();
@@ -1455,22 +1470,58 @@ public:
     double period = latedrawPeriodMs(&latedraw, swapsyncLastRefreshMs());
     if (period <= 0.0) return false;               /* dormant: no period */
     double now = glfwGetTime();
-    double target = latedrawTarget(flip, period, latedraw.effective_ms);
-    if (now < target) {
-      *wait_ms = latedrawWaitMs(now, target);
-      return true;
+    bool warmup = latedrawIsWarmup((long) SwapCount, latedraw_governed_swap) != 0;
+    if (!warmup) {
+      double target = latedrawTarget(flip, period, latedraw.effective_ms);
+      if (now < target) {
+        *wait_ms = latedrawWaitMs(now, target);
+        return true;
+      }
     }
     f->active = true;
+    f->warmup = warmup;
     f->t0 = now;
     f->flip0 = flip;
     f->missed0 = swapsyncMissedFrames();
     return false;
   }
 
+  /* Around every swap while the scheduler is enabled: a fence after the
+     draw commands, and after glfwSwapBuffers() returns, wait for the GPU to
+     pass it.  The flip cannot happen before the GPU is done with the frame,
+     and the loop is about to block in waitForSwap() for that flip anyway,
+     so the wait costs nothing while it measures the GPU tail the CPU submit
+     time cannot see.  Bounded (one period of a slow display) so a stuck
+     driver cannot hang the render thread here; a timeout just leaves the
+     tail unmeasured for that frame.  Without the fence entry points (an
+     ES2 context) gpu_ms is simply 0. */
+  void lateDrawBeforeSwap() {
+    if (!latedraw.enabled) return;
+    if (glFenceSync && glClientWaitSync && glDeleteSync) {
+      latedraw_fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+      latedraw_gpu_timed = latedraw_fence != nullptr;
+    }
+  }
+  void lateDrawAfterSwap() {
+    if (!latedraw.enabled) return;
+    latedraw_swap_submit = glfwGetTime();
+    latedraw_gpu_done = 0.0;
+    if (latedraw_fence) {
+      GLenum r = glClientWaitSync(latedraw_fence, GL_SYNC_FLUSH_COMMANDS_BIT,
+                                  (GLuint64) 100000000);   /* 100 ms */
+      if (r == GL_ALREADY_SIGNALED || r == GL_CONDITION_SATISFIED)
+        latedraw_gpu_done = glfwGetTime();
+      glDeleteSync(latedraw_fence);
+      latedraw_fence = nullptr;
+    }
+  }
+
   /* After a frame the scheduler governed: draw time (step to swap submit),
-     late detection (missed counter advanced or flip interval > 1.5 periods),
-     and the budget adaptation.  A frame whose arm did not swap (no new
-     submit stamp) is not counted. */
+     GPU tail (submit to fence), late detection (missed counter advanced or
+     flip interval > 1.5 periods), and the budget adaptation.  A frame whose
+     arm did not swap (no new submit stamp) is not counted.  The swap count
+     this frame left behind is remembered so the next pass can tell a
+     governed swap from a foreign one (a command's redraw, a static frame). */
   void lateDrawAccount(const LateDrawFrame &f) {
     if (!f.active || latedraw_swap_submit < f.t0) return;
     double flip1 = swapsyncLastFlipTime();
@@ -1478,9 +1529,13 @@ public:
     latedrawNoteFlipInterval(&latedraw, interval_ms);
     double period = latedrawPeriodMs(&latedraw, swapsyncLastRefreshMs());
     double draw_ms = (latedraw_swap_submit - f.t0) * 1000.0;
+    double gpu_ms = latedraw_gpu_done > latedraw_swap_submit
+      ? (latedraw_gpu_done - latedraw_swap_submit) * 1000.0 : 0.0;
     int late = latedrawIsLate(f.missed0, swapsyncMissedFrames(),
                               interval_ms, period);
-    latedrawOnFrame(&latedraw, draw_ms, late, period);
+    latedrawOnFrame(&latedraw, draw_ms, gpu_ms, late, f.warmup ? 1 : 0,
+                    period);
+    latedraw_governed_swap = (long) SwapCount;
   }
 
   
@@ -2498,6 +2553,7 @@ int stimLateDrawEnable(double budget_ms, char *err, int errlen)
     return -1;
   }
   latedrawInit(&app.latedraw, budget_ms);
+  app.latedraw_governed_swap = -1;       /* first governed frame: warm-up */
   app.latedraw.enabled = 1;
   do_wakeup();
   return 0;
@@ -2518,8 +2574,13 @@ void stimLateDrawStatus(latedraw_status_t *st)
   st->period_ms = latedrawPeriodMs(s, swapsyncLastRefreshMs());
   st->draws = s->draws;
   st->late = s->late;
+  st->warmups = s->warmups;
+  st->warmup_late = s->warmup_late;
   st->draw_ms_med = latedrawDrawMedianMs(s);
   st->draw_ms_max = latedrawDrawMaxMs(s);
+  st->gpu_ms_med = latedrawGpuMedianMs(s);
+  st->gpu_ms_max = latedrawGpuMaxMs(s);
+  st->gpu_timed = app.latedraw_gpu_timed;
 }
 
 void Application::start_tcp_server(void)
@@ -3154,9 +3215,10 @@ void Application::updateDisplay(bool log_events)
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());  
 
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PreSwap");
+    lateDrawBeforeSwap();
     swapsyncBeforeSwap();
     glfwSwapBuffers(window);
-    if (latedraw.enabled) latedraw_swap_submit = glfwGetTime();
+    lateDrawAfterSwap();
     waitForSwap();
     frame_ticks_us = (long long) (1e6 * glfwGetTime());
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PostSwap");
@@ -3192,9 +3254,10 @@ void Application::updateDisplay(bool log_events)
 
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PreSwap");
     /* Swap front and back buffers */
+    lateDrawBeforeSwap();
     swapsyncBeforeSwap();
     glfwSwapBuffers(window);
-    if (latedraw.enabled) latedraw_swap_submit = glfwGetTime();
+    lateDrawAfterSwap();
     /* Wait for swap */
     waitForSwap();
     frame_ticks_us = (long long) (1e6 * glfwGetTime());
@@ -3227,9 +3290,10 @@ void Application::updateDisplay(bool log_events)
     break;
   case SWAP_ONLY:
     /* Only swap and acknowledge -- no clear, no draw */
+    lateDrawBeforeSwap();
     swapsyncBeforeSwap();
     glfwSwapBuffers(window);
-    if (latedraw.enabled) latedraw_swap_submit = glfwGetTime();
+    lateDrawAfterSwap();
     SwapCount++;
     waitForSwap();
     frame_ticks_us = (long long) (1e6 * glfwGetTime());

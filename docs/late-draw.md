@@ -41,14 +41,23 @@ the display is dynamic, and a flip time and period are known.
 - `stimLateDraw`: status. Every form returns
 
       enabled 0|1 budget_ms <floor> effective_ms <adaptive> period_ms <p>
-      draws <n> late <n> draw_ms_med <x> draw_ms_max <x>
+      draws <n> late <n> warmups <n> warmup_late <n>
+      draw_ms_med <x> draw_ms_max <x> gpu_ms_med <x> gpu_ms_max <x>
+      gpu_timed 0|1
 
   `draws` counts frames the scheduler governed since enable, `late` those
-  it detected as late, `draw_ms_*` summarise the last 256 governed draws
-  (step start to the return of `glfwSwapBuffers`). `period_ms` is 0 when
-  no period is known, in which case the scheduler is dormant and the loop
-  behaves as if disabled. An older stim2 answers `invalid command name`,
-  which is the capability probe.
+  scheduled against the budget that it detected as late. `warmups` counts
+  the frames it drew at once instead of deferring (see "Warm-up frames"
+  below) and `warmup_late` how many of those slipped; such slips are
+  reported here but never move `effective_ms`. `draw_ms_*` summarise the
+  last 256 governed draws (step start to the return of `glfwSwapBuffers`),
+  `gpu_ms_*` the GPU tail of the same frames (from that return until the
+  GPU passed a fence placed after the draw commands); `gpu_timed` is 1 when
+  the fence entry points exist in this GL context, else the tail reads 0.
+  `period_ms` is 0 when no period is known, in which case the scheduler is
+  dormant and the loop behaves as if disabled. An older stim2 answers
+  `invalid command name`, which is the capability probe; one that answers
+  without `warmups` predates the warm-up rule and GPU timing.
 
 ## Scheduling rule
 
@@ -65,6 +74,27 @@ The period is `swapsyncLastRefreshMs()` when the strategy reports one,
 else the median of the last 16 flip intervals (once at least four are
 known), else unknown (dormant).
 
+## Warm-up frames
+
+The first frame the scheduler governs after a swap it did not make is
+drawn at once, not at `target`. That covers the static redraw that ends
+an idle gap between trials (`targets_on` after a second or two of nothing
+moving), a command's explicit `redraw` in the middle of a dynamic run, and
+the first frame after `stimLateDraw` is enabled. The test is simply
+whether the swap counter still stands where the previous governed frame
+left it; if not, somebody else swapped and this frame is a warm-up.
+
+Why: on the 120 Hz office display box, with a 3 ms floor and a CPU draw
+time under 1 ms, the second frame of a new trial slipped a vblank. That
+frame is a fresh scene (a motion patch and discs built by `nexttrial`,
+programs and buffers in first use) whose GPU cost no CPU stamp shows, and
+the ~2 ms left after a 3 ms budget was not enough for it. Drawing that
+one frame immediately gives it the whole period, costs nothing in
+freshness (there was no input to be fresh about during the idle gap), and
+a slip there is counted in `warmup_late` but does not raise the budget,
+because no budget would have bought it back. The frame after it is
+scheduled normally against `effective_ms`.
+
 ## Adaptation rule
 
 The budget the user gives is a floor. The effective budget is what is
@@ -72,11 +102,24 @@ actually scheduled against:
 
 - After each governed swap, a frame is late when `swapsyncMissedFrames()`
   advanced since the previous swap, or the flip interval exceeded 1.5
-  periods. On a late frame the effective budget is raised to
-  `max(effective * 1.5, draw_time * 2)`, capped at `period - 1 ms`, and
-  the frame counted in `late`.
-- Every 600 consecutive non-late frames (5 s at 120 Hz) the effective
-  budget is lowered by 0.25 ms, never below the floor.
+  periods. On a late scheduled frame the effective budget is raised to
+  `max(effective * 1.5, (draw_time + gpu_tail) * 2)`, capped at
+  `period - 1 ms`, and the frame counted in `late`. A late warm-up frame
+  only increments `warmup_late`.
+- Every 600 consecutive non-late scheduled frames (5 s at 120 Hz) the
+  effective budget is lowered by 0.25 ms, never below the floor. Warm-up
+  frames neither extend nor reset that run.
+
+`gpu_tail` is measured with a GL fence placed between the draw commands
+and `glfwSwapBuffers`: after the swap call returns, the render thread
+waits for the GPU to pass the fence and stamps the clock. The flip cannot
+precede GPU completion and the thread is about to block in the swap wait
+for that flip anyway, so the measurement is free; it is bounded at
+100 ms so a stuck driver cannot hang the loop, and a context without
+`glFenceSync` (ES2) just reports a tail of 0 and `gpu_timed 0`. The
+result is that a scene which is cheap to submit but expensive to render
+raises the budget by what it actually needs, instead of by the CPU time
+alone.
 
 So a miss can never cascade: the first late frame at least halves the
 remaining slack, and a budget that proves too small walks back up until
@@ -142,6 +185,16 @@ on direct X11 flips.
    just after the flips again and done-to-flip returns to a period.
 
 If `missed` advances or flip intervals show doubles with late-draw on,
-read `draw_ms_max` and raise the floor to at least twice it. The
-adaptation will already have done so for the session (`effective_ms`),
-but the floor is what survives a re-enable.
+read `draw_ms_max` and `gpu_ms_max` and raise the floor to at least twice
+their sum. The adaptation will already have done so for the session
+(`effective_ms`), but the floor is what survives a re-enable. A double
+interval at the second frame of a trial with `late` unchanged and
+`warmup_late` advanced is the warm-up case: the scene's first frame cost
+more than a period, which a budget cannot fix; look at what `nexttrial`
+builds instead.
+
+Measured 2026-10-26 on that box before this rule existed: 3653 frames at
+a 3 ms floor, draw time median 0.75 ms and max 0.98 ms, two slips, one of
+them the second frame after a 2.2 s idle gap, the other 24 frames into a
+trial with nothing dispatched in that frame; the controller settled at
+`effective_ms 5.0`.

@@ -511,8 +511,13 @@ static int stimFrameLogCmd(ClientData clientData, Tcl_Interp *interp,
  *   the frame show one frame sooner.  budget_ms > 0 enables with that
  *   floor; 0 disables; no argument reports.  Every form returns the state
  *       enabled 0|1 budget_ms <floor> effective_ms <adaptive> period_ms <p>
- *       draws <n> late <n> draw_ms_med <x> draw_ms_max <x>
- *   (draw_ms_* over the last 256 governed draws).  Enabling is refused,
+ *       draws <n> late <n> warmups <n> warmup_late <n>
+ *       draw_ms_med <x> draw_ms_max <x> gpu_ms_med <x> gpu_ms_max <x>
+ *       gpu_timed 0|1
+ *   (draw_ms_* and gpu_ms_* over the last 256 governed draws; warmups are
+ *   frames drawn at once after a swap the scheduler did not make, and
+ *   their slips never raise the budget; gpu_timed says whether the GL
+ *   fence that measures the GPU tail is available).  Enabling is refused,
  *   naming the swap-sync strategy, until that strategy has reported a
  *   hardware flip timestamp and refresh period.  An older stim2 answers
  *   "invalid command name", which is ESS's probe.
@@ -559,10 +564,20 @@ static int stimLateDrawCmd(ClientData clientData, Tcl_Interp *interp,
 		 Tcl_NewLongObj(st.draws));
   Tcl_DictObjPut(interp, d, Tcl_NewStringObj("late", -1),
 		 Tcl_NewLongObj(st.late));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("warmups", -1),
+		 Tcl_NewLongObj(st.warmups));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("warmup_late", -1),
+		 Tcl_NewLongObj(st.warmup_late));
   Tcl_DictObjPut(interp, d, Tcl_NewStringObj("draw_ms_med", -1),
 		 Tcl_NewDoubleObj(st.draw_ms_med));
   Tcl_DictObjPut(interp, d, Tcl_NewStringObj("draw_ms_max", -1),
 		 Tcl_NewDoubleObj(st.draw_ms_max));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("gpu_ms_med", -1),
+		 Tcl_NewDoubleObj(st.gpu_ms_med));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("gpu_ms_max", -1),
+		 Tcl_NewDoubleObj(st.gpu_ms_max));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("gpu_timed", -1),
+		 Tcl_NewIntObj(st.gpu_timed));
   Tcl_SetObjResult(interp, d);
   return TCL_OK;
 }

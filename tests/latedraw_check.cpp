@@ -82,6 +82,15 @@ int main(void)
     check("floor above period-1: result is the cap", near(v, P - 1.0), v, P - 1.0);
   }
 
+  /* ---- warm-up detection ----------------------------------------------- */
+  {
+    check("nothing governed yet (-1) -> warm-up", latedrawIsWarmup(100, -1) == 1);
+    check("swap count where the governed frame left it -> scheduled",
+          latedrawIsWarmup(100, 100) == 0);
+    check("swap count moved since (foreign swap) -> warm-up",
+          latedrawIsWarmup(101, 100) == 1);
+  }
+
   /* ---- lower ----------------------------------------------------------- */
   {
     double v = latedrawLower(4.5, 3.0);
@@ -117,49 +126,82 @@ int main(void)
     check("refresh period wins when known",
           near(latedrawPeriodMs(&s, P), P));
 
-    /* a late frame with draw 1 ms: 3 -> 4.5 */
-    int late = latedrawOnFrame(&s, 1.0, 1, P);
+    /* a late frame with draw 1 ms, no gpu tail: 3 -> 4.5 */
+    int late = latedrawOnFrame(&s, 1.0, 0.0, 1, 0, P);
     check("late frame counted", late == 1 && s.late == 1 && s.draws == 1);
     check("late frame raised effective to 4.5", near(s.effective_ms, 4.5),
           s.effective_ms, 4.5);
     check("late frame reset the clean run", s.clean_run == 0);
 
     /* 599 clean frames: no change yet */
-    for (int i = 0; i < LATEDRAW_CLEAN_RUN - 1; i++) latedrawOnFrame(&s, 1.0, 0, P);
+    for (int i = 0; i < LATEDRAW_CLEAN_RUN - 1; i++) latedrawOnFrame(&s, 1.0, 0.0, 0, 0, P);
     check("599 clean frames: effective unchanged", near(s.effective_ms, 4.5),
           s.effective_ms, 4.5);
     /* the 600th: -0.25 */
-    latedrawOnFrame(&s, 1.0, 0, P);
+    latedrawOnFrame(&s, 1.0, 0.0, 0, 0, P);
     check("600th clean frame lowers by 0.25 ms", near(s.effective_ms, 4.25),
           s.effective_ms, 4.25);
     check("clean run restarts after a decay step", s.clean_run == 0);
     /* 600 more x 6 -> would be 2.75 but floors at 3.0 */
     for (int k = 0; k < 6; k++)
-      for (int i = 0; i < LATEDRAW_CLEAN_RUN; i++) latedrawOnFrame(&s, 1.0, 0, P);
+      for (int i = 0; i < LATEDRAW_CLEAN_RUN; i++) latedrawOnFrame(&s, 1.0, 0.0, 0, 0, P);
     check("repeated decay never goes below the floor", near(s.effective_ms, 3.0),
           s.effective_ms, 3.0);
 
     /* a late frame mid-run resets the clean run */
-    for (int i = 0; i < 100; i++) latedrawOnFrame(&s, 1.0, 0, P);
-    latedrawOnFrame(&s, 1.0, 1, P);
+    for (int i = 0; i < 100; i++) latedrawOnFrame(&s, 1.0, 0.0, 0, 0, P);
+    latedrawOnFrame(&s, 1.0, 0.0, 1, 0, P);
     check("late frame mid-run resets the clean run", s.clean_run == 0);
     check("late count is 2", s.late == 2);
 
     /* repeated late frames climb geometrically but stop at the cap */
-    for (int i = 0; i < 20; i++) latedrawOnFrame(&s, 1.0, 1, P);
+    for (int i = 0; i < 20; i++) latedrawOnFrame(&s, 1.0, 0.0, 1, 0, P);
     check("many late frames saturate at period - 1 ms",
           near(s.effective_ms, P - 1.0), s.effective_ms, P - 1.0);
+
+    /* the GPU tail counts as work: draw 0.8 + gpu 2.0 = 2.8, x2 = 5.6 beats
+       1.5 x 3 = 4.5 -- the measured office-box case (CPU under 1 ms, slip
+       anyway) now raises by the right amount */
+    latedraw_state_t g;
+    latedrawInit(&g, 3.0);
+    latedrawOnFrame(&g, 0.8, 2.0, 1, 0, P);
+    check("late frame raises on draw + gpu tail (2 x 2.8 = 5.6)",
+          near(g.effective_ms, 5.6), g.effective_ms, 5.6);
+    check("gpu ring records the tail", near(latedrawGpuMaxMs(&g), 2.0),
+          latedrawGpuMaxMs(&g), 2.0);
+    latedrawOnFrame(&g, 0.8, -1.0, 0, 0, P);
+    check("negative gpu tail (unmeasured) is recorded as 0",
+          near(latedrawGpuMedianMs(&g), 1.0), latedrawGpuMedianMs(&g), 1.0);
+
+    /* warm-up frames: counted, recorded, never adapt */
+    latedraw_state_t w;
+    latedrawInit(&w, 3.0);
+    for (int i = 0; i < 10; i++) latedrawOnFrame(&w, 1.0, 0.0, 0, 0, P);
+    int wl = latedrawOnFrame(&w, 0.9, 6.0, 1, 1, P);
+    check("late warm-up frame reports late", wl == 1);
+    check("late warm-up frame counted in warmups / warmup_late",
+          w.warmups == 1 && w.warmup_late == 1);
+    check("late warm-up frame not counted in late", w.late == 0);
+    check("late warm-up frame does not raise the budget", near(w.effective_ms, 3.0),
+          w.effective_ms, 3.0);
+    check("late warm-up frame does not reset the clean run", w.clean_run == 10);
+    check("warm-up frame still counts as a draw", w.draws == 11);
+    check("warm-up gpu tail still lands in the ring", near(latedrawGpuMaxMs(&w), 6.0),
+          latedrawGpuMaxMs(&w), 6.0);
+    latedrawOnFrame(&w, 0.9, 0.0, 0, 1, P);
+    check("clean warm-up frame counted in warmups only",
+          w.warmups == 2 && w.warmup_late == 1 && w.clean_run == 10);
 
     /* draws counter and ring statistics */
     latedraw_state_t r;
     latedrawInit(&r, 2.0);
-    for (int i = 1; i <= 5; i++) latedrawOnFrame(&r, (double) i, 0, P);
+    for (int i = 1; i <= 5; i++) latedrawOnFrame(&r, (double) i, 0.0, 0, 0, P);
     check("draw median over 1..5 is 3", near(latedrawDrawMedianMs(&r), 3.0),
           latedrawDrawMedianMs(&r), 3.0);
     check("draw max over 1..5 is 5", near(latedrawDrawMaxMs(&r), 5.0));
     check("draws counts every frame", r.draws == 5);
     /* overflow the ring: 300 frames of 0.5 then the ring holds only 0.5 */
-    for (int i = 0; i < 300; i++) latedrawOnFrame(&r, 0.5, 0, P);
+    for (int i = 0; i < 300; i++) latedrawOnFrame(&r, 0.5, 0.0, 0, 0, P);
     check("ring keeps the last 256 only (median)", near(latedrawDrawMedianMs(&r), 0.5),
           latedrawDrawMedianMs(&r), 0.5);
     check("ring keeps the last 256 only (max)", near(latedrawDrawMaxMs(&r), 0.5),
