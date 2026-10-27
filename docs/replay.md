@@ -23,7 +23,7 @@ datapoints in the same order and at the same pace.
 | `-dry` | read and plan, print the summary and the first events, send nothing. |
 | `-verbose` | print every event as it goes out. |
 | `-render OUT` | frame-locked into a movie on the rig's timeline (below). `OUT` ending `.mp4`/`.mov`/`.mkv` goes through ffmpeg; anything else gets raw RGBA (a file, or `"|command"`). `-speed` is ignored; `-gap` compresses only when given. |
-| `-fps F` | the movie's frame rate with `-render`, default the rig's refresh. |
+| `-fps F` | the movie's frame rate with `-render`, default the rig's refresh. QuickTime Player plays movies above 60 fps in slow motion after the first seconds; browsers and mrv2 play them right. Use `-fps 60` for a QuickTime copy (frames shorter than a tick then drop). |
 
 Needs `dlsh` with the `dslog` and `tcljson` packages (dlsh.zip 0.20.4 or
 newer) and a stim2 with stimess 1.1 or newer (`stim::prelude playback`).

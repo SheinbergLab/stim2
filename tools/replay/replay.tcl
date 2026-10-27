@@ -29,7 +29,8 @@
 #                      ignored; -gap compresses only when given. Needs a stim2
 #                      with stepFrame (headless or not) and a file with
 #                      stim/frame and ACK-stamped stim/cmd records.
-#       -fps F         the movie's frame rate (default: the rig's refresh)
+#       -fps F         the movie's frame rate (default: the rig's refresh; above
+#                      60, QuickTime Player slows down -- -fps 60 for it)
 #
 # What it does, in the order ESS's configure_stim does it:
 #
@@ -367,6 +368,10 @@ if {$opt(render) ne ""} {
     puts "          commands placed by ACK stamp: [expr {$ncmd - $cmd_after}][expr {$cmd_before ? " ($cmd_before applied before the first frame)" : ""}][expr {$cmd_after ? ", $cmd_after after the last frame (not drawn)" : ""}]"
     puts "          datapoints placed by ds_dispatched: $k of $ndps[expr {$dp_after ? ", $dp_after after the last frame" : ""}]; $dp_foreign forwarded datapoints were not in the file's streams"
     puts "          stim clock - dserv clock: [format %.3f [expr {$tick_off / 1e6}]] s"
+    if {$opt(fps) > 60} {
+        puts "  NOTE: QuickTime Player plays movies above 60 fps in slow motion after the\
+ first seconds (browsers and mrv2 play them right); -fps 60 makes a copy for it"
+    }
 }
 if {$opt(dry)} {
     set shown 0
