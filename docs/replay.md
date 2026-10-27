@@ -66,7 +66,9 @@ errors and 225 frames swapped; the cursor binding reported all 170 arrivals.
   4), but the refresh rate and pixel size are stim2's own. A frame on the
   rig is not a frame here, so the replay is paced by time, not by
   `stim/frame`. The frame record is still the authority on what the rig
-  showed when; it is not used to drive the replay.
+  showed when; it is not used to drive the replay yet. stim2's step mode
+  and frame sink (`docs/headless.md`) are what a frame-locked, headless
+  replay into a movie will use.
 - **Nothing leaves stim2.** `dserv_send` and friends do nothing, so a
   script that reports outcomes back (planko's `complete`) reports to no
   one, which is correct: the outcome is already in the file.
