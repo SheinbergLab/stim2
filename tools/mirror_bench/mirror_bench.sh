@@ -51,23 +51,29 @@ cpu=$(awk -F: '/model name/ {sub(/^ /,"",$2); print $2; exit}' /proc/cpuinfo)
 ncpu=$(nproc)
 echo "machine: $cpu, $ncpu threads; render node ${dev:-none}"
 
-# --- which VAAPI encoder setting works here (Intel often wants low power) ---
-vaapi_opts=""
+# --- which VAAPI setting works here: RGBA->NV12 on the GPU (scale_vaapi)
+#     before on the CPU (about 4x the encoder's CPU at 1080p); Intel often
+#     wants -low_power 1 ---------------------------------------------------
+vaapi_opts=""; vaapi_vf=""
 if [ -n "$dev" ]; then
-  for lp in "" "-low_power 1"; do
-    if ffmpeg -hide_banner -loglevel error -vaapi_device "$dev" -f lavfi \
-         -i testsrc=size=640x360:rate=30 -t 1 -vf format=nv12,hwupload \
-         -c:v h264_vaapi $lp -f null - 2>/dev/null; then vaapi_opts="ok $lp"; break; fi
+  for vf in "hwupload,scale_vaapi=format=nv12" "format=nv12,hwupload"; do
+    for lp in "" "-low_power 1"; do
+      if ffmpeg -hide_banner -loglevel error -vaapi_device "$dev" -f lavfi \
+           -i testsrc=size=640x360:rate=30 -t 1 -vf "format=rgba,$vf" \
+           -c:v h264_vaapi $lp -f null - 2>/dev/null; then
+        vaapi_opts="ok $lp"; vaapi_vf=$vf; break 2
+      fi
+    done
   done
 fi
-if [ -n "$vaapi_opts" ]; then echo "vaapi: h264_vaapi works${vaapi_opts#ok}"
+if [ -n "$vaapi_opts" ]; then echo "vaapi: h264_vaapi works with -vf $vaapi_vf${vaapi_opts#ok}"
 else echo "vaapi: no working h264_vaapi here; vaapi runs are skipped"; fi
 
 sink_target() {   # enc w h fps
   case $1 in
     none) echo /dev/null ;;
-    x264) echo "|ffmpeg -loglevel error -f rawvideo -pix_fmt rgba -s $2x$3 -r $4 -i - -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -b:v 4M -f mpegts /dev/null" ;;
-    vaapi) echo "|ffmpeg -loglevel error -vaapi_device $dev -f rawvideo -pix_fmt rgba -s $2x$3 -r $4 -i - -vf format=nv12,hwupload -c:v h264_vaapi ${vaapi_opts#ok} -b:v 4M -f mpegts /dev/null" ;;
+    x264) echo "|ffmpeg -y -loglevel error -f rawvideo -pix_fmt rgba -s $2x$3 -r $4 -i - -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -b:v 4M -f mpegts /dev/null" ;;
+    vaapi) echo "|ffmpeg -y -loglevel error -vaapi_device $dev -f rawvideo -pix_fmt rgba -s $2x$3 -r $4 -i - -vf $vaapi_vf -c:v h264_vaapi ${vaapi_opts#ok} -b:v 4M -f mpegts /dev/null" ;;
   esac
 }
 proc_ticks() {    # pids... -> utime+stime summed, in clock ticks
@@ -131,6 +137,7 @@ for wh in $res; do
         arrived=$(msg "stim::count bench/eye")
         sent=$(awk '/^eye:/ {print $2}' $log.eye.log)
       fi
+      sinkfail=$(msg "dict get [frameSink] failed")
       msg "frameSink close" > /dev/null
       kill $spid 2>/dev/null; wait $spid 2>/dev/null
       wait $rpid 2>/dev/null
@@ -148,10 +155,12 @@ for wh in $res; do
              f, l, lp, wl, p50, p95, mx, per,
              100 * s / tck / dt, 100 * e / tck / dt,
              st ? 100 * (st - si) / st : 0, gn ? sprintf("%.0f", gs / gn) : "", eye, se, ar }')
+      [ "$sinkfail" = 1 ] && row="$row,SINK_FAILED"
       echo "$wh,$fps,$enc,$row" >> "$csv"
       IFS=, read f l lp wl p50 p95 mx per sc ec sy gp eh se ar <<< "$row"
       printf "%-10s %3s %-5s | %6s %5s %5s%% | %6s %6s %6s | %5s%% %5s%% %5s%% | %4s%s | %s/%s\n" \
         $wh $fps $enc $f $l $lp $p50 $p95 $mx $sc $ec $sy "${gp:--}" "${gp:+%}" $ar $se
+      [ "$sinkfail" = 1 ] && echo "  ^ the encoder exited early (frameSink write failed): see $log.stim2.log"
     done
   done
 done
