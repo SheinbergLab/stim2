@@ -282,6 +282,14 @@ typedef struct stim_sink_status_s {
   int failed;
   int manual;              /* frames written only by frameSink write */
 } stim_sink_status_t;
+typedef struct stim_headless_stats_s {
+  long long frames, late;  /* late: started before its deadline, ended after */
+  double worst_late_ms;
+  double busy_mean_ms, busy_p50_ms, busy_p95_ms, busy_max_ms;
+  double period_ms;        /* FrameDuration */
+  double span_s;           /* since the last reset (0 before one) */
+} stim_headless_stats_t;
+void   stimHeadlessStats(int reset, stim_headless_stats_t *st);
 int    stimHeadless(void);
 int    stimStepMode(void);
 double stimStepClockMs(void);

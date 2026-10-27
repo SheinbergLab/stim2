@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libopenal-dev libfreetype-dev libpng-dev libtinyxml2-dev \
       libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev \
       libegl1 libegl-mesa0 libgl1-mesa-dri mesa-utils-bin ffmpeg \
+      va-driver-all vainfo procps \
     && rm -rf /var/lib/apt/lists/*
 
 # a shallow fetch of one pinned commit

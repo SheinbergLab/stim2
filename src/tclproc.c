@@ -1231,6 +1231,41 @@ static int frameSinkCmd(ClientData clientData, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/*
+ * headlessStats ?reset?
+ *   How an unstepped headless stim2 is keeping its refresh: frames drawn,
+ *   frames late (started before their deadline and finished after it),
+ *   the worst lateness, and per-frame busy time (draw + readback + frame
+ *   sink write) as mean/p50/p95/max in ms, with the frame period and the
+ *   seconds since the last reset.  reset starts a new window after
+ *   reporting the current one.
+ */
+static int headlessStatsCmd(ClientData clientData, Tcl_Interp *interp,
+			    int argc, char *argv[])
+{
+  stim_headless_stats_t st;
+  Tcl_Obj *d;
+  if (argc > 2 || (argc == 2 && strcmp(argv[1], "reset"))) {
+    Tcl_SetResult(interp, "usage: headlessStats ?reset?", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  stimHeadlessStats(argc == 2, &st);
+  d = Tcl_NewDictObj();
+#define PUTD(k, v) Tcl_DictObjPut(interp, d, Tcl_NewStringObj(k, -1), Tcl_NewDoubleObj(v))
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("frames", -1), Tcl_NewWideIntObj(st.frames));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("late", -1), Tcl_NewWideIntObj(st.late));
+  PUTD("worst_late_ms", st.worst_late_ms);
+  PUTD("busy_mean_ms", st.busy_mean_ms);
+  PUTD("busy_p50_ms", st.busy_p50_ms);
+  PUTD("busy_p95_ms", st.busy_p95_ms);
+  PUTD("busy_max_ms", st.busy_max_ms);
+  PUTD("period_ms", st.period_ms);
+  PUTD("span_s", st.span_s);
+#undef PUTD
+  Tcl_SetObjResult(interp, d);
+  return TCL_OK;
+}
+
 static int swapTagCallbackCmd(ClientData clientData, Tcl_Interp *interp,
 			      int argc, char *argv[])
 {
@@ -3351,6 +3386,8 @@ void addTclCommands(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "stepFrame", (Tcl_CmdProc *) stepFrameCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "frameSink", (Tcl_CmdProc *) frameSinkCmd,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "headlessStats", (Tcl_CmdProc *) headlessStatsCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "swapTagCallback",
 		    (Tcl_CmdProc *) swapTagCallbackCmd,

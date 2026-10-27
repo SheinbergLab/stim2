@@ -1936,11 +1936,33 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
      rate it would on a monitor instead of as fast as the GPU allows.
      Stepped, frames come when stepFrame asks and are not held. */
   double headless_next_frame = 0.0;
+
+  /* headlessStats: how well an unstepped headless stim2 keeps its refresh
+     (what a live mirror must do).  busy is a frame's draw + readback + sink
+     write, from updateDisplay's start to here; a frame is late when it
+     started in time (before its deadline) and finished after it. */
+  struct HeadlessStats {
+    double frame_t0 = 0.0;          /* glfwGetTime() at updateDisplay start */
+    long long frames = 0, late = 0;
+    double worst_late = 0.0;        /* s past the deadline */
+    double since = 0.0;             /* glfwGetTime() at the last reset */
+    std::vector<float> busy_ms;
+  } hl_stats;
+
   void headlessPace()
   {
     if (StepMode) return;
     double period = FrameDuration > 0.0f ? FrameDuration / 1000.0 : 1.0 / 60.0;
     double now = glfwGetTime();
+    hl_stats.frames++;
+    if (hl_stats.busy_ms.size() < (1u << 20))   /* ~4.8 h at 60 Hz per window */
+      hl_stats.busy_ms.push_back((float) (1000.0 * (now - hl_stats.frame_t0)));
+    if (headless_next_frame > 0.0 && hl_stats.frame_t0 <= headless_next_frame &&
+        now > headless_next_frame) {
+      hl_stats.late++;
+      if (now - headless_next_frame > hl_stats.worst_late)
+        hl_stats.worst_late = now - headless_next_frame;
+    }
     if (headless_next_frame > now) {
       std::this_thread::sleep_for(std::chrono::duration<double>(headless_next_frame - now));
       headless_next_frame += period;
@@ -2851,6 +2873,31 @@ int stimFrameSinkClose(int *status)
   return 1;
 }
 
+void stimHeadlessStats(int reset, stim_headless_stats_t *st)
+{
+  Application::HeadlessStats &h = app.hl_stats;
+  std::vector<float> b = h.busy_ms;
+  std::sort(b.begin(), b.end());
+  auto q = [&](double p) { return b.empty() ? 0.0 : (double) b[(size_t) (p * (b.size() - 1))]; };
+  double mean = 0.0;
+  for (float v : b) mean += v;
+  st->frames = h.frames;
+  st->late = h.late;
+  st->worst_late_ms = 1000.0 * h.worst_late;
+  st->busy_mean_ms = b.empty() ? 0.0 : mean / b.size();
+  st->busy_p50_ms = q(0.50);
+  st->busy_p95_ms = q(0.95);
+  st->busy_max_ms = q(1.0);
+  st->period_ms = FrameDuration;
+  st->span_s = h.since > 0.0 ? glfwGetTime() - h.since : 0.0;
+  if (reset) {
+    h.frames = h.late = 0;
+    h.worst_late = 0.0;
+    h.busy_ms.clear();
+    h.since = glfwGetTime();
+  }
+}
+
 void stimFrameSinkStatus(stim_sink_status_t *st)
 {
   st->open = app.sink.fp != nullptr;
@@ -3572,6 +3619,7 @@ void Application::updateDisplay(bool log_events)
 {
   OBJ_GROUP *g = NULL;
   long long frame_ticks_us;
+  if (Headless) hl_stats.frame_t0 = glfwGetTime();
   if (OGL_NGROUPS(GList)) g = OGL_GROUP(GList, OGL_CURGROUP(GList));
   if (!g) return;
 
