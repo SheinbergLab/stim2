@@ -451,7 +451,8 @@ if {$opt(render) ne ""} {
         puts stderr "this stim2 has no stepFrame (step mode): -render needs the headless/step build"; exit 1
     }
     set out $opt(render)
-    if {[regexp -nocase {\.(mp4|mov|mkv)$} $out]} {
+    # "|command" is always a command (it may well end in .mp4 itself)
+    if {[string index $out 0] ne "|" && [regexp -nocase {\.(mp4|mov|mkv)$} $out]} {
         set target "|ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgba -s ${win_w}x${win_h}\
  -r $opt(fps) -i - -pix_fmt yuv420p [list [file normalize $out]]"
     } else { set target $out }
