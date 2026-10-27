@@ -38,9 +38,15 @@
 #                      better and bigger, 0 lossless)
 #       -eye MODE      with -render, draw the logged gaze (eyetracking/raw +
 #                      em/settings) over each movie tick: auto (default; a
-#                      sample within +/-90 is already degrees, as the virtual
-#                      source logs it, anything else is calibrated as ADC
-#                      counts), analog, video, degrees, or off
+#                      file whose samples all lie within +/-90 is already in
+#                      degrees, as the virtual source logs them, otherwise
+#                      they are calibrated as ADC counts), analog, video,
+#                      degrees, or off
+#       -geometry HX,HY[,HZ]  the rig's half-screen degrees (and refresh) for
+#                      a file without ess/screen_* records; overrides them
+#                      when the file has them
+#       -bg R,G,B      the background (0-255) the display had at file open,
+#                      for a file without ess/screen_bg; overrides it
 #
 # What it does, in the order ESS's configure_stim does it:
 #
@@ -88,11 +94,13 @@ set opt(fps)     ""
 set opt(gap_given) 0
 set opt(eye)     auto
 set opt(blend)   1
+set opt(geometry) ""
+set opt(bg)      ""
 set opt(crf)     14
 
 if {[llength $argv] < 1} {
     puts stderr "usage: dlsh replay.tcl FILE.ess ?-host H? ?-port P? ?-live? ?-trial N | -trials A-B?\
- ?-speed X? ?-gap S? ?-stream NAME ...? ?-dry? ?-verbose? ?-render OUT? ?-fps F? ?-noblend? ?-crf N? ?-eye MODE?"
+ ?-speed X? ?-gap S? ?-stream NAME ...? ?-dry? ?-verbose? ?-render OUT? ?-fps F? ?-noblend? ?-crf N? ?-eye MODE? ?-geometry HX,HY[,HZ]? ?-bg R,G,B?"
     exit 2
 }
 set path [lindex $argv 0]
@@ -112,6 +120,10 @@ while {[llength $args]} {
         -render  { set opt(render) [lindex $args 0]; set args [lrange $args 1 end] }
         -fps     { set opt(fps)   [lindex $args 0]; set args [lrange $args 1 end] }
         -noblend { set opt(blend) 0 }
+        -bg      { set opt(bg) [split [lindex $args 0] ,]; set args [lrange $args 1 end]
+                   if {[llength $opt(bg)] != 3} { puts stderr "-bg wants R,G,B"; exit 2 } }
+        -geometry { set opt(geometry) [split [lindex $args 0] ,]; set args [lrange $args 1 end]
+                    if {[llength $opt(geometry)] < 2} { puts stderr "-geometry wants HX,HY or HX,HY,HZ"; exit 2 } }
         -crf     { set opt(crf)   [lindex $args 0]; set args [lrange $args 1 end] }
         -eye     { set opt(eye)   [lindex $args 0]; set args [lrange $args 1 end]
                    if {$opt(eye) ni {auto analog video degrees off}} { puts stderr "-eye wants auto|analog|video|degrees|off"; exit 2 } }
@@ -158,7 +170,7 @@ set stimdg ""; set obs_begin {}; set obs_end {}
 set events {}          ;# {ts kind payload...}, kinds: cmd | dp
 set frames {}          ;# stim/frame: {dserv_ts frame swapcount flip_us ticks_us missed cmds ds}
 set eye_recs {}        ;# eyetracking/raw: {dserv_ts {h v h v ...}}, 10 samples a record
-set em_settings ""     ;# em/settings: the calibration in force
+set em_settings {}     ;# em/settings: {dserv_ts settings} each time it changed
 set counts [dict create]
 set hashed 0
 set stream_set [dict create]
@@ -196,12 +208,13 @@ while {1} {
         ess/screen_w     { set geom(w)     [string trim [dict get $d data]] }
         ess/screen_h     { set geom(h)     [string trim [dict get $d data]] }
         ess/screen_refresh_rate { set geom(hz) [string trim [dict get $d data]] }
+        ess/screen_bg    { set geom(bg) [string trim [dict get $d data]] }
         eyetracking/raw {
             if {[binary scan [dict get $d data] f* v] == 1 && [llength $v] >= 2} {
                 lappend eye_recs [list [dict get $d timestamp] $v]
             }
         }
-        em/settings { set em_settings [dict get $d data] }
+        em/settings { lappend em_settings [list [dict get $d timestamp] [dict get $d data]] }
         stim/frame {
             if {[binary scan [dict get $d data] w7 v] == 1 && [llength $v] == 7} {
                 lappend frames [list [dict get $d timestamp] {*}$v]
@@ -232,6 +245,11 @@ while {1} {
 }
 dslog::close $h
 
+if {[llength $opt(bg)]} { set geom(bg) $opt(bg) }
+if {[llength $opt(geometry)]} {
+    lassign $opt(geometry) geom(halfx) geom(halfy) hz
+    if {$hz ne ""} { set geom(hz) $hz }
+}
 foreach n $bind_names { dict set stream_set $n 1 }
 foreach r $records {
     lassign $r ts nm type data
@@ -390,11 +408,31 @@ if {$opt(render) ne ""} {
     set eye_t {}; set eye_x {}; set eye_y {}
     set eye_zero 0; set eye_deg_n 0; set eye_cal_n 0
     if {$opt(eye) ne "off" && [llength $eye_recs]} {
-        if {$opt(eye) in {auto analog video} && $em_settings eq ""} {
+        # -eye auto decides for the whole file: a file whose samples all lie
+        # within +/-90 is in degrees (the virtual source logs degrees);
+        # otherwise they are ADC counts, and an exact 0,0 is the virtual
+        # eye at rest mixed in, dropped.  (Per sample would misread a
+        # joystick or analog eye pushed near 0 counts.)
+        if {$opt(eye) eq "auto"} {
+            set big 0
+            foreach rec $eye_recs {
+                foreach {h v} [lindex $rec 1] { if {abs($h) > 90 || abs($v) > 90} { set big 1; break } }
+                if {$big} break
+            }
+            set eye_mode [expr {$big ? "analog" : "degrees"}]
+        } else { set eye_mode $opt(eye) }
+        if {$eye_mode in {analog video} && ![llength $em_settings]} {
             puts stderr "eyetracking/raw without em/settings: no calibration; -eye degrees or -eye off"; exit 1
         }
-        set cal [dict create scale_h 1 scale_v 1 raw_center_h 0 raw_center_v 0 invert_h 0 invert_v 0 use_biquadratic 0]
-        catch { set cal [dict merge $cal $em_settings] }
+        set cal0 [dict create scale_h 1 scale_v 1 raw_center_h 0 raw_center_v 0 invert_h 0 invert_v 0 \
+                      use_biquadratic 0 bq_h_coeffs {} bq_v_coeffs {}]
+        # the settings in force from each change on (the first also before it)
+        set cals {}
+        foreach e [lsort -integer -index 0 $em_settings] {
+            set c $cal0; catch { set c [dict merge $cal0 [lindex $e 1]] }
+            lappend cals [list [lindex $e 0] $c]
+        }
+        set ncal [llength $cals]; set ci 0; set cal_changes 0
         set ivals {}
         for {set r 1} {$r < [llength $eye_recs]} {incr r} {
             lappend ivals [expr {[lindex $eye_recs $r 0] - [lindex $eye_recs [expr {$r - 1}] 0]}]
@@ -406,16 +444,20 @@ if {$opt(render) ne ""} {
             expr {$c0 + $c1*$x + $c2*$y + $c3*$x*$x + $c4*$y*$y + $c5*$x*$y
                   + $c6*$x*$x*$y + $c7*$x*$y*$y + $c8*$x*$x*$y*$y}
         }
-        dict with cal {
-            foreach rec $eye_recs {
+        set cal [expr {$ncal ? [lindex $cals 0 1] : $cal0}]
+        dict with cal {}
+        foreach rec [lsort -integer -index 0 $eye_recs] {
                 lassign $rec ts vals
+                while {$ci + 1 < $ncal && [lindex $cals [expr {$ci + 1}] 0] <= $ts} {
+                    incr ci; incr cal_changes
+                    set cal [lindex $cals $ci 1]; dict with cal {}
+                }
                 set si 0
                 foreach {h v} $vals {
                     set t [expr {($ts + $si * $spacing + $tick_off) / 1000.0}]
                     incr si
-                    if {$h == 0 && $v == 0} { incr eye_zero; continue }
-                    set mode $opt(eye)
-                    if {$mode eq "auto"} { set mode [expr {abs($h) <= 90 && abs($v) <= 90 ? "degrees" : "analog"}] }
+                    if {$h == 0 && $v == 0 && $eye_mode ne "degrees"} { incr eye_zero; continue }
+                    set mode $eye_mode
                     if {$mode eq "degrees"} { set x $h; set y $v; incr eye_deg_n } \
                     elseif {$use_biquadratic} {
                         set x [bq $h $v $bq_h_coeffs]; set y [bq $h $v $bq_v_coeffs]; incr eye_cal_n
@@ -430,7 +472,6 @@ if {$opt(render) ne ""} {
                     }
                     lappend eye_t $t; lappend eye_x $x; lappend eye_y $y
                 }
-            }
         }
         # in time order (two sources interleave)
         set order [lsort -indices -real $eye_t]
@@ -444,11 +485,13 @@ if {$opt(render) ne ""} {
 puts "replay: $path"
 puts "  script  $script_path ([string length $script] bytes), libs: [expr {[dict size $libs] ? [dict keys $libs] : "none"}]"
 puts "  stimdg  [string length $stimdg] bytes; bound streams: [expr {[llength $bind_names] ? $bind_names : "none"}][expr {[llength $opt(streams)] ? " + $opt(streams)" : ""}]"
+set bg_note [expr {[info exists geom(bg)] ? "background $geom(bg)" : "no ess/screen_bg: this stim2's background until the script sets one"}]
 if {[info exists geom(halfx)] && [info exists geom(halfy)]} {
     puts "  screen  rig: +/-$geom(halfx) x +/-$geom(halfy) deg[expr {[info exists geom(w)] ? ", $geom(w)x$geom(h) px" : ""}][expr {[info exists geom(hz)] ? ", $geom(hz) Hz" : ""}]"
 } else {
     puts "  screen  no ess/screen_* records: this stim2's own degree mapping will be used"
 }
+puts "          $bg_note"
 puts "  file    [format %.1f [expr {($t_last - $t_first)/6e7}]] min, $ntrials observation periods, [dict get $counts stim/cmd] commands ($hashed hash-only, skipped)"
 puts "  playing $span_note: $ncmd commands, $ndp datapoints, span [format %.1f [expr {([lindex $events end 0] - [lindex $events 0 0])/1e6}]] s, speed $opt(speed), gaps capped at $opt(gap) s"
 if {[llength $bind_names] == 0 && [llength $opt(streams)] == 0} {
@@ -463,7 +506,7 @@ if {$opt(render) ne ""} {
     puts "          datapoints placed by ds_dispatched: $k of $ndps[expr {$dp_after ? ", $dp_after after the last frame" : ""}]; $dp_foreign forwarded datapoints were not in the file's streams"
     puts "          stim clock - dserv clock: [format %.3f [expr {$tick_off / 1e6}]] s"
     if {$n_eye} {
-        puts "  gaze    $n_eye samples ([expr {$eye_deg_n ? "$eye_deg_n already degrees" : ""}][expr {$eye_deg_n && $eye_cal_n ? ", " : ""}][expr {$eye_cal_n ? "$eye_cal_n calibrated via em/settings" : ""}]), $eye_zero exact 0,0 dropped, -eye $opt(eye)"
+        puts "  gaze    $n_eye samples ([expr {$eye_deg_n ? "$eye_deg_n already degrees" : ""}][expr {$eye_deg_n && $eye_cal_n ? ", " : ""}][expr {$eye_cal_n ? "$eye_cal_n calibrated via em/settings" : ""}]), $eye_zero exact 0,0 dropped, -eye $opt(eye) ($eye_mode)[expr {$cal_changes ? ", em/settings changed $cal_changes times in the file" : ""}]"
     } elseif {[llength $eye_recs] && $opt(eye) eq "off"} {
         puts "  gaze    off (-eye off)"
     }
@@ -530,6 +573,12 @@ if {[info exists geom(halfx)] && [info exists geom(halfy)]} {
             }
         }
     }
+}
+# the background the display had when the file opened (ess/screen_bg): a
+# script that never sets one drew on it; one that does sets it again below
+if {[info exists geom(bg)]} {
+    set r [stim_send $sock [list setBackground {*}$geom(bg)]]
+    if {[is_error $r]} { puts "  WARNING: could not set the background $geom(bg): $r" }
 }
 # label the window; an older stim2 has no setWindowTitle, which is fine
 catch { stim_send $sock [list setWindowTitle "replay: [file tail $path] ($span_note)"] }
