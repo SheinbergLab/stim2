@@ -3,6 +3,11 @@
 # stim2, standing in for ESS.
 #
 #     dlsh tools/replay/replay.tcl FILE.ess ?options?
+#     dlsh tools/replay/replay.tcl FILE.obs.dgz ?options?
+#
+# FILE may also be the obs DG dfconf converts each .ess into at close
+# (dslog::readESS, df wide_datafiles on -- off, stim/frame's int64 records
+# are dropped and nothing can be frame-locked). See read_obs below.
 #
 #       -host H        stim2 host (default localhost)
 #       -port P        stim2 message port (default 5612: a stim2 started with
@@ -22,6 +27,10 @@
 #                      injected
 #       -dry           read and plan, print the timeline summary, send nothing
 #       -verbose       print every event as it is sent
+#       -dumpplan F    with -render, write the frame-locked plan to F: every
+#                      rig frame (swapcount, flip tick, movie writes) and the
+#                      inputs placed before it, and the gaze samples -- what
+#                      two readings of one session can be compared on
 #       -render OUT    frame-locked: draw each of the rig's frames (stim/frame)
 #                      in step mode and write a movie on the rig's timeline.
 #                      OUT ending .mp4/.mov/.mkv goes through ffmpeg; anything
@@ -96,6 +105,7 @@ set opt(eye)     auto
 set opt(blend)   1
 set opt(geometry) ""
 set opt(bg)      ""
+set opt(dumpplan) ""
 set opt(crf)     14
 
 if {[llength $argv] < 1} {
@@ -120,6 +130,7 @@ while {[llength $args]} {
         -render  { set opt(render) [lindex $args 0]; set args [lrange $args 1 end] }
         -fps     { set opt(fps)   [lindex $args 0]; set args [lrange $args 1 end] }
         -noblend { set opt(blend) 0 }
+        -dumpplan { set opt(dumpplan) [lindex $args 0]; set args [lrange $args 1 end] }
         -bg      { set opt(bg) [split [lindex $args 0] ,]; set args [lrange $args 1 end]
                    if {[llength $opt(bg)] != 3} { puts stderr "-bg wants R,G,B"; exit 2 } }
         -geometry { set opt(geometry) [split [lindex $args 0] ,]; set args [lrange $args 1 end]
@@ -176,10 +187,177 @@ set hashed 0
 set stream_set [dict create]
 foreach s $opt(streams) { dict set stream_set $s 1 }
 
+set records {}
+set stimdg_b64 ""
+set obs_note ""
+
+# ---------------------------------------------------------------------------
+# read_obs: the same structures from dfconf's obs DG (.obs.dgz), not the .ess.
+#
+# dslog::readESS puts a record that falls inside an observation period in
+# that period's row -- <ds>name values (concatenated), <dst>name per-record
+# ms from its BEGINOBS (microsecond fraction with wide types), <dsn>name
+# per-record value counts -- and every other record (before, between and
+# after periods) in <session>name, values only, no times.  stimdg arrives
+# decoded as <stimdg> columns.
+#
+# Times are rebuilt on the dserv clock the .ess reader uses: a stim/cmd
+# record's dserv timestamp IS its JSON t_ret, so each row's offset (median
+# t_ret - (obs_start_ms + <dst>)) puts that row's records back to the
+# microsecond (obs_start_ms is whole ms; the offset absorbs it).  Commands
+# outside periods carry their own t_send/t_ret; frames outside periods are
+# timed from their own flip tick through the median tick - dserv offset of
+# the frames inside periods.  Bound streams and eyetracking/raw are logged
+# obs-limited, so all of theirs are in rows, with times.
+#
+# Not recoverable: em/settings changes are untimed in <session>, so the
+# first (in force at file open) is used for every sample and a note says
+# how many changes there were; a bound stream with a numeric (non-text)
+# type goes in as its values joined by spaces.
+# ---------------------------------------------------------------------------
+proc median {l} { set l [lsort -real $l]; lindex $l [expr {[llength $l] / 2}] }
+proc read_obs {path} {
+    global script script_path libs bind_names stimdg stimdg_b64 obs_begin obs_end \
+        events frames eye_recs em_settings counts hashed records geom obs_note
+    set g [dg_read $path]
+    set names [dg_tclListnames $g]
+    if {![dl_exists $g:obs_start_ms] || ![dl_exists $g:e_types]} {
+        error "$path is not an obs DG (no obs_start_ms / e_types)"
+    }
+    set sess {}
+    foreach n $names {
+        if {[string match <session>* $n]} {
+            dict set sess [string range $n 9 end] [dl_tcllist $g:$n:0]
+        }
+    }
+    # the header records
+    if {[dict exists $sess stim/script]} {
+        foreach v [dict get $sess stim/script] {
+            set j [json_to_dict $v]
+            if {[dict get $j body] ne ""} { set script [dict get $j body]; set script_path [dict get $j path] }
+        }
+    }
+    dict for {n vals} $sess {
+        if {[string match stim/lib/* $n]} {
+            foreach v $vals { set j [json_to_dict $v]; dict set libs [dict get $j name] [dict get $j body] }
+        }
+    }
+    if {[dict exists $sess stim/bind]} {
+        set j [json_to_dict [lindex [dict get $sess stim/bind] end]]
+        foreach b [dict get $j bindings] { lappend bind_names [dict get $b name] }
+    }
+    foreach {k n} {halfx screen_halfx halfy screen_halfy w screen_w h screen_h hz screen_refresh_rate bg screen_bg} {
+        if {[dict exists $sess ess/$n]} { set geom($k) [string trim [lindex [dict get $sess ess/$n] end]] }
+    }
+    if {[dict exists $sess em/settings]} {
+        set ems [dict get $sess em/settings]
+        lappend em_settings [list 0 [lindex $ems 0]]
+        if {[llength $ems] > 1} {
+            set obs_note "em/settings changed [expr {[llength $ems] - 1}] times in the file, untimed in an obs DG: the first is used for every sample"
+        }
+    }
+    # stimdg, re-serialized the way stimess's readdg decodes it
+    set sd {}
+    foreach n $names { if {[string match <stimdg>* $n]} { lappend sd $n } }
+    if {[llength $sd]} {
+        catch { dg_delete stimdg }
+        dg_create stimdg
+        foreach n $sd { dl_set stimdg:[string range $n 8 end] $g:$n }
+        dg_toString64 stimdg stimdg_b64
+        set stimdg "(rebuilt from [llength $sd] <stimdg> columns)"
+        dg_delete stimdg
+    }
+    # per-row clock: the commands' t_ret against their row times
+    set nobs [dl_length $g:obs_start_ms]
+    set has_cmd [dl_exists $g:<ds>stim/cmd]
+    set all_off {}
+    for {set i 0} {$i < $nobs} {incr i} {
+        set t0 [expr {[dl_get $g:obs_start_ms $i] * 1000.0}]
+        set row_off($i) {}
+        if {$has_cmd} {
+            foreach v [dl_tcllist $g:<ds>stim/cmd:$i] t [dl_tcllist $g:<dst>stim/cmd:$i] {
+                if {![catch {json_to_dict $v} j] && [dict exists $j t_ret]} {
+                    lappend row_off($i) [expr {[dict get $j t_ret] - ($t0 + $t * 1000.0)}]
+                }
+            }
+        }
+        lappend all_off {*}$row_off($i)
+    }
+    if {![llength $all_off]} { error "$path: no stim/cmd records in observation periods to set the clock by" }
+    set off_all [median $all_off]
+    proc ::cmd_event {v} {
+        global hashed
+        set j [json_to_dict $v]
+        dict incr ::counts stim/cmd
+        if {![dict exists $j cmd]} { incr hashed; return }
+        set ack {}
+        foreach k {swap flip dq} { lappend ack [expr {[dict exists $j $k] ? [dict get $j $k] : ""}] }
+        lappend ::events [list [dict get $j t_send] cmd [dict get $j cmd] [dict get $j seq] $ack]
+    }
+    set skip {stim/cmd stim/frame eyetracking/raw}
+    set ticks_off {}
+    for {set i 0} {$i < $nobs} {incr i} {
+        set off [expr {[llength $row_off($i)] ? [median $row_off($i)] : $off_all}]
+        set t0 [expr {[dl_get $g:obs_start_ms $i] * 1000.0 + $off}]
+        set et [dl_tcllist $g:e_times:$i]; set ety [dl_tcllist $g:e_types:$i]
+        set k [lsearch -exact $ety 20]
+        lappend obs_begin [expr {wide($t0)}]
+        lappend obs_end [expr {wide($t0 + ($k >= 0 ? [lindex $et $k] : [lindex $et end]) * 1000.0)}]
+        foreach n $names {
+            if {![string match <ds>* $n]} continue
+            set dp [string range $n 4 end]
+            set vals [dl_tcllist $g:$n:$i]
+            set ts [lmap t [dl_tcllist $g:<dst>$dp:$i] {expr {wide($t0 + $t * 1000.0)}}]
+            set cnt [dl_tcllist $g:<dsn>$dp:$i]
+            if {$dp eq "stim/cmd"} {
+                foreach v $vals { cmd_event $v }
+            } elseif {$dp eq "stim/frame"} {
+                set p 0
+                foreach t $ts c $cnt {
+                    if {$c == 7} {
+                        set f [lrange $vals $p [expr {$p + 6}]]
+                        lappend frames [list $t {*}$f]
+                        lappend ticks_off [expr {[lindex $f 3] - $t}]
+                    }
+                    incr p $c
+                }
+            } elseif {$dp eq "eyetracking/raw"} {
+                set p 0
+                foreach t $ts c $cnt {
+                    lappend eye_recs [list $t [lrange $vals $p [expr {$p + $c - 1}]]]
+                    incr p $c
+                }
+            } else {
+                set str [expr {[dl_datatype $g:$n:$i] eq "string"}]
+                set p 0
+                foreach t $ts c $cnt {
+                    set data [expr {$str ? [lindex $vals $p] : [join [lrange $vals $p [expr {$p + $c - 1}]] " "]}]
+                    lappend records [list $t $dp [expr {$str ? 1 : 2}] $data]
+                    incr p $c
+                }
+            }
+        }
+    }
+    # outside the periods: commands time themselves, frames by their tick
+    if {[dict exists $sess stim/cmd]} { foreach v [dict get $sess stim/cmd] { cmd_event $v } }
+    if {[dict exists $sess stim/frame]} {
+        set toff [expr {[llength $ticks_off] ? [median $ticks_off] : 0}]
+        set sv [dict get $sess stim/frame]
+        for {set p 0} {$p + 6 < [llength $sv]} {incr p 7} {
+            set f [lrange $sv $p [expr {$p + 6}]]
+            lappend frames [list [expr {wide([lindex $f 3] - $toff)}] {*}$f]
+        }
+    }
+    dict set counts stim/cmd [expr {[dict exists $counts stim/cmd] ? [dict get $counts stim/cmd] : 0}]
+    dg_delete $g
+}
+
+if {[regexp -nocase {\.dgz?$} $path]} {
+    read_obs $path
+} else {
 set h [dslog::open $path r]
 # first pass: header-ish records (any order in the file; keep the last)
 # and the bound-stream names, which decide what the second pass keeps
-set records {}
 while {1} {
     set d [dslog::next $h]
     if {$d eq ""} break
@@ -244,6 +422,7 @@ while {1} {
     }
 }
 dslog::close $h
+}
 
 if {[llength $opt(bg)]} { set geom(bg) $opt(bg) }
 if {[llength $opt(geometry)]} {
@@ -257,6 +436,7 @@ foreach r $records {
 }
 unset records
 set events [lsort -integer -index 0 $events]
+set eye_recs [lsort -integer -index 0 $eye_recs]
 
 if {$script eq ""} { puts stderr "no stim/script with a body in $path -- nothing to source"; exit 1 }
 if {$stimdg eq ""} { puts stderr "no stimdg record in $path"; exit 1 }
@@ -304,7 +484,6 @@ foreach e $events { if {[lindex $e 1] eq "cmd"} { incr ncmd } else { incr ndp } 
 # The movie gets each frame once per movie tick it spans on the rig's
 # timeline: static stretches hold, frames shorter than a tick drop.
 # ---------------------------------------------------------------------------
-proc median {l} { set l [lsort -real $l]; lindex $l [expr {[llength $l] / 2}] }
 if {$opt(render) ne ""} {
     if {![llength $frames]} {
         puts stderr "-render needs stim/frame records, and $path has none (recorded before stimFrameLog)"; exit 1
@@ -480,11 +659,28 @@ if {$opt(render) ne ""} {
         set eye_y [lmap i $order {lindex $eye_y $i}]
     }
     set n_eye [llength $eye_t]
+
+    if {$opt(dumpplan) ne ""} {
+        # the plan, one line per item: F frame, its inputs, then G gaze
+        set fd [open $opt(dumpplan) w]
+        puts $fd "# replay plan: $path ($span_note)"
+        for {set i 0} {$i < $nf} {incr i} {
+            set f [lindex $frames $i]
+            puts $fd [format "F %d swap=%d tick_ms=%.3f writes=%d" $i [lindex $f 2] [expr {[lindex $f 4] / 1000.0}] [lindex $writes $i]]
+            foreach ev $fev($i) {
+                lassign $ev t kind p1 p2 p3
+                if {$kind eq "cmd"} { puts $fd [format "  cmd t=%.3f %s" $t $p1] } \
+                else { puts $fd [format "  dp t=%.3f %s=%s" $t $p1 $p3] }
+            }
+        }
+        foreach t $eye_t x $eye_x y $eye_y { puts $fd [format "G %.3f %.4f %.4f" $t $x $y] }
+        close $fd
+    }
 }
 
 puts "replay: $path"
 puts "  script  $script_path ([string length $script] bytes), libs: [expr {[dict size $libs] ? [dict keys $libs] : "none"}]"
-puts "  stimdg  [string length $stimdg] bytes; bound streams: [expr {[llength $bind_names] ? $bind_names : "none"}][expr {[llength $opt(streams)] ? " + $opt(streams)" : ""}]"
+puts "  stimdg  [expr {$stimdg_b64 ne "" ? [string range $stimdg 1 end-1] : "[string length $stimdg] bytes"}]; bound streams: [expr {[llength $bind_names] ? $bind_names : "none"}][expr {[llength $opt(streams)] ? " + $opt(streams)" : ""}]"
 set bg_note [expr {[info exists geom(bg)] ? "background $geom(bg)" : "no ess/screen_bg: this stim2's background until the script sets one"}]
 if {[info exists geom(halfx)] && [info exists geom(halfy)]} {
     puts "  screen  rig: +/-$geom(halfx) x +/-$geom(halfy) deg[expr {[info exists geom(w)] ? ", $geom(w)x$geom(h) px" : ""}][expr {[info exists geom(hz)] ? ", $geom(hz) Hz" : ""}]"
@@ -492,6 +688,7 @@ if {[info exists geom(halfx)] && [info exists geom(halfy)]} {
     puts "  screen  no ess/screen_* records: this stim2's own degree mapping will be used"
 }
 puts "          $bg_note"
+if {$obs_note ne ""} { puts "  NOTE: $obs_note" }
 puts "  file    [format %.1f [expr {($t_last - $t_first)/6e7}]] min, $ntrials observation periods, [dict get $counts stim/cmd] commands ($hashed hash-only, skipped)"
 puts "  playing $span_note: $ncmd commands, $ndp datapoints, span [format %.1f [expr {([lindex $events end 0] - [lindex $events 0 0])/1e6}]] s, speed $opt(speed), gaps capped at $opt(gap) s"
 if {[llength $bind_names] == 0 && [llength $opt(streams)] == 0} {
@@ -548,7 +745,8 @@ set r [stim_send $sock $script]
 if {[is_error $r]} { puts stderr "stim script failed to load: $r"; exit 1 }
 stim_send $sock {catch {stim_init}}
 puts "  sourced [file tail $script_path]; bindings: [stim_send $sock {stim::bindings_json}]"
-set r [stim_send $sock [list stim::inject stimdg [binary encode base64 $stimdg] 6]]
+set r [stim_send $sock [list stim::inject stimdg \
+    [expr {$stimdg_b64 ne "" ? $stimdg_b64 : [binary encode base64 $stimdg]}] 6]]
 if {[is_error $r]} { puts stderr "stimdg inject failed: $r"; exit 1 }
 puts "  stimdg loaded: [stim_send $sock {dl_length stimdg:stimtype}] trials"
 
