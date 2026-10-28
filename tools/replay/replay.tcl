@@ -85,6 +85,7 @@
 
 package require dslog
 package require tcljson
+source [file join [file dirname [file normalize [info script]]] .. lib framelock.tcl]
 
 # ---------------------------------------------------------------------------
 # options
@@ -151,27 +152,6 @@ if {$opt(port) == 4612 && !$opt(live)} {
  --port-base 5610 and use -port 5612 (the default), or pass -live if you mean it"
     exit 2
 }
-
-# ---------------------------------------------------------------------------
-# stim2 message port: 4-byte big-endian length, payload, same framing back
-# ---------------------------------------------------------------------------
-proc stim_open {host port} {
-    set s [socket $host $port]
-    fconfigure $s -translation binary -buffering none
-    return $s
-}
-proc stim_send {sock cmd} {
-    # one write: header and payload as two writes on an unbuffered socket
-    # meet Nagle and the server's delayed ACK on Linux, ~40 ms per command
-    puts -nonewline $sock [binary format I [string length $cmd]]$cmd
-    flush $sock
-    set hdr [read $sock 4]
-    if {[string length $hdr] != 4} { error "stim2 closed the connection" }
-    binary scan $hdr I n
-    set n [expr {$n & 0xffffffff}]
-    return [expr {$n ? [read $sock $n] : ""}]
-}
-proc is_error {reply} { string match "!TCL_ERROR*" $reply }
 
 # ---------------------------------------------------------------------------
 # read the file
@@ -313,12 +293,11 @@ proc read_obs {path} {
     set off_all [expr {[llength $all_off] ? [median $all_off] : 0}]
     proc ::cmd_event {v} {
         global hashed
-        set j [json_to_dict $v]
         dict incr ::counts stim/cmd
-        if {![dict exists $j cmd]} { incr hashed; return }
-        set ack {}
-        foreach k {swap flip dq} { lappend ack [expr {[dict exists $j $k] ? [dict get $j $k] : ""}] }
-        lappend ::events [list [dict get $j t_send] cmd [dict get $j cmd] [dict get $j seq] $ack]
+        set c [framelock::cmd_record $v]
+        if {$c eq ""} { incr hashed; return }
+        lassign $c t_send cmd seq ack
+        lappend ::events [list $t_send cmd $cmd $seq $ack]
     }
     set skip {stim/cmd stim/frame eyetracking/raw}
     set ticks_off {}
@@ -484,24 +463,20 @@ while {1} {
         }
         em/settings { lappend em_settings [list [dict get $d timestamp] [dict get $d data]] }
         stim/frame {
-            if {[binary scan [dict get $d data] w7 v] == 1 && [llength $v] == 7} {
-                lappend frames [list [dict get $d timestamp] {*}$v]
-            }
+            set v [framelock::frame_decode [dict get $d data]]
+            if {$v ne ""} { lappend frames [list [dict get $d timestamp] {*}$v] }
         }
         logger:beginobs { lappend obs_begin [dict get $d timestamp] }
         logger:endobs   { lappend obs_end   [dict get $d timestamp] }
         stim/cmd {
-            set j [json_to_dict [dict get $d data]]
-            if {![dict exists $j cmd]} { incr hashed; continue }
-            # the ACK1 stamps, when the command was sent with them: swap is
-            # SwapCount when stim2 applied it (after the swap, for a '!'
-            # command, which then has a flip), dq the rig tick it was
+            # with the ACK1 stamps, when the command was sent with them:
+            # swap is SwapCount when stim2 applied it (after the swap, for
+            # a '!' command, which then has a flip), dq the rig tick it was
             # dequeued at, in ms
-            set ack {}
-            foreach k {swap flip dq} {
-                lappend ack [expr {[dict exists $j $k] ? [dict get $j $k] : ""}]
-            }
-            lappend events [list [dict get $j t_send] cmd [dict get $j cmd] [dict get $j seq] $ack]
+            set c [framelock::cmd_record [dict get $d data]]
+            if {$c eq ""} { incr hashed; continue }
+            lassign $c t_send cmd seq ack
+            lappend events [list $t_send cmd $cmd $seq $ack]
         }
         default {
             # stream records: all kept for now, filtered once bind_names is
@@ -560,20 +535,15 @@ set ncmd 0; set ndp 0
 foreach e $events { if {[lindex $e 1] eq "cmd"} { incr ncmd } else { incr ndp } }
 
 # ---------------------------------------------------------------------------
-# -render: the frame-locked plan.  stim/frame has one record per rig swap:
-# its swapcount, the stim clock at the flip (ticks_us), and how many
-# commands and forwarded datapoints stim2 had applied before drawing it.
-# Each rig frame is drawn here once, after exactly the inputs it saw:
-#   commands  by their ACK stamp -- applied with SwapCount = swap, so first
-#             shown in frame swap+1 (a '!' command answered after its swap,
-#             with a flip, in frame swap); clock set to its dq tick
-#   datapoints by the frame's ds_dispatched advance: that many records, in
-#             order, among those dserv had before the frame's record
-#             (a shortfall is a forwarded datapoint that is not in the
-#             file's streams); clock set to its dserv time on the rig clock
-# then stepFrame at max(clock, previous flip) with the frame's own flip.
-# The movie gets each frame once per movie tick it spans on the rig's
-# timeline: static stretches hold, frames shorter than a tick drop.
+# -render: the frame-locked plan (tools/lib/framelock.tcl).  stim/frame has
+# one record per rig swap: its swapcount, the stim clock at the flip
+# (ticks_us), and how many commands and forwarded datapoints stim2 had
+# applied before drawing it.  Each rig frame is drawn here once, after
+# exactly the inputs it saw: commands by their ACK stamp, datapoints by the
+# frame's ds_dispatched advance, then stepFrame at max(clock, previous flip)
+# with the frame's own flip.  The movie gets each frame once per movie tick
+# it spans on the rig's timeline: static stretches hold, frames shorter
+# than a tick drop.
 # ---------------------------------------------------------------------------
 if {$opt(render) ne ""} {
     if {![llength $frames]} {
@@ -593,52 +563,35 @@ if {$opt(render) ne ""} {
     set offs {}
     foreach f $frames { lappend offs [expr {[lindex $f 4] - [lindex $f 0]}] }
     set tick_off [median $offs]
-    for {set i 0} {$i < $nf} {incr i} { set fev($i) {} }
-    set idx [dict create]
-    for {set i 0} {$i < $nf} {incr i} { dict set idx [lindex $frames $i 2] $i }
+    set P [framelock::plan_new $tick_off]
 
-    # commands
-    set cmd_before 0; set cmd_after 0; set no_ack 0
+    # commands; those the rig applied after its last frame here are not drawn
+    set cmd_before 0; set cmd_after 0; set no_ack 0; set skipped 0
     foreach e $events {
         if {[lindex $e 1] ne "cmd"} continue
         lassign [lindex $e 4] swap flip dq
         if {$swap eq "" || $dq eq ""} { incr no_ack; continue }
-        set tf [expr {$flip ne "" && $flip != 0 ? $swap : $swap + 1}]
-        if {$tf <= $sc_first} { set i 0; if {$tf < $sc_first} { incr cmd_before } } \
-        elseif {$tf > $sc_last} { incr cmd_after; continue } \
-        else {
-            # the first logged frame at or after tf (frames may have gaps)
-            while {![dict exists $idx $tf]} { incr tf }
-            set i [dict get $idx $tf]
-        }
-        lappend fev($i) [list $dq cmd [lindex $e 2]]
+        set tf [framelock::cmd_target $swap $flip]
+        if {$tf < $sc_first} { incr cmd_before } elseif {$tf > $sc_last} { incr cmd_after; continue }
+        if {[framelock::skipped_cmd [lindex $e 2]]} { incr skipped; continue }
+        framelock::plan_cmd P $swap $flip $dq [lindex $e 2]
     }
     if {$no_ack} {
         puts stderr "$no_ack commands carry no ACK stamps (swap, dq): -render cannot place them"; exit 1
     }
     # datapoints: for a trial window, each stream's last record before the
     # window primes the first frame (a cursor stands where it stood)
-    set dps {}
     if {$w0 ne ""} {
         set last [dict create]
         foreach e $all_events { if {[lindex $e 1] eq "dp" && [lindex $e 0] <= $w0} { dict set last [lindex $e 2] $e } }
-        foreach {n e} $last { lappend fev(0) [list [expr {([lindex $e 0] + $tick_off) / 1000.0}] dp {*}[lrange $e 2 end] [lindex $e 0]] }
+        foreach {n e} $last { framelock::plan_prime P [lindex $e 0] {*}[lrange $e 2 end] }
     }
-    foreach e $events { if {[lindex $e 1] eq "dp"} { lappend dps $e } }
-    set k 0; set ndps [llength $dps]; set dp_foreign 0
-    for {set i 0} {$i < $nf} {incr i} {
-        set fts [lindex $frames $i 0]
-        if {$i == 0} { set n -1 } else { set n [expr {[lindex $frames $i 7] - [lindex $frames [expr {$i - 1}] 7]}] }
-        while {$k < $ndps && $n != 0 && [lindex $dps $k 0] < $fts} {
-            set e [lindex $dps $k]
-            lappend fev($i) [list [expr {([lindex $e 0] + $tick_off) / 1000.0}] dp {*}[lrange $e 2 end] [lindex $e 0]]
-            incr k; incr n -1
-        }
-        if {$n > 0} { incr dp_foreign $n }
-    }
-    set dp_after [expr {$ndps - $k}]
-    # in time order within each frame
-    for {set i 0} {$i < $nf} {incr i} { set fev($i) [lsort -real -index 0 $fev($i)] }
+    set ndps 0
+    foreach e $events { if {[lindex $e 1] eq "dp"} { framelock::plan_dp P [lindex $e 0] {*}[lrange $e 2 end]; incr ndps } }
+    for {set i 0} {$i < $nf} {incr i} { set fev($i) [framelock::plan_frame P [lindex $frames $i]] }
+    set dp_after [llength [dict get $P dps]]
+    set k [expr {$ndps - $dp_after}]
+    set dp_foreign [dict get $P foreign]
 
     # the movie: output ticks per rig frame, from the flips (ms)
     if {$opt(fps) eq ""} {
@@ -820,74 +773,29 @@ if {$opt(dry)} {
 # ---------------------------------------------------------------------------
 # connect and set up, as configure_stim does
 # ---------------------------------------------------------------------------
-set sock [stim_open $opt(host) $opt(port)]
-set v [stim_send $sock {package require stimess}]
-if {[is_error $v] || [catch {package vcompare $v 1.1} c] || $c < 0} {
+set sock [framelock::connect $opt(host) $opt(port)]
+set v [framelock::send $sock {package require stimess}]
+if {[framelock::is_error $v] || [catch {package vcompare $v 1.1} c] || $c < 0} {
     puts stderr "stim2 at $opt(host):$opt(port) has no stimess 1.1 (got: $v); it cannot take a playback prelude"
     exit 1
 }
-puts "  stim2   [stim_send $sock {catch {stimVersion} v; set v}], stimess $v"
-set r [stim_send $sock {stim::prelude playback}]
-if {[is_error $r]} { puts stderr "prelude failed: $r"; exit 1 }
-dict for {name body} $libs {
-    stim_send $sock "catch {package forget $name}"
-    set r [stim_send $sock $body]
-    if {[is_error $r]} { puts stderr "library $name failed to load: $r"; exit 1 }
-    puts "  sourced lib $name"
-}
-set r [stim_send $sock $script]
-if {[is_error $r]} { puts stderr "stim script failed to load: $r"; exit 1 }
-stim_send $sock {catch {stim_init}}
-puts "  sourced [file tail $script_path]; bindings: [stim_send $sock {stim::bindings_json}]"
-set r [stim_send $sock [list stim::inject stimdg \
-    [expr {$stimdg_b64 ne "" ? $stimdg_b64 : [binary encode base64 $stimdg]}] 6]]
-if {[is_error $r]} { puts stderr "stimdg inject failed: $r"; exit 1 }
-puts "  stimdg loaded: [stim_send $sock {dl_length stimdg:stimtype}] trials"
+puts "  stim2   [framelock::send $sock {catch {stimVersion} v; set v}], stimess $v"
+set setup [dict create libs $libs script $script \
+    stimdg [expr {$stimdg_b64 ne "" ? $stimdg_b64 : [binary encode base64 $stimdg]}] \
+    title "replay: [file tail $path] ($span_note)"]
+foreach k {halfx halfy w h hz bg} { if {[info exists geom($k)]} { dict set setup geom $k $geom($k) } }
+proc say {msg} { puts "  $msg" }
+if {[catch {framelock::setup $sock $setup say} wh]} { puts stderr $wh; exit 1 }
+lassign $wh win_w win_h
+puts "  sourced [file tail $script_path]"
 
-# the rig's degree mapping onto this window; the pixel size is stim2's own
-# (-w/-h at startup), so say when the aspect does not match the rig's
-set win_w [stim_send $sock {screen_set WinWidth}]
-set win_h [stim_send $sock {screen_set WinHeight}]
-if {[info exists geom(halfx)] && [info exists geom(halfy)]} {
-    set r1 [stim_send $sock [list screen_set HalfScreenDegreeX $geom(halfx)]]
-    set r2 [stim_send $sock [list screen_set HalfScreenDegreeY $geom(halfy)]]
-    if {[is_error $r1] || [is_error $r2]} {
-        puts "  WARNING: could not set the rig's degree mapping: $r1 $r2"
-    } else {
-        puts "  geometry: +/-$geom(halfx) x +/-$geom(halfy) deg onto this ${win_w}x${win_h} window"
-        if {[info exists geom(w)] && $win_h > 0 && $geom(h) > 0} {
-            set rig_aspect [expr {double($geom(w)) / $geom(h)}]
-            set win_aspect [expr {double($win_w) / $win_h}]
-            if {abs($rig_aspect - $win_aspect) / $rig_aspect > 0.05} {
-                puts [format "  WARNING: window aspect %.2f vs rig %.2f -- circles will be ellipses;\
- start stim2 with -w %d -h %d (or any %dx%d multiple)" $win_aspect $rig_aspect \
-                          [expr {int($geom(w)/2)}] [expr {int($geom(h)/2)}] $geom(w) $geom(h)]
-            }
-        }
-    }
-}
-# the background the display had when the file opened (ess/screen_bg): a
-# script that never sets one drew on it; one that does sets it again below
-if {[info exists geom(bg)]} {
-    set r [stim_send $sock [list setBackground {*}$geom(bg)]]
-    if {[is_error $r]} { puts "  WARNING: could not set the background $geom(bg): $r" }
-}
-# label the window; an older stim2 has no setWindowTitle, which is fine
-catch { stim_send $sock [list setWindowTitle "replay: [file tail $path] ($span_note)"] }
-
-if {$opt(trial) ne "" && [lindex $opt(trial) 0] > 1} { stim_send $sock reset }
-
-set skip_prefixes {stim::prelude stimFrameLog {set dservhost}}
-proc skipped_cmd {cmd} {
-    foreach pre $::skip_prefixes { if {[string match "$pre*" $cmd]} { return 1 } }
-    return 0
-}
+if {$opt(trial) ne "" && [lindex $opt(trial) 0] > 1} { framelock::send $sock reset }
 
 # ---------------------------------------------------------------------------
 # -render: frame-locked, in step mode, into a manual frame sink
 # ---------------------------------------------------------------------------
 if {$opt(render) ne ""} {
-    if {[stim_send $sock {info commands stepFrame}] ne "stepFrame"} {
+    if {[framelock::send $sock {info commands stepFrame}] ne "stepFrame"} {
         puts stderr "this stim2 has no stepFrame (step mode): -render needs the headless/step build"; exit 1
     }
     set out $opt(render)
@@ -898,12 +806,12 @@ if {$opt(render) ne ""} {
  -r $render_fps -i - $vf -c:v libx264 -preset medium -tune animation -crf $opt(crf)\
  -pix_fmt yuv420p -movflags +faststart [list [file normalize $out]]"
     } else { set target $out }
-    set r [stim_send $sock [list frameSink open -manual $target]]
-    if {[is_error $r]} { puts stderr "frameSink: $r"; exit 1 }
+    set r [framelock::send $sock [list frameSink open -manual $target]]
+    if {[framelock::is_error $r]} { puts stderr "frameSink: $r"; exit 1 }
     set t_start [expr {[lindex $frames 0 4] / 1000.0}]
     if {[llength $fev(0)]} { set t_start [expr {min($t_start, [lindex $fev(0) 0 0])}] }
     set t_start [expr {$t_start - 1.0}]
-    stim_send $sock [list stepMode 1 $t_start]
+    framelock::send $sock [list stepMode 1 $t_start]
     set clock $t_start; set prevflip $t_start
     # the gaze overlay: a disc at the newest sample, a fading trail behind
     set gaze_trail_ms 150.0; set gaze_hold_ms 100.0
@@ -913,81 +821,72 @@ if {$opt(render) ne ""} {
         global eye_t eye_x eye_y eye_k n_eye gaze_trail_ms gaze_hold_ms
         while {$eye_k < $n_eye && [lindex $eye_t $eye_k] <= $t} { incr eye_k }
         set j [expr {$eye_k - 1}]
-        if {$j < 0 || $t - [lindex $eye_t $j] > $gaze_hold_ms} {
-            return "overlay set gaze -show 0; overlay set gaze_trail -show 0"
-        }
+        if {$j < 0 || $t - [lindex $eye_t $j] > $gaze_hold_ms} { return [framelock::gaze_cmd "" ""] }
         set pts {}
         for {set i $j} {$i >= 0 && $t - [lindex $eye_t $i] <= $gaze_trail_ms} {incr i -1} {
-            lappend pts [format %.3f [lindex $eye_x $i]] [format %.3f [lindex $eye_y $i]]
+            lappend pts [lindex $eye_x $i] [lindex $eye_y $i]
         }
-        return "overlay set gaze -show 1 -points {[format %.3f [lindex $eye_x $j]] [format %.3f [lindex $eye_y $j]]};\
- overlay set gaze_trail -show 1 -points {$pts}"
+        framelock::gaze_cmd [list [lindex $eye_x $j] [lindex $eye_y $j]] $pts
     }
-    if {$n_eye} {
-        stim_send $sock {overlay set gaze_trail -size 0.25 -color {1 0.55 0.1 0.35} -show 0;
-                         overlay set gaze -size 0.7 -color {1 0.55 0.1 0.9} -show 0}
-    }
+    if {$n_eye} { framelock::send $sock [framelock::gaze_style] }
     set repaints 0
-    set sent 0; set errors 0; set skipped 0
+    set sent 0; set errors 0
     set kinds [dict create]
     set wall0 [clock microseconds]
     for {set i 0} {$i < $nf} {incr i} {
-        foreach ev $fev($i) {
-            lassign $ev t kind p1 p2 p3 p4
-            if {$t > $clock} { stim_send $sock [list stepClock $t]; set clock $t }
-            if {$kind eq "cmd"} {
-                if {[skipped_cmd $p1]} { incr skipped; continue }
-                set r [stim_send $sock $p1]
-                if {[is_error $r]} { incr errors; puts "  ERROR [string range $p1 0 60] -> $r" } \
-                elseif {$opt(verbose)} { puts [format "  frame %6d cmd %s" $i [string range $p1 0 70]] }
-            } else {
-                set r [stim_send $sock [list stim::inject $p1 $p3 $p2 $p4]]
-                if {[is_error $r]} { incr errors; puts "  ERROR inject $p1 -> $r" }
-            }
-            incr sent
-        }
         set flip [expr {[lindex $frames $i 4] / 1000.0}]
-        set eval [expr {max($clock, $prevflip)}]
-        if {$flip < $eval} { set flip $eval }
         set nw [lindex $writes $i]
-        # One request per rig frame, however many movie ticks it spans: the
-        # gaze, the frame, and its writes -- for a frame the rig held while
-        # the eye moved, a repaint of the gaze over the same scene at each
-        # tick's time. Over a slow link (a Pi on Wi-Fi: ~20 ms a round trip)
-        # requests, not drawing, set the pace.
-        set script {}
+        # One request per rig frame, however many movie ticks it spans: its
+        # commands and datapoints, the gaze, the frame, and its writes --
+        # for a frame the rig held while the eye moved, a repaint of the
+        # gaze over the same scene at each tick's time. Over a slow link (a
+        # Pi on Wi-Fi: ~20 ms a round trip) requests, not drawing, set the
+        # pace.
+        set pre {}; set post {}
         if {$n_eye} {
             # the gaze at this frame's first movie tick, drawn with the frame
             set g [gaze_at $flip]
-            if {$g ne $gaze_last} { append script "$g\n"; set gaze_last $g }
+            if {$g ne $gaze_last} { append pre "$g\n"; set gaze_last $g }
         }
-        append script "set ::replay_r \[stepFrame $eval $flip\]\n"
         if {!$n_eye || $nw <= 1} {
-            append script "frameSink write $nw\n"
+            append post "frameSink write $nw\n"
         } else {
-            append script "frameSink write 1\n"
+            append post "frameSink write 1\n"
             set same 0
             for {set k 1} {$k < $nw} {incr k} {
                 set g [gaze_at [expr {$flip + $k * $period}]]
                 if {$g eq $gaze_last} { incr same; continue }
-                if {$same} { append script "frameSink write $same\n"; set same 0 }
-                append script "$g\nframeRepaint\nframeSink write 1\n"
+                if {$same} { append post "frameSink write $same\n"; set same 0 }
+                append post "$g\nframeRepaint\nframeSink write 1\n"
                 set gaze_last $g
                 incr repaints
             }
-            if {$same} { append script "frameSink write $same\n" }
+            if {$same} { append post "frameSink write $same\n" }
         }
-        append script {set ::replay_r}
-        set r [stim_send $sock $script]
-        if {[is_error $r]} { incr errors; puts "  ERROR frame $i (stepFrame $eval $flip) -> $r"; break }
-        dict incr kinds [dict get $r kind]
-        set clock $flip; set prevflip $flip
+        set req [framelock::frame_request $fev($i) clock $prevflip $flip $pre $post]
+        set r [framelock::send $sock $req]
+        if {[framelock::is_error $r]} { incr errors; puts "  ERROR frame $i (stepFrame at $clock) -> $r"; break }
+        lassign $r res errs
+        foreach e $errs {
+            lassign $e n msg
+            lassign [lindex $fev($i) $n] - kind p1
+            incr errors
+            puts "  ERROR [expr {$kind eq "cmd" ? [string range $p1 0 60] : "inject $p1"}] -> $msg"
+        }
+        if {$opt(verbose)} {
+            foreach ev $fev($i) {
+                if {[lindex $ev 1] eq "cmd"} { puts [format "  frame %6d cmd %s" $i [string range [lindex $ev 2] 0 70]] }
+            }
+        }
+        incr sent [llength $fev($i)]
+        dict incr kinds [dict get $res kind]
+        set prevflip $clock
         if {$opt(verbose) && $i % 600 == 0} { puts "  frame $i of $nf" }
     }
     set elapsed [expr {([clock microseconds] - $wall0)/1e6}]
-    set st [stim_send $sock {frameSink close}]
-    stim_send $sock {stepMode 0}
-    if {$n_eye} { stim_send $sock {overlay delete gaze; overlay delete gaze_trail} }
+    set st [framelock::send $sock {frameSink close}]
+    framelock::send $sock {stepMode 0}
+    if {$n_eye} { framelock::send $sock {overlay delete gaze; overlay delete gaze_trail} }
     puts "done: $i rig frames drawn ([join [lmap {k v} $kinds {list $k $v}] {, }]), $sent events\
  ($errors errors, $skipped configure-time commands skipped) in [format %.1f $elapsed] s"
     if {$n_eye} { puts "  gaze: $n_eye samples over the movie, $repaints held-frame repaints" }
@@ -997,8 +896,8 @@ if {$opt(render) ne ""} {
  -> $out, status [dict get $st status]"
     foreach n [dict keys $stream_set] {
         # a stimess binding reports its count (stimdg is stim2's own readdg)
-        set c [stim_send $sock [list stim::count $n]]
-        if {![is_error $c]} { puts "  $n: $c injected, last [stim_send $sock [list stim::get $n]]" }
+        set c [framelock::send $sock [list stim::count $n]]
+        if {![framelock::is_error $c]} { puts "  $n: $c injected, last [framelock::send $sock [list stim::get $n]]" }
     }
     close $sock
     exit [expr {$errors || [dict get $st status] != 0 ? 1 : 0}]
@@ -1011,7 +910,7 @@ set t0 [lindex $events 0 0]
 set wall0 [clock microseconds]
 set offset 0.0            ;# recorded time removed by gap compression, us
 set sent 0; set errors 0; set skipped 0; set prev_ts $t0
-set swap0 [stim_send $sock {set SwapCount}]
+set swap0 [framelock::send $sock {set SwapCount}]
 foreach e $events {
     set ts [lindex $e 0]
     # pacing: recorded delta, compressed, scaled
@@ -1025,24 +924,24 @@ foreach e $events {
     }
     lassign $e _ kind p1 p2 p3
     if {$kind eq "cmd"} {
-        if {[skipped_cmd $p1]} { incr skipped; continue }
-        set r [stim_send $sock $p1]
-        if {[is_error $r]} { incr errors; puts "  ERROR [string range $p1 0 60] -> $r" } \
+        if {[framelock::skipped_cmd $p1]} { incr skipped; continue }
+        set r [framelock::send $sock $p1]
+        if {[framelock::is_error $r]} { incr errors; puts "  ERROR [string range $p1 0 60] -> $r" } \
         elseif {$opt(verbose)} { puts [format "  %+8.3f cmd %s" [expr {($ts - $t0)/1e6}] [string range $p1 0 70]] }
     } else {
-        set r [stim_send $sock [list stim::inject $p1 $p3 $p2 $ts]]
-        if {[is_error $r]} { incr errors; puts "  ERROR inject $p1 -> $r" } \
+        set r [framelock::send $sock [list stim::inject $p1 $p3 $p2 $ts]]
+        if {[framelock::is_error $r]} { incr errors; puts "  ERROR inject $p1 -> $r" } \
         elseif {$opt(verbose)} { puts [format "  %+8.3f dp  %s = %s" [expr {($ts - $t0)/1e6}] $p1 $p3] }
     }
     incr sent
 }
 set elapsed [expr {([clock microseconds] - $wall0)/1e6}]
-set swaps [expr {[stim_send $sock {set SwapCount}] - $swap0}]
+set swaps [expr {[framelock::send $sock {set SwapCount}] - $swap0}]
 puts "done: $sent events in [format %.1f $elapsed] s ($errors errors, $skipped configure-time commands skipped),\
  stim2 swapped $swaps frames"
 foreach n [dict keys $stream_set] {
-    set c [stim_send $sock [list stim::count $n]]
-    if {![is_error $c]} { puts "  $n: $c injected, last [stim_send $sock [list stim::get $n]]" }
+    set c [framelock::send $sock [list stim::count $n]]
+    if {![framelock::is_error $c]} { puts "  $n: $c injected, last [framelock::send $sock [list stim::get $n]]" }
 }
 close $sock
 exit [expr {$errors ? 1 : 0}]

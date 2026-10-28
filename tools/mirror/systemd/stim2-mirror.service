@@ -1,0 +1,22 @@
+# The mirror driver: follows the rig's dserv (MIRROR_DSERV in
+# /etc/default/stim2-mirror) and draws its frames in the mirror's stim2.
+# It waits for (and reconnects to) the mirror's stim2 and the rig's dserv
+# itself, so either can restart under it.
+[Unit]
+Description=stim2 live mirror driver
+After=stim2-mirror-display.service network-online.target
+Wants=network-online.target
+Wants=stim2-mirror-display.service
+
+[Service]
+Type=simple
+User=stim
+EnvironmentFile=/etc/default/stim2-mirror
+ExecStart=/usr/local/bin/dlsh /usr/local/stim2/tools/mirror/mirror.tcl -dserv ${MIRROR_DSERV} $MIRROR_ARGS
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

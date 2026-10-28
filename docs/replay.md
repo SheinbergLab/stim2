@@ -68,7 +68,11 @@ errors and 225 frames swapped; the cursor binding reported all 170 arrivals.
 
 Uses stim2's step mode and manual frame sink (`docs/headless.md`), and
 needs a file with `stim/frame` records and ACK-stamped `stim/cmd`
-records. Each rig frame is drawn once, after exactly the inputs it saw:
+records. The placement and the per-frame request are
+`tools/lib/framelock.tcl`, shared with the live mirror (`mirror.md`):
+each rig frame's commands, datapoints, gaze, `stepFrame` and movie
+writes go to stim2 as one request. Each rig frame is drawn once, after
+exactly the inputs it saw:
 
 - **Commands** by their ACK stamp. stim2 applied each one with
   `SwapCount = swap`, so it first shows in frame `swap+1`. A `!` command,

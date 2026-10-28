@@ -1,0 +1,11 @@
+# /etc/default/stim2-mirror -- read by stim2-mirror.service and
+# start-stim2-mirror.sh
+
+# the rig's dserv
+MIRROR_DSERV=192.168.88.40
+
+# more mirror.tcl options, e.g. "-wait 80 -report 30"
+MIRROR_ARGS="-report 30"
+
+# the monitor's refresh rate; empty keeps the monitor's current mode
+MIRROR_REFRESH=
