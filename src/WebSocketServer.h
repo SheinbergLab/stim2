@@ -72,9 +72,13 @@ public:
   WebSocketServer(int port, const std::string& www_path);
   ~WebSocketServer();
   
-  // Start/stop the server
+  // Start/stop the server.  stop() closes the listen socket and every
+  // client on the server's own thread and joins it (up to 1 s); it
+  // returns false when the loop did not finish, and then the object must
+  // not be deleted: the detached thread may still run queued callbacks
+  // that use it.
   bool start();
-  void stop();
+  bool stop();
   
   // Push messages to queues (called from main thread)
   void log(const std::string& level, const std::string& message);
@@ -98,6 +102,8 @@ private:
   uWS::Loop* ws_loop_;
   std::thread ws_thread_;
   std::atomic<bool> running_;
+  std::atomic<bool> finished_{false};   // run_server's loop has returned
+  bool joined_ = true;                  // nothing left running that uses this
   void* listen_socket_;  // Store listen socket for shutdown
   
   // Message queues

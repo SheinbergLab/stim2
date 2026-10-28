@@ -17,12 +17,22 @@ WebSocketServer::~WebSocketServer() {
   stop();
 }
 
+/* Shut the server down without racing its thread.  The loop runs queued
+   callbacks (each broadcast is one, with `this` in it) for as long as it
+   runs, so the object can only be freed once the loop has returned: close
+   the listen socket and every client on the loop's own thread, which ends
+   app.run(), then join.  Detaching and deleting, as this used to, freed
+   clients_mutex_ under a pending broadcast -- an abort at quit whenever a
+   status update (once a second) was in flight. */
+
 bool WebSocketServer::start() {
   if (running_) {
     return true;
   }
   
   running_ = true;
+  finished_ = false;
+  joined_ = false;
   ws_thread_ = std::thread(&WebSocketServer::run_server, this);
   
   // Give the server a moment to start
@@ -31,18 +41,42 @@ bool WebSocketServer::start() {
   return true;
 }
 
-void WebSocketServer::stop() {
+bool WebSocketServer::stop() {
   if (!running_) {
-    return;
+    return joined_;
   }
   
   running_ = false;
+  if (!ws_thread_.joinable()) return joined_;
   
-  // Just detach - don't try to interact with the loop during shutdown
-  // The OS will clean up when the process exits
-  if (ws_thread_.joinable()) {
-    ws_thread_.detach();
+  if (ws_loop_ && !finished_) {
+    ws_loop_->defer([this]() {
+      if (listen_socket_) {
+        us_listen_socket_close(0, (struct us_listen_socket_t *) listen_socket_);
+        listen_socket_ = nullptr;
+      }
+      std::vector<void*> socks;
+      {
+        std::lock_guard<std::mutex> lock(clients_mutex_);
+        for (auto& pair : clients_) socks.push_back(pair.first);
+      }
+      /* the close handler takes clients_mutex_ itself */
+      for (auto* ws : socks) ((uWS::WebSocket<false, true, WSClientData>*)ws)->close();
+    });
   }
+  for (int i = 0; i < 100 && !finished_; i++)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  
+  if (finished_) {
+    ws_thread_.join();
+    joined_ = true;
+  } else {
+    /* an open HTTP connection (the console page) keeps the loop alive:
+       leave it, and this object, to the process exit */
+    ws_thread_.detach();
+    joined_ = false;
+  }
+  return joined_;
 }
 
 void WebSocketServer::log(const std::string& level, const std::string& message) {
@@ -314,6 +348,7 @@ void WebSocketServer::run_server() {
   });
   
   app.run();
+  finished_ = true;
 }
 
 void WebSocketServer::broadcast_to_subscribers(const std::string& channel, 

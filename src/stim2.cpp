@@ -1795,8 +1795,8 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
   // Shutdown WebSocket server
   void shutdown_websocket() {
       if (ws_server) {
-          ws_server->stop();
-          delete ws_server;
+          /* freed only once its thread is done with it (see stop()) */
+          if (ws_server->stop()) delete ws_server;
           ws_server = nullptr;
       }
   }
