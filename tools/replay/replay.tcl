@@ -159,7 +159,7 @@ if {$opt(port) == 4612 && !$opt(live)} {
 set script ""; set script_path ""; set libs {}; set bind_names {}
 set stimdg ""; set obs_begin {}; set obs_end {}
 set events {}          ;# {ts kind payload...}, kinds: cmd | dp
-set frames {}          ;# stim/frame: {dserv_ts frame swapcount flip_us ticks_us missed cmds ds}
+set frames {}          ;# stim/frame: {dserv_ts frame swapcount flip_us ticks_us missed cmds ds eval_us}
 set eye_recs {}        ;# eyetracking/raw: {dserv_ts {h v h v ...}}, 10 samples a record
 set em_settings {}     ;# em/settings: {dserv_ts settings} each time it changed
 set counts [dict create]
@@ -323,8 +323,9 @@ proc read_obs {path} {
             } elseif {$dp eq "stim/frame"} {
                 set p 0
                 foreach t $ts c $cnt {
-                    if {$c == 7} {
-                        set f [lrange $vals $p [expr {$p + 6}]]
+                    if {$c == 7 || $c == 8} {
+                        set f [lrange $vals $p [expr {$p + $c - 1}]]
+                        if {$c == 7} { lappend f "" }
                         lappend frames [list $t {*}$f]
                         lappend ticks_off [expr {[lindex $f 3] - $t}]
                     }
@@ -369,9 +370,14 @@ proc read_obs {path} {
     if {[dict exists $sess stim/frame]} {
         set toff [expr {[llength $ticks_off] ? [median $ticks_off] : 0}]
         set sv [dict get $sess stim/frame]
+        # values per record from <sessionn>; 7 for a DG without it (no
+        # dlsh that predates <sessionn> saw eval_us)
+        set cnts [expr {[dict exists $stimes stim/frame] ? [lindex [dict get $stimes stim/frame] 1] : {}}]
         set k 0
-        for {set p 0} {$p + 6 < [llength $sv]} {incr p 7} {
-            set f [lrange $sv $p [expr {$p + 6}]]
+        for {set p 0} {$p + 6 < [llength $sv]} {incr p $c} {
+            set c [expr {[llength $cnts] ? [lindex $cnts $k] : 7}]
+            set f [lrange $sv $p [expr {$p + $c - 1}]]
+            if {$c == 7} { lappend f "" }
             set t [sess_time $stimes $anchor stim/frame $k]
             if {$t eq ""} { set t [expr {wide([lindex $f 3] - $toff)}] }
             lappend frames [list $t {*}$f]
@@ -863,7 +869,9 @@ if {$opt(render) ne ""} {
             }
             if {$same} { append post "frameSink write $same\n" }
         }
-        set req [framelock::frame_request $fev($i) clock $prevflip $flip $pre $post]
+        set ev_us [lindex $frames $i 8]
+        set req [framelock::frame_request $fev($i) clock $prevflip $flip $pre $post \
+                     [expr {$ev_us ne "" ? $ev_us / 1000.0 : ""}]]
         set r [framelock::send $sock $req]
         if {[framelock::is_error $r]} { incr errors; puts "  ERROR frame $i (stepFrame at $clock) -> $r"; break }
         lassign $r res errs

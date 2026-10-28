@@ -13,9 +13,10 @@
 # qpcs::dsSocketSendBytes spell exactly this; integers little-endian):
 #   byte 0      '>'          bytes 1-2    u16 varlen
 #   varname     "stim/frame" then         u64 timestamp (0 = dserv stamps)
-#   u32 datatype (16 = DSERV_INT64)       u32 datalen (56)
-#   7 x int64, zero padding to 128 bytes:
+#   u32 datatype (16 = DSERV_INT64)       u32 datalen (64)
+#   8 x int64, zero padding to 128 bytes:
 #     frame swapcount flip_us ticks_us missed cmds_applied ds_dispatched
+#     eval_us
 #
 # Prints OK/FAIL lines and a summary; exits non-zero on any failure.
 
@@ -48,7 +49,7 @@ proc msg_send {sock s} {
 }
 
 # ---- fake dserv: '>' frame listener ------------------------------------------
-set ::fields {frame swapcount flip_us ticks_us missed cmds_applied ds_dispatched}
+set ::fields {frame swapcount flip_us ticks_us missed cmds_applied ds_dispatched eval_us}
 array set ::conn {}      ;# listener -> accepted channel ("" until accept)
 set ::frames {}          ;# decoded records, in arrival order
 set ::badframes 0
@@ -96,8 +97,8 @@ proc decode_frame {f} {
     incr off 16
     binary scan $f @${off}a${len} data
     set rec [dict create varname $varname ts $ts type $type len $len]
-    if {$varname eq "stim/frame" && $type == 16 && $len == 56} {
-	binary scan $data w7 vals
+    if {$varname eq "stim/frame" && $type == 16 && $len == 64} {
+	binary scan $data w8 vals
 	foreach k $::fields v $vals { dict set rec $k $v }
 	lappend ::frames $rec
     } else {
@@ -172,12 +173,12 @@ check "no malformed frames" [expr {$::badframes == 0}] "$::badframes bad"
 set f0 [lindex $::frames 0]
 check "varname is stim/frame" [expr {[dict get $f0 varname] eq "stim/frame"}]
 check "datatype is 16 (DSERV_INT64)" [expr {[dict get $f0 type] == 16}]
-check "datalen is 56" [expr {[dict get $f0 len] == 56}]
+check "datalen is 64" [expr {[dict get $f0 len] == 64}]
 check "timestamp is 0 (dserv stamps on receipt)" [expr {[dict get $f0 ts] == 0}]
 check "first frame number is 1" [expr {[dict get $f0 frame] == 1}]
 
 set ok_frame 1; set ok_swap 1; set ok_ticks 1; set ok_flip 1; set ok_missed 1
-set ok_cmds 1; set ok_ds 1
+set ok_cmds 1; set ok_ds 1; set ok_eval 1; set ok_eval_after 1
 set prev {}
 foreach f $::frames {
     set flip [dict get $f flip_us]
@@ -188,7 +189,10 @@ foreach f $::frames {
     }
     if {[dict get $f missed] < 0} { set ok_missed 0 }
     if {[dict get $f ds_dispatched] < 0} { set ok_ds 0 }
+    # eval_us: the instant the frame was computed at, before its flip
+    if {[dict get $f eval_us] <= 0 || [dict get $f eval_us] > [dict get $f ticks_us]} { set ok_eval 0 }
     if {$prev ne {}} {
+	if {[dict get $f eval_us] < [dict get $prev ticks_us]} { set ok_eval_after 0 }
 	if {[dict get $f frame] != [dict get $prev frame] + 1} { set ok_frame 0 }
 	if {[dict get $f swapcount] <= [dict get $prev swapcount]} { set ok_swap 0 }
 	if {[dict get $f ticks_us] <= [dict get $prev ticks_us]} { set ok_ticks 0 }
@@ -204,6 +208,8 @@ check "flip_us is -1 or a plausible epoch microsecond" $ok_flip
 check "missed is non-negative and non-decreasing" $ok_missed
 check "cmds_applied non-decreasing" $ok_cmds
 check "ds_dispatched non-negative" $ok_ds
+check "eval_us positive and not after the frame's own ticks_us" $ok_eval
+check "eval_us not before the previous frame's ticks_us" $ok_eval_after
 
 set last [lindex $::frames end]
 # cmds_applied counts since process start, so it is at least what this

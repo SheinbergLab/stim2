@@ -196,19 +196,38 @@ they agree, only ready→present (13.5 ms, timed on the box alone) is a
 lag. `makestep` in `chrony.conf`, or PTP (below), would close this after
 a boot.
 
-**A limit, found on door (2026-10-28).** A frame script that integrates
-its own physics on `$::StimTimeF` sees, on the rig, the clock at the
-moment the loop ran that frame's update. That moment falls a jittery
-fraction of a millisecond after the previous flip. `stim/frame` does not
-record it, so replay and mirror evaluate each frame at the previous flip
-exactly. Door steps its runner at dt = 1/240 s, which is two steps per
-120 Hz frame, so that jitter decides which frame takes a given step. On
-door trial 7 of `human_runner_door-preview6-go_261027144820.ess`, the rig
-took the crash step (406) in one frame. The replay would have taken it in
-the next frame, but that frame also carries `!feedback`, which ends the
-run first. So the outcome stays empty and the reveal has no X. Trials 3
-and 6 (crashes too) match. The fix is to log the frame's update tick in
-`stim/frame` (an 8th value) and pass it as `stepFrame`'s first time.
+**Frame-script timing (found on door, 2026-10-28, fixed).** A frame script
+that integrates its own physics on `$::StimTimeF` sees, on the rig, the
+clock at the moment the loop ran that frame's update. That moment falls a
+jittery fraction of a millisecond after the previous flip. A replay that
+assumed the previous flip could take a physics step one frame later than
+the rig did. Door steps at dt = 1/240 s, two steps per 120 Hz frame, and a
+crash taken a frame late arrives together with `!feedback`, which ends the
+run first, so the reveal had no X.
+
+Two changes fix it:
+- stim2 0.28.5 holds the clock for each frame and logs the instant as
+  `stim/frame`'s `eval_us` (see `stim-frame.md`). Replay and mirror step
+  each frame at it.
+- `door_stim.tcl` now rounds its per-frame step count, so jitter of less
+  than half a step cannot move a step between frames. It also times presses
+  on the stim clock (`stimClock`) rather than the wall clock, which in a
+  replay or mirror would be the mirror's own.
+
+The check on the dev Mac stood in for the rig. A real-time stim2 ran door
+trials 1-10 of `human_runner_door-preview6-go_261027144820.ess`: commands
+went to it with `@` ACK stamps, presses to its dataserver port, and its
+`stim/frame` was recorded. A stepped stim2 then replayed the records, and
+each trial's outcome and press steps were compared.
+
+| rig | outcomes match | press steps match |
+|---|---|---|
+| stim2 0.28.4, the recorded door script | 10 / 10 | 0 / 11, off by 2–4 steps (wall clock); the replay also took 2 presses the rig did not |
+| this stim2, the fixed door script | 10 / 10 | 11 / 12; one press 1 step late |
+
+The press that remains is timed by the datapoint's dserv timestamp on the
+rig clock, an estimate good to about a millisecond. A press within that of
+a step boundary can still land a step apart.
 
 Not yet tried live:
 

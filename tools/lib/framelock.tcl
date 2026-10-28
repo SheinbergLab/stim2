@@ -15,7 +15,8 @@
 #     source [file join [file dirname [info script]] .. lib framelock.tcl]
 #
 # Placement, from stim/frame (one record per rig swap: frame, swapcount,
-# flip_us, ticks_us, missed, cmds_applied, ds_dispatched):
+# flip_us, ticks_us, missed, cmds_applied, ds_dispatched and, from stim2
+# 0.28.5, eval_us):
 #   commands    by their ACK stamp: applied with SwapCount = swap, so first
 #               shown in frame swap+1; a '!' command is answered after its
 #               swap, with a flip, and shows in frame swap. Each goes in
@@ -25,7 +26,9 @@
 #               order, among those dserv had before the frame's record
 #               (a shortfall is a forwarded datapoint not being followed),
 #               clock at its dserv time on the rig clock (tick_off).
-# then stepFrame at max(clock, previous flip) with the frame's own flip.
+# then stepFrame at the instant the rig computed the frame (eval_us), or,
+# for a record without it, at max(clock, previous flip), with the frame's
+# own flip.
 
 namespace eval framelock {
     # configure-time commands that may be in stim/cmd and that a playback
@@ -83,9 +86,14 @@ proc framelock::cmd_target {swap flip} {
     expr {$flip ne "" && $flip != 0 ? $swap : $swap + 1}
 }
 
-# stim/frame's 56 bytes as its 7 values, or "" when malformed
+# stim/frame's values: 8 (64 bytes), or 7 (56, before eval_us) with ""
+# for eval_us; "" when malformed
 proc framelock::frame_decode {bytes} {
-    if {[binary scan $bytes w7 v] == 1 && [llength $v] == 7} { return $v }
+    set n [expr {[string length $bytes] / 8}]
+    if {$n in {7 8} && [binary scan $bytes w$n v] == 1} {
+        if {$n == 7} { lappend v "" }
+        return $v
+    }
     return ""
 }
 
@@ -103,6 +111,7 @@ proc framelock::setup {sock d log} {
     set geom   [expr {[dict exists $d geom]   ? [dict get $d geom]   : {}}]
     set stimdg [expr {[dict exists $d stimdg] ? [dict get $d stimdg] : ""}]
     set title  [expr {[dict exists $d title]  ? [dict get $d title]  : ""}]
+    send $sock {package require stimess}
     set r [send $sock {stim::prelude playback}]
     if {[is_error $r]} { error "prelude failed: $r" }
     dict for {name body} $libs {
@@ -216,7 +225,7 @@ proc framelock::plan_waiting {pv sc} {
 }
 
 # The inputs of the frame f ({dserv_ts frame swapcount flip_us ticks_us
-# missed cmds ds}), in time order: {t cmd text} and {t dp name type data ts}.
+# missed cmds ds ?eval_us?}), in time order: {t cmd text} and {t dp name type data ts}.
 # Removes them from the plan.
 proc framelock::plan_frame {pv f} {
     upvar $pv P
@@ -246,18 +255,23 @@ proc framelock::plan_frame {pv f} {
 
 # ---------------------------------------------------------------------------
 # the frame request: the frame's inputs (stepClock to each one's time
-# first), then pre (the gaze), stepFrame at max(clock, prevflip) with the
-# flip, then post (frame sink writes), as one script.  clockvar holds the
+# first), then pre (the gaze), stepFrame with the flip, then post (frame
+# sink writes), as one script.  The frame is evaluated at eval_ms, the
+# instant the rig computed it (stim/frame's eval_us / 1000), when given:
+# every input was applied before it, so none moves the clock past it (a
+# datapoint's time is dserv's receipt on the rig clock, an estimate).
+# Without it, at max(clock, prevflip).  clockvar holds the
 # stepped clock and is left at the flip.  The reply is {result errors}:
 # stepFrame's dict and a list of {input-index message}; a refused
 # stepFrame makes the whole request a !TCL_ERROR.
 # ---------------------------------------------------------------------------
-proc framelock::frame_request {inputs clockvar prevflip flip {pre ""} {post ""}} {
+proc framelock::frame_request {inputs clockvar prevflip flip {pre ""} {post ""} {eval_ms ""}} {
     upvar $clockvar clock
     set s "set ::framelock_err {}\n"
     set i 0
     foreach ev $inputs {
         lassign $ev t kind p1 p2 p3 p4
+        if {$eval_ms ne "" && $t > $eval_ms} { set t $eval_ms }
         if {$t > $clock} { append s [list stepClock $t] \n; set clock $t }
         if {$kind eq "cmd"} {
             # the '@' (ACK header) and '!' (reply after the swap) prefixes
@@ -269,7 +283,7 @@ proc framelock::frame_request {inputs clockvar prevflip flip {pre ""} {post ""}}
         }
         incr i
     }
-    set eval [expr {max($clock, $prevflip)}]
+    set eval [expr {$eval_ms ne "" ? max($clock, $eval_ms) : max($clock, $prevflip)}]
     if {$flip < $eval} { set flip $eval }
     append s $pre
     append s "set ::framelock_r \[stepFrame $eval $flip\]\n"

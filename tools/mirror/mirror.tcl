@@ -549,7 +549,7 @@ proc pump {} {
     set flip [expr {$ticks_us / 1000.0}]
     # the first frame: onto the rig's clock, before its first input
     if {!$stepped} {
-        set t0 $flip
+        set t0 [expr {[lindex $f 8] ne "" ? min($flip, [lindex $f 8] / 1000.0) : $flip}]
         if {[llength $inputs]} { set t0 [expr {min($t0, [lindex [lsort -real -index 0 $inputs] 0 0])}] }
         set t0 [expr {$t0 - 1.0}]
         if {[catch {stim [list stepMode 1 $t0]}]} return
@@ -559,7 +559,9 @@ proc pump {} {
     if {$opt(verbose)} {
         foreach ev $inputs { if {[lindex $ev 1] eq "cmd"} { log "frame $sc cmd [string range [lindex $ev 2] 0 70]" } }
     }
-    set req [framelock::frame_request $inputs clock_ms $prevflip $flip [gaze_pre]]
+    set ev_us [lindex $f 8]
+    set req [framelock::frame_request $inputs clock_ms $prevflip $flip [gaze_pre] "" \
+                 [expr {$ev_us ne "" ? $ev_us / 1000.0 : ""}]]
     set t_draw [now_us]
     if {[catch {stim $req} r]} return
     set now [now_us]

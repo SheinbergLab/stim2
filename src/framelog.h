@@ -4,7 +4,7 @@
  * Off by default.  `stimFrameLog host 1` starts a writer thread with its
  * own TCP connection to dserv's fire-and-forget datapoint port (4620, or
  * host:port); every completed swap then produces one DSERV_INT64 record of
- * seven values, in this order:
+ * eight values, in this order:
  *
  *   1 frame         writer's running count of records sent since enable (1..)
  *   2 swapcount     SwapCount after the increment for this swap
@@ -14,8 +14,17 @@
  *   5 missed        swapsyncMissedFrames(), cumulative
  *   6 cmds_applied  commands evaluated by processTclCommands since start
  *   7 ds_dispatched datapoints dispatched by processDSCommands since start
+ *   8 eval_us       stim clock the frame was computed at, microseconds (same
+ *                   clock as ticks_us): held from the start of the frame's
+ *                   update until its swap, so every object, script and
+ *                   timer in the frame saw this one instant (frameClockHold
+ *                   in stim2.cpp).  eval_us <= ticks_us.  A replay steps the
+ *                   frame at it (stepFrame eval_us/1000 ticks_us/1000).
  *
- * Render-thread cost per frame: copy six integers into a lock-free ring
+ * Records from a stim2 before eval_us have seven values; readers take
+ * either.
+ *
+ * Render-thread cost per frame: copy seven integers into a lock-free ring
  * (256 slots) and a condition-variable notify.  A full ring drops the record
  * and counts it; the render thread never blocks or allocates for this.  A
  * dead dserv only costs dropped records: the writer reconnects with a 1 s
@@ -41,7 +50,7 @@ int frameLogEnabled(void);
    ring is full or no writer is running. */
 void frameLogPush(int swapcount, long long flip_us, long long ticks_us,
                   long missed, long long cmds_applied,
-                  long long ds_dispatched);
+                  long long ds_dispatched, long long eval_us);
 
 /* Start the writer toward host (optionally "host:port"; default port
    4620).  Already running toward the same target: no-op.  Running toward
