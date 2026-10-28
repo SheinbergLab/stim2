@@ -16,6 +16,8 @@
 #       -eye NAME      the gaze datapoint, degrees (default
 #                      eyetracking/position; "off" for none)
 #       -trail MS      gaze trail length (default 100)
+#       -hold MS       keep the gaze up this long without a new sample
+#                      (default 500)
 #       -report S      print the lag and frame counts every S s (default 10)
 #       -late MS       repaint the gaze this long before the next vsync
 #                      (default 5; see presented below)
@@ -72,6 +74,7 @@ set opt(live)    0
 set opt(wait)    50
 set opt(eye)     eyetracking/position
 set opt(trail)   100
+set opt(hold)    500
 set opt(report)  10
 set opt(late)    5
 set opt(verbose) 0
@@ -87,6 +90,7 @@ while {[llength $args]} {
         -wait    { set opt(wait)  [lindex $args 0]; set args [lrange $args 1 end] }
         -eye     { set opt(eye)   [lindex $args 0]; set args [lrange $args 1 end] }
         -trail   { set opt(trail) [lindex $args 0]; set args [lrange $args 1 end] }
+        -hold    { set opt(hold)  [lindex $args 0]; set args [lrange $args 1 end] }
         -report  { set opt(report) [lindex $args 0]; set args [lrange $args 1 end] }
         -late    { set opt(late)  [lindex $args 0]; set args [lrange $args 1 end] }
         -verbose { set opt(verbose) 1 }
@@ -95,7 +99,7 @@ while {[llength $args]} {
 }
 if {$opt(dserv) eq ""} {
     puts stderr "usage: dlsh mirror.tcl -dserv HOST ?-host H? ?-port P? ?-live? ?-wait MS?\
- ?-eye NAME|off? ?-trail MS? ?-report S? ?-late MS? ?-verbose?"
+ ?-eye NAME|off? ?-trail MS? ?-hold MS? ?-report S? ?-late MS? ?-verbose?"
     exit 2
 }
 if {$opt(port) == 4612 && !$opt(live)} {
@@ -159,7 +163,7 @@ set pump_after ""
 # stats since the last report
 proc stats_reset {} {
     global st
-    array set st {drawn 0 dropped 0 missing 0 timeouts 0 errors 0 repaints 0 eye 0 lag {} arr {} ready {} draw {}}
+    array set st {drawn 0 dropped 0 missing 0 timeouts 0 errors 0 repaints 0 hides 0 eye 0 lag {} arr {} ready {} draw {}}
     set st(t0) [now_us]
 }
 stats_reset
@@ -252,13 +256,14 @@ proc ds_join {} {
         if {$d ne ""} { note_value {*}$d }
     }
     # the script's libraries: those published with it (configure_stim sends
-    # them just before the script; an older load's stay in dserv)
+    # them just before the script, and a file open re-emits them just
+    # after it; an older load's stay in dserv, minutes or more away)
     set d [ds_get stim/script]
     set sts [expr {$d ne "" ? [lindex $d 2] : 0}]
     foreach k [split [ds_req "%keys"] " "] {
         if {[string match stim/lib/* $k]} {
             set l [ds_get $k]
-            if {$l ne "" && [lindex $l 2] <= $sts && $sts - [lindex $l 2] < 60000000} { note_value {*}$l }
+            if {$l ne "" && abs($sts - [lindex $l 2]) < 60000000} { note_value {*}$l }
         }
     }
     foreach n $rig(bind) {
@@ -370,7 +375,7 @@ proc on_dp {name type ts data} {
     }
     if {$name eq $opt(eye)} {
         if {[binary scan [binary decode base64 $data] f2 v] == 1 && [llength $v] == 2} {
-            lappend ::gaze [list [now_us] {*}$v]
+            lappend ::gaze [list [now_us] $ts {*}$v]
             incr ::st(eye)
         }
         return
@@ -591,6 +596,10 @@ proc pump {} {
     if {[catch {stim $req} r]} return
     set now [now_us]
     presented $now
+    if {$now - $t_draw > 100000} {
+        log [format "slow frame request: %.0f ms for %d rig frame(s) ending at swap %d" \
+                 [expr {($now - $t_draw) / 1000.0}] [llength $taken] $sc]
+    }
     if {[framelock::is_error $r]} {
         incr ::st(errors)
         log "ERROR frame $sc: $r"
@@ -620,28 +629,37 @@ proc pump {} {
 
 # the gaze: the newest sample and a trail, as overlay commands ("" when
 # unchanged since the last present)
+# Samples are {arrival_us dserv_ts x y}.  The trail is the samples within
+# -trail ms of the newest on dserv's clock, so a burst after a delivery
+# stall draws as the path it was; the disc stays up through a stall and
+# hides only when nothing has arrived for -hold ms.  (dserv, busy between
+# trials, has held eyetracking/position back by 250 ms and then sent it all
+# at once: timed by arrival with a 100 ms window, the disc blinked.)
 proc gaze_cmd_now {} {
     global gaze opt
-    set now [now_us]
-    set cut [expr {$now - $opt(trail) * 1000}]
-    set i 0
-    while {$i < [llength $gaze] && [lindex $gaze $i 0] < $cut} { incr i }
-    set gaze [lrange $gaze $i end]
-    if {![llength $gaze]} {
-        # no sample for a trail's length: hide
+    if {![llength $gaze]} { return [framelock::gaze_cmd "" ""] }
+    lassign [lindex $gaze end] arrived newest x y
+    if {[now_us] - $arrived > $opt(hold) * 1000} {
+        set gaze {}
         return [framelock::gaze_cmd "" ""]
     }
+    set cut [expr {$newest - $opt(trail) * 1000}]
+    set i 0
+    while {$i < [llength $gaze] && [lindex $gaze $i 1] < $cut} { incr i }
+    set gaze [lrange $gaze $i end]
     set trail {}
     for {set k [expr {[llength $gaze] - 1}]} {$k >= 0} {incr k -1} {
-        lappend trail [lindex $gaze $k 1] [lindex $gaze $k 2]
+        lappend trail [lindex $gaze $k 2] [lindex $gaze $k 3]
     }
-    framelock::gaze_cmd [lrange [lindex $gaze end] 1 2] $trail
+    framelock::gaze_cmd [list $x $y] $trail
 }
+proc gaze_hidden {g} { string match "overlay set gaze -show 0*" $g }
 proc gaze_pre {} {
     global opt gaze_shown
     if {$opt(eye) eq "off"} { return "" }
     set g [gaze_cmd_now]
     if {$g eq $gaze_shown} { return "" }
+    if {[gaze_hidden $g] && ![gaze_hidden $gaze_shown]} { incr ::st(hides) }
     set gaze_shown $g
     return "$g\n"
 }
@@ -654,13 +672,16 @@ proc gaze_repaint {} {
     # next frame shows the gaze
     if {[catch {stim "$g\nframeRepaint"} r]} return
     if {![framelock::is_error $r]} {
+        if {[gaze_hidden $g] && ![gaze_hidden $gaze_shown]} { incr ::st(hides) }
         set gaze_shown $g
         presented [now_us]
         incr ::st(repaints)
     } elseif {![string match "*empty*" $r]} {
         set gaze_shown $g
-    } else {
-        # nothing kept to repaint over yet (waiting, unstepped): draw
+    } elseif {!$::stepped} {
+        # nothing kept to repaint over yet (waiting, unstepped): draw.
+        # Stepped, a redraw would be held and turn the next rig frame's
+        # update into a plain redraw; the next frame carries the gaze.
         if {![catch {stim "$g\nredraw"}]} { set gaze_shown $g }
     }
 }
@@ -701,11 +722,11 @@ proc report {} {
     if {$mode eq "run" || $st(drawn)} {
         log [format "%s: %d frames shown, %d computed but not shown (behind), %d not received; lag flip->present ms p50 %s p95 %s max %s\
  (p50: flip->arrival %s, arrival->ready %s, ready->present %s); %d command waits ran out; %d errors;\
- gaze %d repaints, %.0f samples/s" \
+ gaze %d repaints, %d hides, %.0f samples/s" \
                  $mode $st(drawn) $st(dropped) $st(missing) \
                  [pct $st(lag) 0.5] [pct $st(lag) 0.95] [pct $st(lag) 1.0] \
                  [pct $st(arr) 0.5] [pct $st(ready) 0.5] [pct $st(draw) 0.5] \
-                 $st(timeouts) $st(errors) $st(repaints) [expr {$st(eye) / $dt}]]
+                 $st(timeouts) $st(errors) $st(repaints) $st(hides) [expr {$st(eye) / $dt}]]
         # a record cannot arrive before its flip: this host's clock is
         # behind the rig's (chrony still slewing after a boot), and only
         # ready->present, timed here alone, means anything

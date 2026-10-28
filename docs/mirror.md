@@ -24,6 +24,7 @@ The mirror's stim2 can be:
 | `-wait MS` | the longest a frame waits for its commands (default 50) |
 | `-eye NAME` | the gaze datapoint in degrees (default `eyetracking/position`; `off` for none) |
 | `-trail MS` | gaze trail length (default 100) |
+| `-hold MS` | keep the gaze up this long without a new sample (default 500) |
 | `-late MS` | repaint the gaze this long before the next vsync (default 5) |
 | `-report S` | log the frame counts and lag every S seconds (default 10) |
 | `-verbose` | log every frame's commands |
@@ -94,6 +95,12 @@ one-request-per-frame builder. See `replay.md`, "Frame-locked".
   and the mirror waits for ESS to load again. If the mirror's own stim2
   goes away, the driver reconnects. If dserv drops the subscription, it
   registers again. It keeps no state beyond what it can read back.
+- **The gaze** is placed on dserv's timestamps. Between trials, while
+  ESS is busy, dserv has held `eyetracking/position` back by about 250 ms
+  and then sent it in a burst. Timed by arrival, with a 100 ms window, the
+  disc blinked. Now the trail is the path the samples traced, and the
+  disc stays up until nothing has arrived for `-hold` ms (500 ms). The
+  report counts hides. A frame request slower than 100 ms is logged.
 - **The waiting screen** is a line of text from the `text` stimdll. While
   waiting, stim2 is not stepped. Each setup starts with `resetObjList`.
 
