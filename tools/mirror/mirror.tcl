@@ -422,7 +422,13 @@ proc on_frame {f} {
     if {$mode ne "run"} return
     # the rig's flip on its wall clock; a rig whose swap sync has no flip
     # times (glfinish, a Mac) reports -1: then dserv's receipt of the record
-    if {$flip_us <= 0} { set flip_us $ts; incr ::st(noflip) }
+    if {$flip_us <= 0} {
+        if {!$::noflip_said} {
+            log "the rig's stim2 reports no flip times (its swap sync has none): lag is from dserv's receipt of each frame record"
+            set ::noflip_said 1
+        }
+        set flip_us $ts; incr ::st(noflip)
+    }
     lappend ::st(arr) [expr {([now_us] - $flip_us) / 1000.0}]
     lset f 3 $flip_us
     lappend queue [list $f [now_us]]
@@ -747,9 +753,9 @@ proc report {} {
     set dt [expr {([now_us] - $st(t0)) / 1e6}]
     foreach k {drawn dropped missing errors} { incr total($k) $st($k) }
     if {$mode eq "run" || $st(drawn)} {
-        set from [expr {$st(noflip) ? "dserv receipt (the rig has no flip times)" : "flip"}]
+        set from [expr {$st(noflip) ? "dserv receipt" : "flip"}]
         log [format "%s: %d frames shown, %d computed but not shown (behind), %d not received; lag $from->present ms p50 %s p95 %s max %s\
- (p50: flip->arrival %s, arrival->ready %s, ready->present %s); %d command waits ran out; %d errors;\
+ (p50: [expr {$st(noflip) ? "receipt" : "flip"}]->arrival %s, arrival->ready %s, ready->present %s); %d command waits ran out; %d errors;\
  gaze %d repaints, %d hides, %.0f samples/s" \
                  $mode $st(drawn) $st(dropped) $st(missing) \
                  [pct $st(lag) 0.5] [pct $st(lag) 0.95] [pct $st(lag) 1.0] \
@@ -772,6 +778,7 @@ proc report {} {
 # ---------------------------------------------------------------------------
 set launched ""
 set stimess_said ""
+set noflip_said 0
 proc alive {pid} { expr {![catch {exec kill -0 $pid}]} }
 proc launch_stim2 {} {
     global opt launched
