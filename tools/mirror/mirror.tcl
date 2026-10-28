@@ -12,8 +12,9 @@
 #                      stop it on exit; the driver exits when it is closed
 #       -size WxH      with -launch, the window size
 #       -fullscreen    with -launch, fullscreen instead of a window
-#       -stim2 PATH    with -launch, the stim2 to start (default: the
-#                      installed one, /Applications/stim2.app on a Mac,
+#       -stim2 PATH    with -launch, the stim2 to start (default: the app
+#                      this script is bundled in, else the installed one,
+#                      /Applications/stim2.app on a Mac,
 #                      /usr/local/stim2/stim2 elsewhere)
 #       -host H        the mirror's stim2 (default localhost)
 #       -port P        its message port (default 5612: a stim2 started with
@@ -74,7 +75,8 @@
 # already waits for chrony.
 
 package require tcljson
-source [file join [file dirname [file normalize [info script]]] .. lib framelock.tcl]
+set mirror_script [file normalize [info script]]
+source [file join [file dirname $mirror_script] .. lib framelock.tcl]
 
 set opt(dserv)   ""
 set opt(host)    localhost
@@ -784,6 +786,11 @@ proc launch_stim2 {} {
     global opt launched
     if {$opt(host) ni {localhost 127.0.0.1}} { puts stderr "-launch starts stim2 here: -host must be localhost"; exit 2 }
     set exe $opt(stim2)
+    # the stim2 these tools came with: an app bundle's own binary when run
+    # from its Resources/tools, else the installed one
+    if {$exe eq "" && [regexp {^(.*\.app)/Contents/Resources/tools/} $::mirror_script -> app]} {
+        set exe $app/Contents/MacOS/stim2
+    }
     if {$exe eq ""} {
         set exe [expr {$::tcl_platform(os) eq "Darwin" ? "/Applications/stim2.app/Contents/MacOS/stim2" : "/usr/local/stim2/stim2"}]
     }

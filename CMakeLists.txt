@@ -474,6 +474,18 @@ elseif(APPLE)
         COMPONENT stim2
     )
 
+    # The replay and live-mirror drivers (dlsh scripts), as on Linux; the
+    # Linux-only setup (install-mirror.sh, the X11 launcher, systemd units)
+    # stays out.  dlsh .../Contents/Resources/tools/mirror/mirror.tcl
+    # -dserv HOST -launch starts this app's stim2 (docs/mirror.md).
+    install(
+        DIRECTORY tools/lib tools/replay tools/mirror
+        DESTINATION ${APP_BUNDLE}/Contents/Resources/tools
+        COMPONENT stim2
+        PATTERN "systemd" EXCLUDE
+        PATTERN "*.sh" EXCLUDE
+    )
+
     # Add config
     set(CONFIG_SCRIPT config/stim2.cfg)
     message("Bundling config script: ${CONFIG_SCRIPT}")

@@ -21,6 +21,12 @@ or with a stim2 of your own:
     stim2 --port-base 5610 -w 960 -h 540 &
     dlsh tools/mirror/mirror.tcl -dserv 192.168.88.40
 
+The tools ship with stim2: `/usr/local/stim2/tools` from the Linux .deb,
+and from 0.28.8 `stim2.app/Contents/Resources/tools` in the Mac app
+(without the Linux setup files), so no checkout is needed:
+
+    dlsh /Applications/stim2.app/Contents/Resources/tools/mirror/mirror.tcl -dserv HOST -launch
+
 `-dserv localhost` mirrors a rig whose dserv runs on this machine. The
 mirror's stim2 must not be the one ESS drives: ESS uses 4612, the mirror
 5612.
