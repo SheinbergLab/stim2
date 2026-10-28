@@ -658,35 +658,38 @@ if {$opt(render) ne ""} {
         set eval [expr {max($clock, $prevflip)}]
         if {$flip < $eval} { set flip $eval }
         set nw [lindex $writes $i]
+        # One request per rig frame, however many movie ticks it spans: the
+        # gaze, the frame, and its writes -- for a frame the rig held while
+        # the eye moved, a repaint of the gaze over the same scene at each
+        # tick's time. Over a slow link (a Pi on Wi-Fi: ~20 ms a round trip)
+        # requests, not drawing, set the pace.
+        set script {}
         if {$n_eye} {
             # the gaze at this frame's first movie tick, drawn with the frame
             set g [gaze_at $flip]
-            if {$g ne $gaze_last} { stim_send $sock $g; set gaze_last $g }
+            if {$g ne $gaze_last} { append script "$g\n"; set gaze_last $g }
         }
-        set r [stim_send $sock [list stepFrame $eval $flip]]
-        if {[is_error $r]} { incr errors; puts "  ERROR stepFrame $eval $flip -> $r"; break }
-        dict incr kinds [dict get $r kind]
-        set clock $flip; set prevflip $flip
+        append script "set ::replay_r \[stepFrame $eval $flip\]\n"
         if {!$n_eye || $nw <= 1} {
-            set r [stim_send $sock [list frameSink write $nw]]
-            if {[is_error $r]} { incr errors; puts "  ERROR frameSink write -> $r"; break }
+            append script "frameSink write $nw\n"
         } else {
-            # the rig held this frame for nw ticks; the eye did not stop:
-            # repaint the overlay over the same scene at each tick's time
-            stim_send $sock {frameSink write 1}
+            append script "frameSink write 1\n"
             set same 0
             for {set k 1} {$k < $nw} {incr k} {
                 set g [gaze_at [expr {$flip + $k * $period}]]
                 if {$g eq $gaze_last} { incr same; continue }
-                if {$same} { stim_send $sock [list frameSink write $same]; set same 0 }
-                stim_send $sock $g; set gaze_last $g
-                set r [stim_send $sock frameRepaint]
-                if {[is_error $r]} { incr errors; puts "  ERROR frameRepaint -> $r"; break }
+                if {$same} { append script "frameSink write $same\n"; set same 0 }
+                append script "$g\nframeRepaint\nframeSink write 1\n"
+                set gaze_last $g
                 incr repaints
-                stim_send $sock {frameSink write 1}
             }
-            if {$same} { stim_send $sock [list frameSink write $same] }
+            if {$same} { append script "frameSink write $same\n" }
         }
+        append script {set ::replay_r}
+        set r [stim_send $sock $script]
+        if {[is_error $r]} { incr errors; puts "  ERROR frame $i (stepFrame $eval $flip) -> $r"; break }
+        dict incr kinds [dict get $r kind]
+        set clock $flip; set prevflip $flip
         if {$opt(verbose) && $i % 600 == 0} { puts "  frame $i of $nf" }
     }
     set elapsed [expr {([clock microseconds] - $wall0)/1e6}]
