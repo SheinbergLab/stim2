@@ -226,6 +226,12 @@ proc read_obs {path} {
         events frames eye_recs em_settings counts hashed records geom obs_note
     set g [dg_read $path]
     set names [dg_tclListnames $g]
+    # the absolute anchor (a wide DG from a dlsh that writes it): the file's
+    # first record on the dserv clock, and each BEGINOBS from it in us
+    set A ""
+    if {[dl_exists $g:file_t0_us] && [dl_exists $g:obs_start_us]} {
+        set A [dl_get $g:file_t0_us 0]
+    }
     if {![dl_exists $g:obs_start_ms] || ![dl_exists $g:e_types]} {
         error "$path is not an obs DG (no obs_start_ms / e_types)"
     }
@@ -262,10 +268,22 @@ proc read_obs {path} {
                 [list [dl_tcllist $g:$n:0] [dl_tcllist $g:<sessionn>[string range $n 10 end]:0]]
         }
     }
-    # stimdg, re-serialized the way stimess's readdg decodes it
+    # stimdg: every occurrence as logged (<dgbuf>), the first for setup;
+    # else rebuilt from the decoded <stimdg> columns (an older DG)
+    set dgocc {}
+    if {[dl_exists $g:<dgbuf>stimdg]} {
+        set nocc [dl_length $g:<dgbuf>stimdg:0]
+        for {set k 0} {$k < $nocc} {incr k} {
+            lappend dgocc [list [dl_get $g:<dgbuft>stimdg:0 $k] \
+                [binary encode base64 [binary format c* [dl_tcllist $g:<dgbuf>stimdg:0:$k]]]]
+        }
+    }
     set sd {}
     foreach n $names { if {[string match <stimdg>* $n]} { lappend sd $n } }
-    if {[llength $sd]} {
+    if {[llength $dgocc]} {
+        set stimdg_b64 [lindex $dgocc 0 1]
+        set stimdg "(the first of [llength $dgocc] logged stimdg occurrences)"
+    } elseif {[llength $sd]} {
         catch { dg_delete stimdg }
         dg_create stimdg
         foreach n $sd { dl_set stimdg:[string range $n 8 end] $g:$n }
@@ -289,8 +307,10 @@ proc read_obs {path} {
         }
         lappend all_off {*}$row_off($i)
     }
-    if {![llength $all_off]} { error "$path: no stim/cmd records in observation periods to set the clock by" }
-    set off_all [median $all_off]
+    if {$A eq "" && ![llength $all_off]} {
+        error "$path: no file_t0_us and no stim/cmd records in observation periods to set the clock by"
+    }
+    set off_all [expr {[llength $all_off] ? [median $all_off] : 0}]
     proc ::cmd_event {v} {
         global hashed
         set j [json_to_dict $v]
@@ -303,8 +323,12 @@ proc read_obs {path} {
     set skip {stim/cmd stim/frame eyetracking/raw}
     set ticks_off {}
     for {set i 0} {$i < $nobs} {incr i} {
-        set off [expr {[llength $row_off($i)] ? [median $row_off($i)] : $off_all}]
-        set t0 [expr {[dl_get $g:obs_start_ms $i] * 1000.0 + $off}]
+        if {$A ne ""} {
+            set t0 [expr {$A + [dl_get $g:obs_start_us $i]}]
+        } else {
+            set off [expr {[llength $row_off($i)] ? [median $row_off($i)] : $off_all}]
+            set t0 [expr {[dl_get $g:obs_start_ms $i] * 1000.0 + $off}]
+        }
         set et [dl_tcllist $g:e_times:$i]; set ety [dl_tcllist $g:e_types:$i]
         set k [lsearch -exact $ety 20]
         lappend obs_begin [expr {wide($t0)}]
@@ -346,8 +370,8 @@ proc read_obs {path} {
     }
     # outside the periods.  The file's first record on the dserv clock,
     # from the session commands' t_ret against their <sessiont> times
-    set anchor ""
-    if {[dict exists $sess stim/cmd] && [dict exists $stimes stim/cmd]} {
+    set anchor $A
+    if {$anchor eq "" && [dict exists $sess stim/cmd] && [dict exists $stimes stim/cmd]} {
         set a {}
         foreach v [dict get $sess stim/cmd] t [lindex [dict get $stimes stim/cmd] 0] {
             if {![catch {json_to_dict $v} j] && [dict exists $j t_ret]} {
@@ -385,6 +409,12 @@ proc read_obs {path} {
             if {[llength $ems] > 1} {
                 set obs_note "em/settings changed [expr {[llength $ems] - 1}] times in the file, untimed in this obs DG (a dlsh before <sessiont>): the first is used for every sample"
             }
+        }
+    }
+    # every stimdg occurrence, on the timeline like the .ess reader's
+    if {$anchor ne ""} {
+        foreach o $dgocc {
+            lappend records [list [expr {wide($anchor + [lindex $o 0] * 1000.0)}] stimdg 6 [lindex $o 1]]
         }
     }
     # any other session stream (a bound stream set between trials), timed
@@ -432,7 +462,15 @@ while {1} {
             set bind_names {}
             foreach b [dict get $j bindings] { lappend bind_names [dict get $b name] }
         }
-        stimdg { set stimdg [dict get $d data] }
+        stimdg {
+            # the first sets stim2 up; every one (the re-emit at file open,
+            # a new table mid-session) also reached stim2 on the rig as a
+            # forwarded datapoint, counted in ds_dispatched, so each goes
+            # in the timeline too
+            if {$stimdg eq ""} { set stimdg [dict get $d data] }
+            lappend records [list [dict get $d timestamp] stimdg 6 \
+                                 [binary encode base64 [dict get $d data]]]
+        }
         ess/screen_halfx { set geom(halfx) [string trim [dict get $d data]] }
         ess/screen_halfy { set geom(halfy) [string trim [dict get $d data]] }
         ess/screen_w     { set geom(w)     [string trim [dict get $d data]] }
@@ -482,6 +520,7 @@ if {[llength $opt(geometry)]} {
     if {$hz ne ""} { set geom(hz) $hz }
 }
 foreach n $bind_names { dict set stream_set $n 1 }
+dict set stream_set stimdg 1      ;# stim2 subscribes to it (readdg)
 foreach r $records {
     lassign $r ts nm type data
     if {[dict exists $stream_set $nm]} { lappend events [list $ts dp $nm $type $data] }
@@ -722,7 +761,10 @@ if {$opt(render) ne ""} {
             foreach ev $fev($i) {
                 lassign $ev t kind p1 p2 p3
                 if {$kind eq "cmd"} { puts $fd [format "  cmd t=%.3f %s" $t $p1] } \
-                else { puts $fd [format "  dp t=%.3f %s=%s" $t $p1 $p3] }
+                else {
+                    set v [expr {[string length $p3] > 120 ? "<[string length $p3] chars [string range $p3 0 39]...>" : $p3}]
+                    puts $fd [format "  dp t=%.3f %s=%s" $t $p1 $v]
+                }
             }
         }
         foreach t $eye_t x $eye_x y $eye_y { puts $fd [format "G %.3f %.4f %.4f" $t $x $y] }
@@ -954,7 +996,9 @@ if {$opt(render) ne ""} {
  ([format %.1f [expr {$mf / double($opt(fps))}]] s)[expr {$blend > 1 ? ", each the mean of $blend rig ticks" : ""}]\
  -> $out, status [dict get $st status]"
     foreach n [dict keys $stream_set] {
-        catch { puts "  $n: [stim_send $sock [list stim::count $n]] injected, last [stim_send $sock [list stim::get $n]]" }
+        # a stimess binding reports its count (stimdg is stim2's own readdg)
+        set c [stim_send $sock [list stim::count $n]]
+        if {![is_error $c]} { puts "  $n: $c injected, last [stim_send $sock [list stim::get $n]]" }
     }
     close $sock
     exit [expr {$errors || [dict get $st status] != 0 ? 1 : 0}]
@@ -997,7 +1041,8 @@ set swaps [expr {[stim_send $sock {set SwapCount}] - $swap0}]
 puts "done: $sent events in [format %.1f $elapsed] s ($errors errors, $skipped configure-time commands skipped),\
  stim2 swapped $swaps frames"
 foreach n [dict keys $stream_set] {
-    catch { puts "  $n: [stim_send $sock [list stim::count $n]] injected, last [stim_send $sock [list stim::get $n]]" }
+    set c [stim_send $sock [list stim::count $n]]
+    if {![is_error $c]} { puts "  $n: $c injected, last [stim_send $sock [list stim::get $n]]" }
 }
 close $sock
 exit [expr {$errors ? 1 : 0}]
