@@ -176,9 +176,40 @@ static int Headless = 0;
 static std::atomic<int> StepMode{0};
 static double StepClockSec = 0.0;  /* the stepped clock, glfwGetTime() domain */
 
+/* The frame clock: from the start of a frame's update to its swap, the
+   stim clock holds at one instant, so the update functions, the scripts
+   and the timer thread all see the same time for the whole frame (the
+   timer thread's updateTimes() would otherwise move it mid-draw, ~1 ms at
+   a time).  That instant is the frame's eval_us in stim/frame, which a
+   replay steps the frame at.  Held by frameClockHold(), released at
+   presentFrame() and by the guard at every exit from updateDisplay(); the
+   swap wait and everything after it read the running clock as before.
+   Stepped, the clock is already still: only the instant is recorded. */
+static std::atomic<int> FrameClockHeld{0};
+static double FrameClockSec = 0.0;     /* glfwGetTime() domain */
+static long long FrameEvalUs = 0;      /* the last frame's, for stim/frame */
+
 static inline double stimClockNow(void)
 {
-  return StepMode ? StepClockSec : glfwGetTime();
+  if (StepMode) return StepClockSec;
+  if (FrameClockHeld.load(std::memory_order_acquire)) return FrameClockSec;
+  return glfwGetTime();
+}
+
+void updateTimes(void);
+static void frameClockHold(void)
+{
+  if (FrameClockHeld.load(std::memory_order_relaxed)) return;   /* this frame's */
+  double t = StepMode ? StepClockSec : glfwGetTime();
+  FrameEvalUs = (long long) (1e6 * t);
+  if (StepMode) return;
+  FrameClockSec = t;
+  FrameClockHeld.store(1, std::memory_order_release);
+  updateTimes();
+}
+static inline void frameClockRelease(void)
+{
+  FrameClockHeld.store(0, std::memory_order_release);
 }
 
 /* the buffer holding the frame being drawn, and the one last shown */
@@ -1904,6 +1935,7 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
      is the display, so there is nothing to flip. */
   void presentFrame()
   {
+    frameClockRelease();        /* the swap and after: the running clock */
     if (Headless) { glFlush(); return; }
     lateDrawBeforeSwap();
     swapsyncBeforeSwap();
@@ -3682,13 +3714,16 @@ static inline void frameLogSwap(long long ticks_us)
   if (!frameLogEnabled()) return;
   frameLogPush(SwapCount, swapsyncLastFlipWallUs(), ticks_us,
                swapsyncMissedFrames(), FrameLogCmdsApplied,
-               FrameLogDsDispatched);
+               FrameLogDsDispatched, FrameEvalUs);
 }
 
 void Application::updateDisplay(bool log_events)
 {
   OBJ_GROUP *g = NULL;
   long long frame_ticks_us;
+  /* the frame's instant (already held when the loop ran its update) */
+  frameClockHold();
+  struct FrameClockGuard { ~FrameClockGuard() { frameClockRelease(); } } frame_clock_guard;
   if (Headless) hl_stats.frame_t0 = glfwGetTime();
   if (OGL_NGROUPS(GList)) g = OGL_GROUP(GList, OGL_CURGROUP(GList));
   if (!g) return;
@@ -4576,11 +4611,15 @@ main(int argc, char *argv[]) {
     if (!updated_display && !StepMode && app.lateDrawDefer(&ldf, &late_wait_ms)) {
       deferred = true;          /* nothing to draw this pass */
     }
-    else if (!updated_display && !StepMode &&
-             (app.doUpdate() || app.frameWorkPending())) {
-      app.updateDisplay(app.wait_for_swap);
-      app.count_frame();
-      app.lateDrawAccount(ldf);
+    else if (!updated_display && !StepMode) {
+      /* the update and the draw at one instant (the frame clock) */
+      frameClockHold();
+      if (app.doUpdate() || app.frameWorkPending()) {
+        app.updateDisplay(app.wait_for_swap);
+        app.count_frame();
+        app.lateDrawAccount(ldf);
+      }
+      frameClockRelease();
     }
 
     if (updated_display) {

@@ -1,0 +1,30 @@
+# The mirror's stim2, fullscreen on this box's monitor (X11, like the
+# packaged stim2.service on amd64, but on ports 5610-5613 and at the
+# monitor's refresh). Conflicts with stim2.service: one X server on vt1.
+[Unit]
+Description=stim2 mirror display (X11)
+Conflicts=getty@tty1.service stim2.service
+After=getty@tty1.service systemd-user-sessions.service
+After=chrony.service chronyd.service
+
+[Service]
+Type=simple
+User=stim
+# No chronyc waitsync, unlike stim2.service: the mirror draws the same
+# whatever the clock says, and after a boot the wait (up to 60 s, until
+# chrony settles) only kept the monitor on the console. The lag the driver
+# reports compares this host's clock with the rig's, so its first minutes
+# after a boot can be off by the clock's initial error.
+ExecStart=/usr/bin/xinit /usr/local/stim2/tools/mirror/start-stim2-mirror.sh -- :0 vt1 -keeptty -noreset -s 0 -dpms -nocursor
+Restart=always
+RestartSec=5
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=50
+StandardOutput=journal
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+
+[Install]
+WantedBy=multi-user.target

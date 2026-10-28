@@ -21,8 +21,8 @@
  *   bytes 3-12    "stim/frame"
  *   bytes 13-20   uint64 timestamp (0: dserv stamps it on receipt)
  *   bytes 21-24   uint32 datatype (DSERV_INT64 = 16)
- *   bytes 25-28   uint32 datalen (56)
- *   bytes 29-84   7 x int64
+ *   bytes 25-28   uint32 datalen (64)
+ *   bytes 29-92   8 x int64
  *   bytes 85-127  zero padding
  */
 
@@ -73,6 +73,7 @@ struct FrameRec {
   long long missed;
   long long cmds_applied;
   long long ds_dispatched;
+  long long eval_us;
 };
 
 /* ---- single-producer / single-consumer ring --------------------------- */
@@ -139,7 +140,7 @@ std::mutex mgmt_mx;
 constexpr const char *VARNAME = "stim/frame";
 constexpr uint16_t VARLEN = 10;
 constexpr uint32_t DSERV_INT64_TYPE = 16;
-constexpr uint32_t NVALS = 7;
+constexpr uint32_t NVALS = 8;
 constexpr uint32_t DATALEN = NVALS * 8;
 constexpr size_t FRAME_BYTES = 128;
 constexpr size_t DATA_OFF = 1 + 2 + VARLEN + 8 + 4 + 4;   /* 29 */
@@ -316,7 +317,7 @@ void writer_main(std::string h, int p)
       long long vals[NVALS] = {
         sent.load(std::memory_order_relaxed) + 1,   /* frame: 1-based */
         r.swapcount, r.flip_us, r.ticks_us, r.missed,
-        r.cmds_applied, r.ds_dispatched
+        r.cmds_applied, r.ds_dispatched, r.eval_us
       };
       memcpy(frame + DATA_OFF, vals, DATALEN);
       if (send_all(sock, frame, FRAME_BYTES)) {
@@ -400,7 +401,7 @@ int frameLogEnabled(void)
 
 void frameLogPush(int swapcount, long long flip_us, long long ticks_us,
                   long missed, long long cmds_applied,
-                  long long ds_dispatched)
+                  long long ds_dispatched, long long eval_us)
 {
   if (!enabled.load(std::memory_order_relaxed)) return;
   FrameRec r;
@@ -410,6 +411,7 @@ void frameLogPush(int swapcount, long long flip_us, long long ticks_us,
   r.missed = missed;
   r.cmds_applied = cmds_applied;
   r.ds_dispatched = ds_dispatched;
+  r.eval_us = eval_us;
   if (!ring_push(r)) {
     dropped.fetch_add(1, std::memory_order_relaxed);
     return;

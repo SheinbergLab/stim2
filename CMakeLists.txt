@@ -608,6 +608,16 @@ else()
 	COMPONENT stim2
     )
 
+    # The replay and live-mirror drivers (dlsh scripts) and their shared
+    # frame-locked core; tools/mirror/install-mirror.sh sets a box up as a
+    # mirror from them (docs/mirror.md). Nothing is enabled by the package.
+    install(
+	DIRECTORY tools/lib tools/replay tools/mirror
+	DESTINATION "/usr/local/stim2/tools"
+	USE_SOURCE_PERMISSIONS
+	COMPONENT stim2
+    )
+
     # Launcher for the Weston kiosk variant (stim2-weston.service)
     install(
 	PROGRAMS scripts/stim2-kiosk.sh
