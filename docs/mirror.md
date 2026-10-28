@@ -14,12 +14,21 @@ The mirror's stim2 can be:
   through `frameSink` to an encoder. This needs no change to the driver.
   It is the route to a browser view (see "Later" below).
 
-    stim2 --port-base 5610 -w 960 -h 540 &                     # windowed, for a try
+    dlsh tools/mirror/mirror.tcl -dserv 192.168.88.40 -launch     # a window, for a try
+
+or with a stim2 of your own:
+
+    stim2 --port-base 5610 -w 960 -h 540 &
     dlsh tools/mirror/mirror.tcl -dserv 192.168.88.40
+
+`-dserv localhost` mirrors a rig whose dserv runs on this machine. The
+mirror's stim2 must not be the one ESS drives: ESS uses 4612, the mirror
+5612.
 
 | option | |
 |---|---|
 | `-dserv H` | the rig's dserv (required) |
+| `-launch` | start the mirror's stim2 as well: the installed one, on `-port`'s base, in a window in the rig's aspect (`ess/screen_w` x `_h`, no wider than 960). It is stopped when the driver exits, and the driver exits when it is closed. `-size WxH`, `-fullscreen` and `-stim2 PATH` adjust it. |
 | `-host H`, `-port P` | the mirror's stim2 (default `localhost:5612`, a stim2 started with `--port-base 5610`). Port 4612 is a rig's own and is refused without `-live`. |
 | `-wait MS` | the longest a frame waits for its commands (default 50) |
 | `-eye NAME` | the gaze datapoint in degrees (default `eyetracking/position`; `off` for none) |
@@ -101,6 +110,11 @@ one-request-per-frame builder. See `replay.md`, "Frame-locked".
   disc blinked. Now the trail is the path the samples traced, and the
   disc stays up until nothing has arrived for `-hold` ms (500 ms). The
   report counts hides. A frame request slower than 100 ms is logged.
+- **A rig without flip times** (a Mac: its swap sync is glfinish) records
+  a `!` command's flip as null. Such commands are recognised by their `!`.
+  Before, they were placed a frame late after a 50 ms wait ("command waits
+  ran out" on every one). The lag is then measured from dserv's receipt of
+  the frame record, and the report says so.
 - **The waiting screen** is a line of text from the `text` stimdll. While
   waiting, stim2 is not stepped. Each setup starts with `resetObjList`.
 

@@ -577,7 +577,7 @@ if {$opt(render) ne ""} {
         if {[lindex $e 1] ne "cmd"} continue
         lassign [lindex $e 4] swap flip dq
         if {$swap eq "" || $dq eq ""} { incr no_ack; continue }
-        set tf [framelock::cmd_target $swap $flip]
+        set tf [framelock::cmd_target $swap $flip [lindex $e 2]]
         if {$tf < $sc_first} { incr cmd_before } elseif {$tf > $sc_last} { incr cmd_after; continue }
         if {[framelock::skipped_cmd [lindex $e 2]]} { incr skipped; continue }
         framelock::plan_cmd P $swap $flip $dq [lindex $e 2]

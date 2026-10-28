@@ -4,8 +4,17 @@
 # the rig's dserv, with the gaze over it.
 #
 #     dlsh tools/mirror/mirror.tcl -dserv 192.168.88.40 ?options?
+#     dlsh tools/mirror/mirror.tcl -dserv 192.168.88.40 -launch
 #
 #       -dserv H       the rig's dserv (required)
+#       -launch        start the mirror's stim2 too (on -port's base, a
+#                      window half the rig's size, ess/screen_w x _h), and
+#                      stop it on exit; the driver exits when it is closed
+#       -size WxH      with -launch, the window size
+#       -fullscreen    with -launch, fullscreen instead of a window
+#       -stim2 PATH    with -launch, the stim2 to start (default: the
+#                      installed one, /Applications/stim2.app on a Mac,
+#                      /usr/local/stim2/stim2 elsewhere)
 #       -host H        the mirror's stim2 (default localhost)
 #       -port P        its message port (default 5612: a stim2 started with
 #                      --port-base 5610). 4612 is refused without -live, so
@@ -78,6 +87,10 @@ set opt(hold)    500
 set opt(report)  10
 set opt(late)    5
 set opt(verbose) 0
+set opt(launch)  0
+set opt(size)    ""
+set opt(full)    0
+set opt(stim2)   ""
 
 set args $argv
 while {[llength $args]} {
@@ -94,12 +107,17 @@ while {[llength $args]} {
         -report  { set opt(report) [lindex $args 0]; set args [lrange $args 1 end] }
         -late    { set opt(late)  [lindex $args 0]; set args [lrange $args 1 end] }
         -verbose { set opt(verbose) 1 }
+        -launch  { set opt(launch) 1 }
+        -size    { set opt(size)  [lindex $args 0]; set args [lrange $args 1 end] }
+        -fullscreen { set opt(full) 1 }
+        -stim2   { set opt(stim2) [lindex $args 0]; set args [lrange $args 1 end] }
         default  { puts stderr "unknown option $a"; exit 2 }
     }
 }
 if {$opt(dserv) eq ""} {
     puts stderr "usage: dlsh mirror.tcl -dserv HOST ?-host H? ?-port P? ?-live? ?-wait MS?\
- ?-eye NAME|off? ?-trail MS? ?-hold MS? ?-report S? ?-late MS? ?-verbose?"
+ ?-eye NAME|off? ?-trail MS? ?-hold MS? ?-report S? ?-late MS? ?-verbose?\
+ ?-launch ?-size WxH? ?-fullscreen? ?-stim2 PATH??"
     exit 2
 }
 if {$opt(port) == 4612 && !$opt(live)} {
@@ -163,7 +181,7 @@ set pump_after ""
 # stats since the last report
 proc stats_reset {} {
     global st
-    array set st {drawn 0 dropped 0 missing 0 timeouts 0 errors 0 repaints 0 hides 0 eye 0 lag {} arr {} ready {} draw {}}
+    array set st {drawn 0 dropped 0 missing 0 timeouts 0 errors 0 repaints 0 hides 0 eye 0 noflip 0 lag {} arr {} ready {} draw {}}
     set st(t0) [now_us]
 }
 stats_reset
@@ -402,7 +420,11 @@ proc on_frame {f} {
     lappend offs [expr {$ticks_us - $ts}]
     if {[llength $offs] > 41} { set offs [lrange $offs end-40 end] }
     if {$mode ne "run"} return
+    # the rig's flip on its wall clock; a rig whose swap sync has no flip
+    # times (glfinish, a Mac) reports -1: then dserv's receipt of the record
+    if {$flip_us <= 0} { set flip_us $ts; incr ::st(noflip) }
     lappend ::st(arr) [expr {([now_us] - $flip_us) / 1000.0}]
+    lset f 3 $flip_us
     lappend queue [list $f [now_us]]
 }
 
@@ -415,7 +437,8 @@ proc stim_connect {} {
     if {[catch {framelock::connect $opt(host) $opt(port)} s]} { return 0 }
     set v [framelock::send $s {package require stimess}]
     if {[framelock::is_error $v] || [catch {package vcompare $v 1.1} c] || $c < 0} {
-        log "stim2 at $opt(host):$opt(port) has no stimess 1.1 (got: $v)"; close $s; return 0
+        if {$v ne $::stimess_said} { log "stim2 at $opt(host):$opt(port) has no stimess 1.1 (got: $v)"; set ::stimess_said $v }
+        close $s; return 0
     }
     if {[framelock::send $s {info commands stepFrame}] ne "stepFrame"} {
         log "stim2 at $opt(host):$opt(port) has no stepFrame (stim2 0.28.4 or newer)"; close $s; return 0
@@ -441,6 +464,10 @@ proc stim {cmd} {
     if {[catch {framelock::send $sock $cmd} r]} {
         catch {close $sock}
         set sock ""; set ::stepped 0
+        if {$::launched ne "" && ![alive $::launched]} {
+            log "the mirror's stim2 (pid $::launched) has exited"
+            exit 0
+        }
         log "lost the mirror's stim2: $r"
         to_waiting [expr {$::rig(script) ne "" ? "ready" : "waiting"}] "the mirror's stim2 restarted"
         after 1000 stim_reconnect
@@ -720,7 +747,8 @@ proc report {} {
     set dt [expr {([now_us] - $st(t0)) / 1e6}]
     foreach k {drawn dropped missing errors} { incr total($k) $st($k) }
     if {$mode eq "run" || $st(drawn)} {
-        log [format "%s: %d frames shown, %d computed but not shown (behind), %d not received; lag flip->present ms p50 %s p95 %s max %s\
+        set from [expr {$st(noflip) ? "dserv receipt (the rig has no flip times)" : "flip"}]
+        log [format "%s: %d frames shown, %d computed but not shown (behind), %d not received; lag $from->present ms p50 %s p95 %s max %s\
  (p50: flip->arrival %s, arrival->ready %s, ready->present %s); %d command waits ran out; %d errors;\
  gaze %d repaints, %d hides, %.0f samples/s" \
                  $mode $st(drawn) $st(dropped) $st(missing) \
@@ -740,10 +768,68 @@ proc report {} {
 }
 
 # ---------------------------------------------------------------------------
+# -launch: the mirror's own stim2, started here and stopped on exit
+# ---------------------------------------------------------------------------
+set launched ""
+set stimess_said ""
+proc alive {pid} { expr {![catch {exec kill -0 $pid}]} }
+proc launch_stim2 {} {
+    global opt launched
+    if {$opt(host) ni {localhost 127.0.0.1}} { puts stderr "-launch starts stim2 here: -host must be localhost"; exit 2 }
+    set exe $opt(stim2)
+    if {$exe eq ""} {
+        set exe [expr {$::tcl_platform(os) eq "Darwin" ? "/Applications/stim2.app/Contents/MacOS/stim2" : "/usr/local/stim2/stim2"}]
+    }
+    if {![file executable $exe]} { puts stderr "-launch: no stim2 at $exe (-stim2 PATH)"; exit 2 }
+    if {![catch {socket localhost $opt(port)} s]} {
+        close $s
+        puts stderr "-launch: a stim2 already answers on port $opt(port); stop it, or run without -launch"; exit 2
+    }
+    set args [list --port-base [expr {$opt(port) - 2}] --title "stim2 mirror"]
+    if {$opt(full)} {
+        lappend args -F
+    } else {
+        # the rig's display in its aspect, no wider than 960, unless
+        # -size says
+        set w 960; set h 540
+        if {[regexp {^(\d+)x(\d+)$} $opt(size) -> w h]} {
+        } else {
+            set rw [lindex [ds_get ess/screen_w] 3]; set rh [lindex [ds_get ess/screen_h] 3]
+            if {[string is integer -strict $rw] && [string is integer -strict $rh] && $rw > 0 && $rh > 0} {
+                if {$rw > 960} { set w 960; set h [expr {round($rh * 960.0 / $rw)}] } else { set w $rw; set h $rh }
+            }
+        }
+        lappend args -w $w -h $h
+    }
+    if {$::tcl_platform(os) ne "Darwin" && [file exists /usr/local/stim2/config/linux.cfg]} {
+        lappend args -f /usr/local/stim2/config/linux.cfg
+    }
+    # not dlsh's own Tcl/Tk library paths (inside its zip): stim2 would
+    # look for its library, and its modules (stimess), there
+    set saved {}
+    foreach v {TCL_LIBRARY TK_LIBRARY} {
+        if {[info exists ::env($v)]} { dict set saved $v $::env($v); unset ::env($v) }
+    }
+    set launched [exec $exe {*}$args >/dev/null 2>/dev/null &]
+    dict for {v val} $saved { set ::env($v) $val }
+    log "launched stim2 (pid $launched): $exe $args"
+}
+proc stop_launched {} {
+    if {$::launched ne "" && [alive $::launched]} { catch {exec kill $::launched} }
+}
+if {$opt(launch)} {
+    launch_stim2
+    # a terminal's Ctrl-C reaches stim2 too (same process group); a plain
+    # exit of the driver stops it here
+    rename exit _exit
+    proc exit {{code 0}} { stop_launched; _exit $code }
+}
+
 log "mirror: rig dserv $opt(dserv), stim2 $opt(host):$opt(port), command wait $opt(wait) ms, gaze $opt(eye)"
 while {![stim_connect]} {
     if {![info exists warned]} { log "waiting for the mirror's stim2 at $opt(host):$opt(port)"; set warned 1 }
-    after 1000
+    if {$launched ne "" && ![alive $launched]} { log "the launched stim2 exited before answering"; exit 1 }
+    after [expr {$launched ne "" ? 200 : 1000}]
 }
 show_waiting
 ds_join

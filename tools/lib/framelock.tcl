@@ -81,9 +81,14 @@ proc framelock::cmd_record {json} {
     list [dict get $j t_send] [dict get $j cmd] [dict get $j seq] $ack
 }
 
-# the swapcount of the first frame that shows a command
-proc framelock::cmd_target {swap flip} {
-    expr {$flip ne "" && $flip != 0 ? $swap : $swap + 1}
+# The swapcount of the first frame that shows a command: swap+1, or swap
+# for a '!' command, which stim2 answers after the swap it caused.  A '!'
+# is known by its text: its flip time is null where the rig's swap sync
+# has none (glfinish, a Mac), and a '!' taken for a plain command waits
+# for, then lands in, the frame after its own.
+proc framelock::cmd_target {swap flip {cmd ""}} {
+    expr {($flip ne "" && $flip != 0) || [string match {@!*} $cmd] || [string match {!*} $cmd]
+          ? $swap : $swap + 1}
 }
 
 # stim/frame's values: 8 (64 bytes), or 7 (56, before eval_us) with ""
@@ -200,7 +205,7 @@ proc framelock::plan_new {{tick_off 0}} {
 # a command with its ACK stamps; dq is the rig tick (ms) it was dequeued
 proc framelock::plan_cmd {pv swap flip dq cmd} {
     upvar $pv P
-    dict lappend P cmds [list [cmd_target $swap $flip] $dq $cmd]
+    dict lappend P cmds [list [cmd_target $swap $flip $cmd] $dq $cmd]
 }
 
 # a datapoint as dserv stamped it (ts, us on the dserv clock)
