@@ -204,16 +204,21 @@ set obs_note ""
 # Times are rebuilt on the dserv clock the .ess reader uses: a stim/cmd
 # record's dserv timestamp IS its JSON t_ret, so each row's offset (median
 # t_ret - (obs_start_ms + <dst>)) puts that row's records back to the
-# microsecond (obs_start_ms is whole ms; the offset absorbs it).  Commands
-# outside periods carry their own t_send/t_ret; frames outside periods are
-# timed from their own flip tick through the median tick - dserv offset of
-# the frames inside periods.  Bound streams and eyetracking/raw are logged
-# obs-limited, so all of theirs are in rows, with times.
+# microsecond (obs_start_ms is whole ms; the offset absorbs it).
 #
-# Not recoverable: em/settings changes are untimed in <session>, so the
-# first (in force at file open) is used for every sample and a note says
-# how many changes there were; a bound stream with a numeric (non-text)
-# type goes in as its values joined by spaces.
+# Outside the periods, a DG from a dlsh whose readESS writes <sessiont>
+# (per-record ms from the file's first record) and <sessionn> (per-record
+# counts) times every record directly: the file's first record on the dserv
+# clock is the median (t_ret - <sessiont>) over the session commands, and
+# em/settings applies from each change on, as from the .ess.  An older DG
+# has values only: commands still carry their own t_send/t_ret, frames are
+# timed from their flip tick through the median tick - dserv offset of the
+# frames inside periods, and only the first em/settings is used (a note
+# says how many changes were lost).  Bound streams and eyetracking/raw are
+# logged obs-limited, so theirs are in rows, with times, either way.
+#
+# A bound stream with a numeric (non-text) type goes in as its values
+# joined by spaces.
 # ---------------------------------------------------------------------------
 proc median {l} { set l [lsort -real $l]; lindex $l [expr {[llength $l] / 2}] }
 proc read_obs {path} {
@@ -249,11 +254,12 @@ proc read_obs {path} {
     foreach {k n} {halfx screen_halfx halfy screen_halfy w screen_w h screen_h hz screen_refresh_rate bg screen_bg} {
         if {[dict exists $sess ess/$n]} { set geom($k) [string trim [lindex [dict get $sess ess/$n] end]] }
     }
-    if {[dict exists $sess em/settings]} {
-        set ems [dict get $sess em/settings]
-        lappend em_settings [list 0 [lindex $ems 0]]
-        if {[llength $ems] > 1} {
-            set obs_note "em/settings changed [expr {[llength $ems] - 1}] times in the file, untimed in an obs DG: the first is used for every sample"
+    # per-record session times, when this DG has them (<sessiont>)
+    set stimes {}
+    foreach n $names {
+        if {[string match <sessiont>* $n]} {
+            dict set stimes [string range $n 10 end] \
+                [list [dl_tcllist $g:$n:0] [dl_tcllist $g:<sessionn>[string range $n 10 end]:0]]
         }
     }
     # stimdg, re-serialized the way stimess's readdg decodes it
@@ -338,14 +344,60 @@ proc read_obs {path} {
             }
         }
     }
-    # outside the periods: commands time themselves, frames by their tick
+    # outside the periods.  The file's first record on the dserv clock,
+    # from the session commands' t_ret against their <sessiont> times
+    set anchor ""
+    if {[dict exists $sess stim/cmd] && [dict exists $stimes stim/cmd]} {
+        set a {}
+        foreach v [dict get $sess stim/cmd] t [lindex [dict get $stimes stim/cmd] 0] {
+            if {![catch {json_to_dict $v} j] && [dict exists $j t_ret]} {
+                lappend a [expr {[dict get $j t_ret] - $t * 1000.0}]
+            }
+        }
+        if {[llength $a]} { set anchor [median $a] }
+    }
+    proc ::sess_time {stimes anchor dp k} {
+        # dserv time of session record k of dp, or "" when untimed
+        if {$anchor eq "" || ![dict exists $stimes $dp]} { return "" }
+        set t [lindex [dict get $stimes $dp] 0 $k]
+        expr {$t eq "" ? "" : wide($anchor + $t * 1000.0)}
+    }
     if {[dict exists $sess stim/cmd]} { foreach v [dict get $sess stim/cmd] { cmd_event $v } }
     if {[dict exists $sess stim/frame]} {
         set toff [expr {[llength $ticks_off] ? [median $ticks_off] : 0}]
         set sv [dict get $sess stim/frame]
+        set k 0
         for {set p 0} {$p + 6 < [llength $sv]} {incr p 7} {
             set f [lrange $sv $p [expr {$p + 6}]]
-            lappend frames [list [expr {wide([lindex $f 3] - $toff)}] {*}$f]
+            set t [sess_time $stimes $anchor stim/frame $k]
+            if {$t eq ""} { set t [expr {wide([lindex $f 3] - $toff)}] }
+            lappend frames [list $t {*}$f]
+            incr k
+        }
+    }
+    if {[dict exists $sess em/settings]} {
+        set ems [dict get $sess em/settings]
+        if {[sess_time $stimes $anchor em/settings 0] ne ""} {
+            set k 0
+            foreach e $ems { lappend em_settings [list [sess_time $stimes $anchor em/settings $k] $e]; incr k }
+        } else {
+            lappend em_settings [list 0 [lindex $ems 0]]
+            if {[llength $ems] > 1} {
+                set obs_note "em/settings changed [expr {[llength $ems] - 1}] times in the file, untimed in this obs DG (a dlsh before <sessiont>): the first is used for every sample"
+            }
+        }
+    }
+    # any other session stream (a bound stream set between trials), timed
+    dict for {dp vals} $sess {
+        if {$dp in {stim/cmd stim/frame em/settings stim/script stim/bind} ||
+            [string match stim/lib/* $dp] || [string match ess/screen_* $dp]} continue
+        if {[sess_time $stimes $anchor $dp 0] eq ""} continue
+        set cnt [lindex [dict get $stimes $dp] 1]
+        set p 0; set k 0
+        foreach c $cnt {
+            set data [expr {$c == 1 ? [lindex $vals $p] : [join [lrange $vals $p [expr {$p + $c - 1}]] " "]}]
+            lappend records [list [sess_time $stimes $anchor $dp $k] $dp 1 $data]
+            incr p $c; incr k
         }
     }
     dict set counts stim/cmd [expr {[dict exists $counts stim/cmd] ? [dict get $counts stim/cmd] : 0}]
