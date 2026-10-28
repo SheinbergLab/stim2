@@ -43,9 +43,12 @@
 #     to -wait. The frame's ds_dispatched advance places the datapoints.
 #     Its inputs, the gaze and stepFrame go as one request.
 #   - behind (frames ready faster than this display shows them: a 120 Hz
-#     rig on a 60 Hz monitor while something moves), only the newest ready
-#     frame is drawn, after the inputs of all of them; the others are
-#     counted as dropped.
+#     rig on a 60 Hz monitor while something moves), every ready frame is
+#     still computed -- updated, drawn, its scripts run (stepFrame
+#     -nopresent, stim2 0.28.7) -- and only the newest is shown, so a
+#     script that latches state in a particular frame sees every one.
+#     With an older stim2 only the newest is computed, after the inputs of
+#     all of them.
 #   - between rig frames the gaze is repainted over the last frame
 #     (frameRepaint) whenever it moves.
 #   - a reload on the rig (configure_stim publishes an empty stim/script
@@ -137,6 +140,7 @@ set mode waiting
 set why "joining"
 set sock ""                 ;# the mirror's stim2
 set stepped 0
+set nopresent 0             ;# stepFrame -nopresent (stim2 0.28.7)
 set P ""                    ;# the planner (framelock)
 set queue {}                ;# rig frames not yet drawn, {f arrival_us}
 set prev_cmds ""            ;# cmds_applied of the last frame taken
@@ -412,9 +416,15 @@ proc stim_connect {} {
         log "stim2 at $opt(host):$opt(port) has no stepFrame (stim2 0.28.4 or newer)"; close $s; return 0
     }
     set sock $s
+    # a fresh driver starts its stim2 unstepped; then ask whether stepFrame
+    # can compute a frame without showing it
+    framelock::send $s {stepMode 0}
+    set ::stepped 0
+    set ::nopresent [framelock::has_nopresent $s]
     set ::period_ms [framelock::send $s {screen_set FrameDuration}]
     if {![string is double -strict $::period_ms] || $::period_ms <= 0} { set ::period_ms 16.667 }
-    log "stim2 [framelock::send $s {catch {stimVersion} v; set v}] at $opt(host):$opt(port),\
+    log "stim2 [framelock::send $s {catch {stimVersion} v; set v}] at $opt(host):$opt(port)\
+ ([expr {$::nopresent ? "computes every rig frame" : "no -nopresent: computes only the newest frame when behind"}]),\
  [framelock::send $s {screen_set WinWidth}]x[framelock::send $s {screen_set WinHeight}]"
     if {$opt(eye) ne "off"} { framelock::send $sock [framelock::gaze_style] }
     return 1
@@ -527,13 +537,17 @@ proc pump {} {
     global mode queue P prev_cmds clock_ms prevflip stepped opt pump_after
     if {$pump_after ne ""} { after cancel $pump_after; set pump_after "" }
     if {$mode ne "run"} return
-    # every ready frame's inputs; only the newest is drawn
-    set inputs {}; set taken {}; set taken_at {}
+    # every ready frame: each computed (stepFrame -nopresent), only the
+    # newest shown; with a stim2 before 0.28.7, only the newest is computed,
+    # after the inputs of all of them
+    set inputs {}; set taken {}; set taken_at {}; set taken_in {}
     while {[llength $queue] && [head_ready]} {
         lassign [lindex $queue 0] f at
         lappend taken_at $at
         set queue [lrange $queue 1 end]
-        lappend inputs {*}[framelock::plan_frame P $f]
+        set fi [framelock::plan_frame P $f]
+        lappend taken_in $fi
+        lappend inputs {*}$fi
         set prev_cmds [lindex $f 6]
         lappend taken $f
     }
@@ -549,19 +563,30 @@ proc pump {} {
     set flip [expr {$ticks_us / 1000.0}]
     # the first frame: onto the rig's clock, before its first input
     if {!$stepped} {
-        set t0 [expr {[lindex $f 8] ne "" ? min($flip, [lindex $f 8] / 1000.0) : $flip}]
+        set f0 [lindex $taken 0]
+        set t0 [expr {[lindex $f0 4] / 1000.0}]
+        if {[lindex $f0 8] ne ""} { set t0 [expr {min($t0, [lindex $f0 8] / 1000.0)}] }
         if {[llength $inputs]} { set t0 [expr {min($t0, [lindex [lsort -real -index 0 $inputs] 0 0])}] }
         set t0 [expr {$t0 - 1.0}]
         if {[catch {stim [list stepMode 1 $t0]}]} return
         set clock_ms $t0; set prevflip $t0; set stepped 1
     }
-    set inputs [lsort -real -index 0 $inputs]
+    if {$::nopresent} {
+        set fl {}
+        foreach tf $taken fi $taken_in {
+            set ev_us [lindex $tf 8]
+            lappend fl [list $fi [expr {[lindex $tf 4] / 1000.0}] [expr {$ev_us ne "" ? $ev_us / 1000.0 : ""}]]
+        }
+        set req [framelock::frames_request $fl clock_ms prevflip [gaze_pre]]
+    } else {
+        set inputs [lsort -real -index 0 $inputs]
+        set ev_us [lindex $f 8]
+        set req [framelock::frame_request $inputs clock_ms $prevflip $flip [gaze_pre] "" \
+                     [expr {$ev_us ne "" ? $ev_us / 1000.0 : ""}]]
+    }
     if {$opt(verbose)} {
         foreach ev $inputs { if {[lindex $ev 1] eq "cmd"} { log "frame $sc cmd [string range [lindex $ev 2] 0 70]" } }
     }
-    set ev_us [lindex $f 8]
-    set req [framelock::frame_request $inputs clock_ms $prevflip $flip [gaze_pre] "" \
-                 [expr {$ev_us ne "" ? $ev_us / 1000.0 : ""}]]
     set t_draw [now_us]
     if {[catch {stim $req} r]} return
     set now [now_us]
@@ -674,7 +699,7 @@ proc report {} {
     set dt [expr {([now_us] - $st(t0)) / 1e6}]
     foreach k {drawn dropped missing errors} { incr total($k) $st($k) }
     if {$mode eq "run" || $st(drawn)} {
-        log [format "%s: %d frames drawn, %d dropped (behind), %d not received; lag flip->present ms p50 %s p95 %s max %s\
+        log [format "%s: %d frames shown, %d computed but not shown (behind), %d not received; lag flip->present ms p50 %s p95 %s max %s\
  (p50: flip->arrival %s, arrival->ready %s, ready->present %s); %d command waits ran out; %d errors;\
  gaze %d repaints, %.0f samples/s" \
                  $mode $st(drawn) $st(dropped) $st(missing) \

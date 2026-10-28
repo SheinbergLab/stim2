@@ -268,7 +268,39 @@ proc framelock::plan_frame {pv f} {
 proc framelock::frame_request {inputs clockvar prevflip flip {pre ""} {post ""} {eval_ms ""}} {
     upvar $clockvar clock
     set s "set ::framelock_err {}\n"
-    set i 0
+    append s [frame_body $inputs clock $prevflip $flip $pre $post $eval_ms 1 0]
+    append s {list $::framelock_r $::framelock_err}
+    return $s
+}
+
+# Several rig frames as one request: frames is a list of {inputs flip
+# eval_ms}, and every one but the last is computed with stepFrame
+# -nopresent (stim2 0.28.7): updated, drawn and its scripts run, not shown.
+# A mirror on a display slower than the rig's computes every rig frame
+# this way, so a script that latches state in a frame (a run's time zero,
+# a frame count) sees each one, and presents only the newest.  pre and
+# post go with the last.  Errors index the frames' inputs taken in order.
+proc framelock::frames_request {frames clockvar prevflipvar {pre ""} {post ""}} {
+    upvar $clockvar clock
+    upvar $prevflipvar prevflip
+    set s "set ::framelock_err {}\n"
+    set base 0; set n [llength $frames]; set k 0
+    foreach fr $frames {
+        lassign $fr inputs flip eval_ms
+        set last [expr {[incr k] == $n}]
+        append s [frame_body $inputs clock $prevflip $flip \
+                      [expr {$last ? $pre : ""}] [expr {$last ? $post : ""}] $eval_ms $last $base]
+        set prevflip $clock
+        incr base [llength $inputs]
+    }
+    append s {list $::framelock_r $::framelock_err}
+    return $s
+}
+
+proc framelock::frame_body {inputs clockvar prevflip flip pre post eval_ms present base} {
+    upvar $clockvar clock
+    set s ""
+    set i $base
     foreach ev $inputs {
         lassign $ev t kind p1 p2 p3 p4
         if {$eval_ms ne "" && $t > $eval_ms} { set t $eval_ms }
@@ -286,11 +318,17 @@ proc framelock::frame_request {inputs clockvar prevflip flip {pre ""} {post ""} 
     set eval [expr {$eval_ms ne "" ? max($clock, $eval_ms) : max($clock, $prevflip)}]
     if {$flip < $eval} { set flip $eval }
     append s $pre
-    append s "set ::framelock_r \[stepFrame $eval $flip\]\n"
+    append s "set ::framelock_r \[stepFrame $eval $flip[expr {$present ? "" : " -nopresent"}]\]\n"
     append s $post
-    append s {list $::framelock_r $::framelock_err}
     set clock $flip
     return $s
+}
+
+# 1 when stim2's stepFrame takes -nopresent (0.28.7).  Ask an unstepped
+# stim2: stepped, the probe would draw a frame.
+proc framelock::has_nopresent {sock} {
+    set r [send $sock {catch {stepFrame -nopresent} e; set e}]
+    expr {![string match "*-nopresent*" $r]}
 }
 
 # ---------------------------------------------------------------------------

@@ -1936,6 +1936,7 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
   void presentFrame()
   {
     frameClockRelease();        /* the swap and after: the running clock */
+    if (step_nopresent) return; /* stepFrame -nopresent: computed, not shown */
     if (Headless) { glFlush(); return; }
     lateDrawBeforeSwap();
     swapsyncBeforeSwap();
@@ -1945,7 +1946,10 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
 
   void waitForSwap()
   {
-    if (Headless) {
+    if (step_nopresent) {
+      /* nothing was presented: no swap to wait for */
+    }
+    else if (Headless) {
       headlessPace();
     }
     else {
@@ -2065,6 +2069,7 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
 
   void sinkFrame()
   {
+    if (step_nopresent) return;   /* a frame never shown is not in the movie */
     if (!sink.fp || sink.failed) return;
     size_t rowbytes = (size_t) sink.w * 4;
     sink.buf.resize(rowbytes * sink.h);
@@ -2144,6 +2149,11 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
      that stepFrame gave is applied by waitForSwap */
   bool step_redraw = false;
   double step_flip_sec = -1.0;
+  /* stepFrame -nopresent: the frame is computed (update, draw, scripts,
+     post-frame scripts, SwapCount) but not swapped, waited for, grabbed or
+     written to the sink -- a mirror on a display slower than the rig's
+     computes every rig frame and shows only the newest */
+  bool step_nopresent = false;
 
 private:  
   void
@@ -2863,9 +2873,10 @@ int stimStepClockSet(double t_ms, char *err, int errlen)
    none, a dynamic group steps its objects first, like the loop's
    doUpdate), draw, put the frame in the sink, and present.  flip_ms, when
    given (>= t_ms), is where the clock stands after the frame's swap, as
-   the rig's clock stood at its flip. */
-int stimStepFrame(double t_ms, double flip_ms, stim_step_result_t *r,
-                  char *err, int errlen)
+   the rig's clock stood at its flip.  present 0: everything but the
+   present (see step_nopresent). */
+int stimStepFrame(double t_ms, double flip_ms, int present,
+                  stim_step_result_t *r, char *err, int errlen)
 {
   if (!StepMode) { snprintf(err, errlen, "not in step mode (stepMode 1)"); return -1; }
   if (stepCheckForward(t_ms, err, errlen)) return -1;
@@ -2884,7 +2895,9 @@ int stimStepFrame(double t_ms, double flip_ms, stim_step_result_t *r,
 
   int swap0 = SwapCount;
   app.step_flip_sec = flip_ms >= 0.0 ? flip_ms / 1000.0 : -1.0;
+  app.step_nopresent = !present;
   app.updateDisplay(false);
+  app.step_nopresent = false;
   app.count_frame();
   if (app.step_flip_sec >= 0.0) {   /* NO_SWAP: no swap wait applied it */
     StepClockSec = app.step_flip_sec;
@@ -2893,7 +2906,7 @@ int stimStepFrame(double t_ms, double flip_ms, stim_step_result_t *r,
   }
 
   r->kind = kind;
-  r->swapped = SwapCount != swap0;
+  r->swapped = present && SwapCount != swap0;
   r->swapcount = SwapCount;
   r->ticks_ms = 1000.0 * StepClockSec;
   r->sink_frames = app.sink.frames;
@@ -3632,6 +3645,7 @@ void Application::deliverSwapTags(void)
    is a blending by-product, < 1 wherever anything was blended). */
 void Application::captureFrameGrabs(void)
 {
+  if (step_nopresent) return;   /* grabs take presented frames */
   for (auto &g : frame_grabs) {
     if (g.captured) continue;
     int w = g.w > 0 ? g.w : winWidth;

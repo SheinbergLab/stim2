@@ -72,8 +72,15 @@ one-request-per-frame builder. See `replay.md`, "Frame-locked".
     `stepFrame <eval> <flip>`, on the rig's tick clock, go as one
     request.
 - **Behind.** A 120 Hz rig showing motion makes frames faster than a
-  60 Hz monitor can show them. Only the newest ready frame is drawn,
-  after the inputs of all of them. The others count as "dropped".
+  60 Hz monitor can show them. Every ready frame is still computed, in
+  the same request: updated and drawn, with its scripts run, by
+  `stepFrame -nopresent` (stim2 0.28.7). Only the newest is shown, and the
+  others count as "computed but not shown". This matters to a script that
+  latches state in a particular frame: door sets its run's time zero in
+  its first run frame. With that frame skipped, as before 0.28.7, the
+  whole physics timeline shifted a frame, and a crash could land after
+  `!feedback`. A mirror on an older stim2 computes only the newest
+  frame.
 - **The gaze between frames.** `overlay set gaze ...; frameRepaint` puts
   the gaze over the last frame. This happens once per refresh, `-late` ms
   before the next vsync. A present holds the driver until its vsync, so a
@@ -205,7 +212,7 @@ the rig did. Door steps at dt = 1/240 s, two steps per 120 Hz frame, and a
 crash taken a frame late arrives together with `!feedback`, which ends the
 run first, so the reveal had no X.
 
-Two changes fix it:
+Three changes fix it (the third covers a mirror slower than its rig):
 - stim2 0.28.5 holds the clock for each frame and logs the instant as
   `stim/frame`'s `eval_us` (see `stim-frame.md`). Replay and mirror step
   each frame at it.
@@ -213,6 +220,8 @@ Two changes fix it:
   than half a step cannot move a step between frames. It also times presses
   on the stim clock (`stimClock`) rather than the wall clock, which in a
   replay or mirror would be the mirror's own.
+- stim2 0.28.7's `stepFrame -nopresent` lets the mirror compute every rig
+  frame it falls behind on and show only the newest (see "Behind").
 
 The check on the dev Mac stood in for the rig. A real-time stim2 ran door
 trials 1-10 of `human_runner_door-preview6-go_261027144820.ess`: commands
@@ -228,6 +237,18 @@ each trial's outcome and press steps were compared.
 The press that remains is timed by the datapoint's dserv timestamp on the
 rig clock, an estimate good to about a millisecond. A press within that of
 a step boundary can still land a step apart.
+
+Further runs of the same check:
+
+- **Door script fixes alone.** With replay evaluating at the previous flip
+  and ignoring `eval_us`, all 10 trials matched on outcome and press steps.
+  The door script fixes did the work on door. `eval_us` matters where a
+  frame's instant is far from the previous flip (late-draw rigs compute at
+  flip - budget) or where a script is not hardened against jitter.
+- **Skipped frames.** A replay skipping every other frame, as a 60 Hz
+  mirror of a 120 Hz rig did, matched 4/10 trials. Door's run time zero
+  was set a frame late, and every press step shifted.
+- **Every frame computed, every other one shown** (`-nopresent`): 10/10.
 
 Not yet tried live:
 

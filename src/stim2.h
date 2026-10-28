@@ -296,8 +296,8 @@ int    stimStepMode(void);
 double stimStepClockMs(void);
 int    stimStepModeSet(int on, int have_t, double t_ms, char *err, int errlen);
 int    stimStepClockSet(double t_ms, char *err, int errlen);
-int    stimStepFrame(double t_ms, double flip_ms, stim_step_result_t *r,
-                     char *err, int errlen);
+int    stimStepFrame(double t_ms, double flip_ms, int present,
+                     stim_step_result_t *r, char *err, int errlen);
 int    stimFrameSinkOpen(const char *target, int manual, char *err, int errlen);
 int    stimFrameSinkWrite(int n, char *err, int errlen);
 int    stimFrameSinkClose(int *status);

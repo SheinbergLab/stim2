@@ -130,6 +130,25 @@ ck "frameGrab frame 1 == sink frame 1" [expr {$gbytes eq [string range $data 0 [
 binary scan $data cu4 corner
 ck "background is the set colour ($corner)" [expr {$corner eq {20 40 60 255}}]
 
+# --- stepFrame -nopresent: computed (update, draw, scripts), not shown ----
+set npath [file join [file dirname [info script]] _hl_nopresent.rgba]
+frameSink open $npath
+set nseen [llength $::seen]
+set clk [stepClock]
+set sc0 [dict get [stepFrame [expr {$clk + 10}]] swapcount]
+set r [stepFrame [expr {$clk + 20}] [expr {$clk + 25}] -nopresent]
+ck "-nopresent: swapped 0" [expr {[dict get $r swapped] == 0}]
+ck "-nopresent: swapcount still advances" [expr {[dict get $r swapcount] == $sc0 + 1}]
+ck "-nopresent: the draw ran at the frame's time" \
+    [expr {[llength $::seen] == $nseen + 2 && [near [lindex $::seen end 1] [expr {$clk + 20}]]}]
+ck "-nopresent: clock left at the flip" [near [stepClock] [expr {$clk + 25}]]
+ck "-nopresent: nothing to the sink" [expr {[dict get [frameSink] frames] == 1}]
+set r [stepFrame [expr {$clk + 30}]]
+ck "the next presented frame is shown and written" [expr {[dict get $r swapped] && [dict get [frameSink] frames] == 2}]
+ck "-nopresent alone takes the default time" [expr {![catch {stepFrame -nopresent} r] && ![dict get $r swapped]}]
+frameSink close
+file delete $npath
+
 # --- manual sink: frames are held, written only by "frameSink write n" -------
 set fd [file tempfile mpath headless_manual.rgba]; close $fd
 set s [frameSink open -manual $mpath]

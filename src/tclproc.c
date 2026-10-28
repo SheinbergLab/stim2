@@ -1117,13 +1117,15 @@ static int stepClockCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 /*
- * stepFrame ?t_ms? ?flip_ms?
+ * stepFrame ?t_ms? ?flip_ms? ?-nopresent?
  *   Draw one frame with the clock at t_ms (default: one FrameDuration on
  *   from where it stands), the way the loop would have: a held redraw
  *   draws as is, otherwise a dynamic group steps its objects first.  The
  *   frame goes to the frame sink and frameGrab like any other, and its
  *   post-frame scripts run with the clock at flip_ms (default t_ms), where
- *   the rig's clock stood after its swap.  Returns
+ *   the rig's clock stood after its swap.  -nopresent: all of that but
+ *   the swap, its wait, the sink and frameGrab -- a mirror slower than its
+ *   rig computes every rig frame and presents only the newest.  Returns
  *       kind redraw|update|static swapped 0|1 swapcount <n>
  *       ticks <ms> sink_frames <n>
  */
@@ -1134,8 +1136,10 @@ static int stepFrameCmd(ClientData clientData, Tcl_Interp *interp,
   char err[256];
   stim_step_result_t r;
   Tcl_Obj *d;
+  int present = 1;
+  if (argc > 1 && !strcmp(argv[argc - 1], "-nopresent")) { present = 0; argc--; }
   if (argc > 3) {
-    Tcl_SetResult(interp, "usage: stepFrame ?t_ms? ?flip_ms?", TCL_STATIC);
+    Tcl_SetResult(interp, "usage: stepFrame ?t_ms? ?flip_ms? ?-nopresent?", TCL_STATIC);
     return TCL_ERROR;
   }
   if (argc >= 2) {
@@ -1144,7 +1148,7 @@ static int stepFrameCmd(ClientData clientData, Tcl_Interp *interp,
   else t = stimStepClockMs() + getFrameDuration();
   if (argc == 3 && Tcl_GetDouble(interp, argv[2], &flip) != TCL_OK)
     return TCL_ERROR;
-  if (stimStepFrame(t, flip, &r, err, sizeof(err))) {
+  if (stimStepFrame(t, flip, present, &r, err, sizeof(err))) {
     Tcl_AppendResult(interp, argv[0], ": ", err, NULL);
     return TCL_ERROR;
   }
