@@ -679,6 +679,13 @@ proc report {} {
                  [pct $st(lag) 0.5] [pct $st(lag) 0.95] [pct $st(lag) 1.0] \
                  [pct $st(arr) 0.5] [pct $st(ready) 0.5] [pct $st(draw) 0.5] \
                  $st(timeouts) $st(errors) $st(repaints) [expr {$st(eye) / $dt}]]
+        # a record cannot arrive before its flip: this host's clock is
+        # behind the rig's (chrony still slewing after a boot), and only
+        # ready->present, timed here alone, means anything
+        if {[llength $st(arr)] && [pct $st(arr) 0.5] < -5.0} {
+            log "  NOTE: the clocks disagree by about [format %.0f [expr {-[pct $st(arr) 0.5]}]] ms (this host behind the rig):\
+ the lag is not measurable until they agree (chronyc tracking)"
+        }
     }
     stats_reset
     after [expr {int($opt(report) * 1000)}] report

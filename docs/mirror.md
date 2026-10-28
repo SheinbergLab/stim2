@@ -125,8 +125,8 @@ This does the following:
   use the X server on vt1):
   - `stim2-mirror-display.service`: `xinit` with
     `tools/mirror/start-stim2-mirror.sh`, which runs stim2 `-F` at the
-    monitor's own refresh on ports 5610–5613, as `stim`, after chrony
-    settles;
+    monitor's own refresh on ports 5610–5613, as `stim`. Unlike
+    `stim2.service` it does not wait for chrony.
   - `stim2-mirror.service`: the driver, as `stim`, restarted if it exits.
 
 Watch it:
@@ -183,11 +183,23 @@ Checked on the dev Mac and on the N305:
 - **On the box's monitor**, the mirror is fullscreen, with the fixation
   target stepping through the 9 points and the gaze over it.
 
+- **A reboot of the box.** It came up into the mirror, joined, and
+  followed the next session: 13 frames, 0 errors. Xorg started about 65 s
+  after boot. The display unit still waited on `chronyc waitsync` then,
+  as `stim2.service` does, and the console showed meanwhile. The unit no
+  longer waits.
+
+After that boot, chrony had the box 0.34 s behind and was slewing slowly,
+so flip→present read −322 ms. A record cannot arrive before its flip, so
+the report now says when the clocks disagree by more than 5 ms. Until
+they agree, only ready→present (13.5 ms, timed on the box alone) is a
+lag. `makestep` in `chrony.conf`, or PTP (below), would close this after
+a boot.
+
 Not yet tried live:
 
 - the door protocol (bound streams, continuous motion);
-- a restart of the rig's stim2 process;
-- a reboot of the box.
+- a restart of the rig's stim2 process.
 
 ## VAAPI
 

@@ -10,8 +10,11 @@ After=chrony.service chronyd.service
 [Service]
 Type=simple
 User=stim
-# the lag the driver reports compares this host's clock with the rig's
-ExecStartPre=-/usr/bin/chronyc waitsync 60 0.001 0 1
+# No chronyc waitsync, unlike stim2.service: the mirror draws the same
+# whatever the clock says, and after a boot the wait (up to 60 s, until
+# chrony settles) only kept the monitor on the console. The lag the driver
+# reports compares this host's clock with the rig's, so its first minutes
+# after a boot can be off by the clock's initial error.
 ExecStart=/usr/bin/xinit /usr/local/stim2/tools/mirror/start-stim2-mirror.sh -- :0 vt1 -keeptty -noreset -s 0 -dpms -nocursor
 Restart=always
 RestartSec=5
