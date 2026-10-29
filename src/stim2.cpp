@@ -83,6 +83,8 @@ static int MainWin = 0;
 static void do_wakeup(void);
 static Tcl_ThreadId RenderThread = 0;   /* stimSend refuses to wait on itself */
 static int Stimsend_Init(Tcl_Interp *interp);
+static int stimMirrorCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+static void drawMirrorSection(void);
 
 static int MessageLoop(void);
 static void drawGroup(OBJ_GROUP *g);
@@ -2142,10 +2144,15 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
     glReadBuffer(drawnBuffer());
     overlayDraw(winWidth, winHeight, HALF_SCREEN_DEG_X, HALF_SCREEN_DEG_Y);
     sinkFrame();
+    /* the imgui panel, as updateDisplay draws it: a mirror's gaze
+       repaints would otherwise blank it between rig frames */
+    if (show_imgui && ImGui::GetDrawData()) ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     presentFrame();
     if (!Headless) swapsyncAfterSwap();
+    last_repaint = glfwGetTime();
     return true;
   }
+  double last_repaint = 0.0;    /* glfwGetTime() of the last frameRepaint */
 
   /* stepFrame bookkeeping: a redraw asked for while stepped is held here
      for the next stepFrame instead of drawing at once, and the flip time
@@ -2425,6 +2432,9 @@ proc screen_config {} {
     // Add objid <-> name table support
     OL_NAMEINFO(OBJList) = objNameInitCommands(interp, OBJList);
     
+
+    // stimMirror: this stim2 as a live mirror of a rig (mirror.cpp)
+    Tcl_CreateObjCommand(interp, "stimMirror", stimMirrorCmd, NULL, NULL);
 
     // Override puts command
     Tcl_Eval(interp, "rename puts _puts");
@@ -3120,6 +3130,157 @@ static void mirrorDrain(void)
 static void mirrorStopAtExit(void) { mirrorStop(mirrorDrain); }
 
 /*
+ * stimMirror HOST ?options?   mirror the rig whose dserv is HOST (mirror.tcl
+ *                             options: -eye, -trail, -report, ...)
+ * stimMirror stop             stop, and leave an ordinary, unstepped stim2
+ * stimMirror                  status: running 0|1, and the driver's dserv,
+ *                             mode, load, lag (::stim2_mirror_status)
+ * stimMirror discover ?ms?    the dservs on this link, by mDNS (a list of
+ *                             dicts: name host port and TXT keys); waits ms
+ * stimMirror discover_async ?ms?   the same into ::mirror::found
+ *
+ * A stim2 that ESS has configured for a rig (its live prelude set
+ * ::dservhost) is that rig's display and is refused: ESS's commands and a
+ * mirror's would interleave.  One in playback, or never configured, is free.
+ */
+static const char *MirrorStopCleanup = R"tcl(
+  catch {stepMode 0}
+  catch {overlay clear}
+  catch {package require stimess; stim::prelude playback}
+  catch {resetObjList}
+  catch {glistInit 1}
+  catch {setWindowTitle stim2}
+  catch {redraw}
+  unset -nocomplain ::stim2_mirror_status
+)tcl";
+
+static int stimMirrorCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
+{
+  static bool atexit_set = false, discover_loaded = false;
+  if (objc == 1) {
+    std::string s = std::string("dict merge [dict create running ") +
+      (mirrorRunning() ? "1" : "0") +
+      "] [expr {[info exists ::stim2_mirror_status] ? $::stim2_mirror_status : {}}]";
+    return Tcl_Eval(interp, s.c_str());
+  }
+  const char *sub = Tcl_GetString(objv[1]);
+  if (!strcmp(sub, "stop")) {
+    if (!mirrorRunning()) { Tcl_SetResult(interp, (char *) "not mirroring", TCL_STATIC); return TCL_OK; }
+    mirrorStop(mirrorDrain);
+    Tcl_Eval(interp, MirrorStopCleanup);
+    Tcl_SetResult(interp, (char *) "stopped", TCL_STATIC);
+    return TCL_OK;
+  }
+  if (!strcmp(sub, "discover") || !strcmp(sub, "discover_async")) {
+    if (!discover_loaded) {
+      if (Tcl_Eval(interp, mirrorDiscoverScript()) != TCL_OK) return TCL_ERROR;
+      discover_loaded = true;
+    }
+    Tcl_Obj *cmd = Tcl_NewListObj(0, NULL);
+    Tcl_IncrRefCount(cmd);
+    Tcl_ListObjAppendElement(interp, cmd, Tcl_NewStringObj(
+      !strcmp(sub, "discover") ? "::mirror::discover" : "::mirror::discover_async", -1));
+    for (int i = 2; i < objc; i++) Tcl_ListObjAppendElement(interp, cmd, objv[i]);
+    int rc = Tcl_EvalObjEx(interp, cmd, TCL_EVAL_GLOBAL);
+    Tcl_DecrRefCount(cmd);
+    return rc;
+  }
+  if (mirrorRunning()) {
+    Tcl_AppendResult(interp, "stimMirror: already mirroring; stimMirror stop first", NULL);
+    return TCL_ERROR;
+  }
+  const char *dh = Tcl_GetVar2(interp, "dservhost", NULL, TCL_GLOBAL_ONLY);
+  if (dh && *dh) {
+    Tcl_AppendResult(interp, "stimMirror: this stim2 is a rig's display (ESS configured it for the dserv at ",
+                     dh, "); a mirror's commands would interleave with ESS's", NULL);
+    return TCL_ERROR;
+  }
+  Tcl_Obj *spec = Tcl_NewListObj(objc - 1, objv + 1);
+  Tcl_IncrRefCount(spec);
+  std::string specs = Tcl_GetString(spec);
+  Tcl_DecrRefCount(spec);
+  if (Tcl_Eval(interp, "list $::auto_path [tcl::tm::path list]") != TCL_OK) return TCL_ERROR;
+  std::string paths = Tcl_GetStringResult(interp);
+  int rc = mirrorStart(specs.c_str(), paths.c_str(), Stimsend_Init);
+  if (rc == -2) {
+    Tcl_SetResult(interp, (char *) "stimMirror: an earlier mirror thread would not stop; restart stim2", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  if (!atexit_set) { atexit(mirrorStopAtExit); atexit_set = true; }
+  Tcl_ResetResult(interp);
+  Tcl_AppendResult(interp, "mirroring ", Tcl_GetString(objv[1]), NULL);
+  return TCL_OK;
+}
+
+/* The imgui panel's "Mirror a rig" section: the rigs mDNS finds, a host
+   field, Mirror / Stop, and the driver's status. */
+static void drawMirrorSection(void)
+{
+  static char host[128] = "";
+  static std::string msg;
+  Tcl_Interp *interp = OurInterp;
+  auto start = [&](const char *h) {
+    Tcl_Obj *cmd = Tcl_NewListObj(0, NULL);
+    Tcl_IncrRefCount(cmd);
+    Tcl_ListObjAppendElement(interp, cmd, Tcl_NewStringObj("stimMirror", -1));
+    Tcl_ListObjAppendElement(interp, cmd, Tcl_NewStringObj(h, -1));
+    msg = Tcl_EvalObjEx(interp, cmd, TCL_EVAL_GLOBAL) == TCL_OK ? "" : Tcl_GetStringResult(interp);
+    Tcl_DecrRefCount(cmd);
+  };
+  if (mirrorRunning()) {
+    const char *q = R"tcl(
+      if {![info exists ::stim2_mirror_status]} { return "starting" }
+      set d $::stim2_mirror_status
+      set s "[dict get $d dserv]: [dict get $d mode]"
+      if {[dict get $d load] ne ""} { append s "  ([dict get $d load])" }
+      if {[dict exists $d lag_p50] && [dict get $d lag_p50] ne "-"} {
+        append s "
+lag [dict get $d lag_from]->present p50 [dict get $d lag_p50] ms, p95 [dict get $d lag_p95] ms"
+      }
+      set s)tcl";
+    ImGui::TextUnformatted(Tcl_Eval(interp, q) == TCL_OK ? Tcl_GetStringResult(interp) : "mirroring");
+    if (ImGui::Button("Stop mirroring")) {
+      msg = Tcl_Eval(interp, "stimMirror stop") == TCL_OK ? "" : Tcl_GetStringResult(interp);
+    }
+  }
+  else {
+    ImGui::SetNextItemWidth(260);
+    bool enter = ImGui::InputTextWithHint("##mirrorhost", "rig's dserv host", host, sizeof(host),
+                                          ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    if ((ImGui::Button("Mirror") || enter) && host[0]) start(host);
+    ImGui::SameLine();
+    bool browsing = Tcl_Eval(interp, "expr {[namespace exists ::mirror] && $::mirror::browsing}") == TCL_OK &&
+      !strcmp(Tcl_GetStringResult(interp), "1");
+    if (ImGui::Button(browsing ? "Searching..." : "Find rigs") && !browsing) {
+      msg = Tcl_Eval(interp, "stimMirror discover_async") == TCL_OK ? "" : Tcl_GetStringResult(interp);
+    }
+    const char *rows = R"tcl(
+      if {![namespace exists ::mirror]} { return {} }
+      lmap r $::mirror::found {
+        list [dict get $r host] "[dict get $r name]  ([dict get $r host][expr {[dict exists $r ver] ? ", dserv [dict get $r ver]" : ""}])"
+      })tcl";
+    if (Tcl_Eval(interp, rows) == TCL_OK) {
+      Tcl_Obj *res = Tcl_GetObjResult(interp);
+      Tcl_IncrRefCount(res);
+      Tcl_Size n = 0; Tcl_Obj **items = NULL;
+      if (Tcl_ListObjGetElements(NULL, res, &n, &items) == TCL_OK) {
+        for (Tcl_Size i = 0; i < n; i++) {
+          Tcl_Size m = 0; Tcl_Obj **hl = NULL;
+          if (Tcl_ListObjGetElements(NULL, items[i], &m, &hl) != TCL_OK || m != 2) continue;
+          ImGui::PushID((int) i);
+          if (ImGui::Button(Tcl_GetString(hl[1]))) start(Tcl_GetString(hl[0]));
+          ImGui::PopID();
+        }
+      }
+      Tcl_DecrRefCount(res);
+    }
+  }
+  if (!msg.empty()) ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", msg.c_str());
+  Tcl_ResetResult(interp);
+}
+
+/*
  * stimLateDraw backing (tclproc.c).  All on the render thread: the Tcl
  * interpreter runs there, and the scheduler state is plain data.
  */
@@ -3650,6 +3811,10 @@ void Application::processImgui(void)
 
   if (ImGui::Begin("Stim2 Diagnostics", nullptr, flags)) {
     diagDrawSections();
+
+    ImGui::Separator();
+    if (ImGui::CollapsingHeader("Mirror a rig", ImGuiTreeNodeFlags_DefaultOpen))
+      drawMirrorSection();
 
     ImGui::Separator();
     ImGui::Text("%.1f FPS  |  %d frames", io.Framerate, total_frames);
@@ -4631,16 +4796,12 @@ main(int argc, char *argv[]) {
     }
   }
 
-  /* --mirror: the live-mirror driver in a thread of its own (mirror.cpp),
-     once the startup files have set the package paths it inherits */
+  /* --mirror "HOST ?options?": stimMirror once the startup files have set
+     the package paths the driver's thread inherits */
   if (mirror_spec) {
-    if (Tcl_Eval(OurInterp, "list $::auto_path [tcl::tm::path list]") != TCL_OK ||
-        mirrorStart(mirror_spec, Tcl_GetStringResult(OurInterp), Stimsend_Init) != 0) {
-      std::cerr << "stim2: --mirror could not start" << std::endl;
-    }
-    else {
-      atexit(mirrorStopAtExit);
-    }
+    Tcl_SetVar2(OurInterp, "stim2_mirror_spec", NULL, mirror_spec, TCL_GLOBAL_ONLY);
+    if (Tcl_Eval(OurInterp, "stimMirror {*}$::stim2_mirror_spec") != TCL_OK)
+      std::cerr << "stim2: --mirror: " << Tcl_GetStringResult(OurInterp) << std::endl;
     Tcl_ResetResult(OurInterp);
   }
 
@@ -4703,13 +4864,19 @@ main(int argc, char *argv[]) {
 
     glfwPollEvents();
     
-    app.processTclCommands();
+    int nreq = app.processTclCommands();
     app.processDSCommands();
     app.processWebSocketCommands(); 
     app.processTimerFuncs();
 
-    if (app.show_imgui)
+    if (app.show_imgui) {
       app.processImgui();
+      /* Stepped, only stepFrame draws: with the panel open and no request
+         this pass, show it again over the last scene at most every 50 ms,
+         so it stays live (a mirror's "Stop") while the rig is idle */
+      if (StepMode && !nreq && glfwGetTime() - app.last_repaint > 0.05)
+        app.frameRepaint();
+    }
 
     updated_display = app.processMessages(app.wait_for_swap);
     animEventPending = 0;

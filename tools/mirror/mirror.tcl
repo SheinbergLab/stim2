@@ -573,6 +573,19 @@ proc to_waiting {m reason} {
     set queue {}; set P ""
     log "$m: $reason"
     show_waiting
+    publish_status
+}
+
+# Inside stim2 (-inproc), the driver's state as stim2's ::stim2_mirror_status,
+# which `stimMirror` (no args) and the imgui panel show: the rig, mode,
+# why, the load, and the last report's lag and counts.
+set last_report [dict create]
+proc publish_status {} {
+    global opt mode why rig sock last_report
+    if {!$opt(inproc) || $sock eq ""} return
+    set d [dict create dserv $opt(dserv) mode $mode why $why load $rig(load) \
+               updated [clock seconds] {*}$last_report]
+    catch { framelock::send $sock [list set ::stim2_mirror_status $d] }
 }
 
 # a trial boundary: from waiting-for-a-trial, set up and start drawing
@@ -605,6 +618,7 @@ proc boundary {ts what} {
     set mode run
     set stepped 0
     log "run from the $what: set up in [format %.0f [expr {([now_us] - $t0) / 1000.0}]] ms"
+    publish_status
 }
 
 # ---------------------------------------------------------------------------
@@ -826,6 +840,11 @@ proc report {} {
  the lag is not measurable until they agree (chronyc tracking)"
         }
     }
+    set ::last_report [dict create shown $st(drawn) behind $st(dropped) errors $st(errors) \
+                           lag_from [expr {$st(noflip) ? "receipt" : "flip"}] \
+                           lag_p50 [pct $st(lag) 0.5] lag_p95 [pct $st(lag) 0.95] \
+                           eye_hz [format %.0f [expr {$st(eye) / $dt}]]]
+    publish_status
     stats_reset
     after [expr {int($opt(report) * 1000)}] report
 }

@@ -27,7 +27,33 @@ and from 0.28.8 `stim2.app/Contents/Resources/tools` in the Mac app
 
     dlsh /Applications/stim2.app/Contents/Resources/tools/mirror/mirror.tcl -dserv HOST -launch
 
-### One program: `stim2 --mirror`
+### One program: `stimMirror` and `stim2 --mirror`
+
+Any stim2 can become a mirror and go back, with no restart:
+
+    stimMirror 192.168.88.40 ?options?   ;# mirror that rig (mirror.tcl's options)
+    stimMirror                           ;# status: running, dserv, mode, load, lag
+    stimMirror stop                      ;# back to an ordinary, unstepped stim2
+    stimMirror discover ?ms?             ;# the dservs on this link, by mDNS
+
+- **`stim2 --mirror "HOST ?options?"`** is `stimMirror` run once the
+  startup files have.
+- **The imgui panel** (right-click) has a "Mirror a rig" section. It
+  lists the rigs found by mDNS and has a host field, Mirror and Stop
+  buttons, and the status. While mirroring, the panel stays live: gaze
+  repaints draw it, and when the rig is idle a stepped stim2 shows it
+  again every 50 ms.
+- **The ESS guard.** A stim2 that ESS has configured for a rig is that
+  rig's display: its live prelude set `::dservhost`. `stimMirror`
+  refuses it, because ESS's commands and the mirror's would interleave.
+- **After `stop`,** the stim2 is unstepped, with the overlay cleared and
+  in playback (nothing subscribed). The next `configure_stim` from ESS
+  starts from its usual clean slate.
+- **Discovery.** Every dserv advertises `_dserv._tcp` through the host's
+  mDNS responder (dserv `docs/discovery.md`). stim2 browses with the
+  system's own tool: `dns-sd` on a Mac, `avahi-browse` (avahi-utils) on
+  Linux. `tools/mirror/discover.tcl` does it standalone too.
+
 
     stim2 -w 960 -h 540 --port-base 5610 --mirror "192.168.88.40 ?options?"
 

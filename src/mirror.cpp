@@ -37,11 +37,14 @@
 static std::thread MirrorThread;
 static std::atomic<bool> Stopping{false};
 static std::atomic<bool> Done{false};
-static std::atomic<bool> Started{false};
-static Tcl_ThreadId MirrorTclThread = nullptr;
+static std::atomic<bool> Running{false};     /* started and not yet stopped */
+static std::atomic<bool> Wedged{false};      /* a thread that would not stop was left */
+static std::atomic<Tcl_ThreadId> MirrorTclThread{nullptr};
 static Tcl_Interp *MirrorInterp = nullptr;    /* used on the mirror thread only */
 
 int mirrorStopping(void) { return Stopping.load() ? 1 : 0; }
+int mirrorRunning(void) { return Running.load() ? 1 : 0; }
+const char *mirrorDiscoverScript(void) { return (const char *) embed_discover_tcl; }
 
 /* on the mirror thread: end the driver's `vwait forever` */
 static int stopEventProc(Tcl_Event *, int)
@@ -102,7 +105,12 @@ static void mirrorMain(std::string spec, std::string paths, std::string tools,
 
 int mirrorStart(const char *spec, const char *paths, Tcl_LibraryInitProc *sendInit)
 {
-  if (Started.exchange(true)) return -1;
+  if (Running.load()) return -1;
+  if (Wedged.load()) return -2;      /* the last thread may still be running */
+  Stopping = false;
+  Done = false;
+  MirrorTclThread = nullptr;
+  Running = true;
   const char *t = getenv("STIM2_TOOLS");
   MirrorThread = std::thread(mirrorMain, std::string(spec), std::string(paths ? paths : ""),
                              std::string(t ? t : ""), sendInit);
@@ -111,23 +119,27 @@ int mirrorStart(const char *spec, const char *paths, Tcl_LibraryInitProc *sendIn
 
 void mirrorStop(void (*drain)(void))
 {
-  if (!Started.load() || !MirrorThread.joinable()) return;
+  if (!Running.load() || !MirrorThread.joinable()) return;
   Stopping = true;
-  if (drain) drain();
-  if (!Done.load() && MirrorTclThread) {
-    Tcl_Event *ev = (Tcl_Event *) Tcl_Alloc(sizeof(Tcl_Event));
-    ev->proc = stopEventProc;
-    ev->nextPtr = nullptr;
-    Tcl_ThreadQueueEvent(MirrorTclThread, ev, TCL_QUEUE_TAIL);
-    Tcl_ThreadAlert(MirrorTclThread);
-  }
+  bool posted = false;
   for (int i = 0; i < 100 && !Done.load(); i++) {
+    if (drain) drain();       /* answer what it queued for the render thread */
+    Tcl_ThreadId tid = MirrorTclThread.load();
+    if (!posted && tid) {     /* set as soon as the thread has begun */
+      Tcl_Event *ev = (Tcl_Event *) Tcl_Alloc(sizeof(Tcl_Event));
+      ev->proc = stopEventProc;
+      ev->nextPtr = nullptr;
+      Tcl_ThreadQueueEvent(tid, ev, TCL_QUEUE_TAIL);
+      Tcl_ThreadAlert(tid);
+      posted = true;
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    if (drain) drain();       /* a request queued just before Stopping */
   }
   if (Done.load()) MirrorThread.join();
   else {
     fprintf(stderr, "mirror: the driver thread did not stop; leaving it to the exit\n");
     MirrorThread.detach();
+    Wedged = true;
   }
+  Running = false;
 }
