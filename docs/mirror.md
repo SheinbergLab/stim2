@@ -102,7 +102,7 @@ mirror's stim2 must not be the one ESS drives: ESS uses 4612, the mirror
 | `-eye NAME` | the gaze datapoint in degrees (default `eyetracking/position`; `off` for none) |
 | `-trail MS` | gaze trail length (default 100) |
 | `-hold MS` | keep the gaze up this long without a new sample (default 500) |
-| `-touch on\|off` | draw ESS's touches (`ess/touch_press_deg`, `ess/touch_release_deg`) on the overlay (default on) |
+| `-touch on\|off` | draw ESS's touches (`ess/touch_press`, `_drag`, `_release`) on the overlay (default on) |
 | `-late MS` | repaint the gaze this long before the next vsync (default 5) |
 | `-report S` | log the frame counts and lag every S seconds (default 10) |
 | `-verbose` | log every frame's commands |
@@ -218,9 +218,12 @@ one-request-per-frame builder. See `replay.md`, "Frame-locked".
   machine's adds a constant: 51 ms against a local dserv on a Mac that had
   been running for hours, the same on any thread or process.
 - **Touch,** like the gaze, is on the overlay: a disc where the finger
-  is from press to release, then a fainter one at the release point for
-  300 ms. ESS publishes touches in degrees, inside observation periods
-  only.
+  is from press to release (following a drag), then a fainter one at the
+  release point for 300 ms. The mirror reads ESS's pixel touches
+  (`ess/touch_press`, `_drag`, `_release`), published for every touch,
+  and maps them to degrees by the rig's screen geometry. The `_deg`
+  versions exist only inside observation periods, and only after a
+  protocol has set up touch windows.
 - **What the overlay shows** is switched in the imgui panel while
   mirroring (Gaze, Touch). The switches set
   `::stim2_mirror_show(gaze|touch)`, which the driver's overlay commands

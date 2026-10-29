@@ -34,8 +34,8 @@
 #       -eye NAME      the gaze datapoint, degrees (default
 #                      eyetracking/position; "off" for none)
 #       -trail MS      gaze trail length (default 100)
-#       -touch on|off  draw ESS's touches (ess/touch_press_deg,
-#                      ess/touch_release_deg) on the overlay (default on)
+#       -touch on|off  draw ESS's touches (ess/touch_press, _drag, _release,
+#                      in the rig's pixels) on the overlay (default on)
 #       -hold MS       keep the gaze up this long without a new sample
 #                      (default 500)
 #       -report S      print the lag and frame counts every S s (default 10)
@@ -532,7 +532,7 @@ proc ds_join {} {
     set base {stim/script stim/lib/* stim/bind stim/cmd stim/frame stimdg
         ess/screen_* ess/in_obs ess/status ess/rmt_connected ess/system ess/protocol ess/variant}
     if {$opt(eye) ne "off"} { lappend base $opt(eye) }
-    if {$opt(touch) ne "off"} { lappend base ess/touch_press_deg ess/touch_release_deg }
+    if {$opt(touch) ne "off"} { lappend base ess/touch_press ess/touch_drag ess/touch_release }
     follow $base
     # current values
     foreach n {ess/system ess/protocol ess/variant ess/rmt_connected ess/status ess/in_obs
@@ -674,10 +674,20 @@ proc on_dp {name type ts data} {
             return
         }
     }
-    if {$name in {ess/touch_press_deg ess/touch_release_deg}} {
-        lassign [string trim $data] x y
-        if {[string is double -strict $x] && [string is double -strict $y]} {
-            set ::touch [list [expr {$name eq "ess/touch_press_deg" ? "press" : "release"}] $x $y [now_us]]
+    if {$name in {ess/touch_press ess/touch_drag ess/touch_release}} {
+        # ESS's touches in the rig's screen pixels, published for every touch
+        # (the _deg versions only inside observation periods, and only once
+        # a protocol has set up touch windows); to degrees by the rig's
+        # geometry, as ESS's touch_pixels_to_deg maps them
+        lassign [string trim $data] px py
+        set g $rig(geom)
+        if {[string is double -strict $px] && [string is double -strict $py] &&
+            [dict exists $g w] && [dict exists $g h] && [dict exists $g halfx] && [dict exists $g halfy] &&
+            [dict get $g w] > 0 && [dict get $g h] > 0} {
+            set hw [expr {[dict get $g w] / 2.0}]; set hh [expr {[dict get $g h] / 2.0}]
+            set x [expr {($px - $hw) / $hw * [dict get $g halfx]}]
+            set y [expr {($hh - $py) / $hh * [dict get $g halfy]}]
+            set ::touch [list [expr {$name eq "ess/touch_release" ? "release" : "press"}] $x $y [now_us]]
         }
         return
     }
@@ -1041,9 +1051,9 @@ proc gaze_cmd_now {} {
 }
 proc gaze_hidden {g} { string match "overlay set gaze -show 0*" $g }
 
-# a touch: a disc where the finger is, from the press to the release (3 s
-# at most: ESS publishes touches inside observation periods only), then a
-# fainter one at the release point for 300 ms
+# a touch: a disc where the finger is, from the press (following a drag)
+# to the release (3 s at most without news), then a fainter one at the
+# release point for 300 ms
 proc touch_cmd_now {} {
     global touch
     if {$touch eq ""} { return "overlay set touch -show 0" }
