@@ -3239,6 +3239,23 @@ lag [dict get $d lag_from]->present p50 [dict get $d lag_p50] ms, p95 [dict get 
       }
       set s)tcl";
     ImGui::TextUnformatted(Tcl_Eval(interp, q) == TCL_OK ? Tcl_GetStringResult(interp) : "mirroring");
+    /* what the overlay shows over the rig's stimulus: the driver's overlay
+       commands check ::stim2_mirror_show(gaze|touch) (::mirror_shows) */
+    static const char *kinds[][3] = {
+      {"gaze",  "Gaze",  "catch {overlay set gaze -show 0}; catch {overlay set gaze_trail -show 0}"},
+      {"touch", "Touch", "catch {overlay set touch -show 0}"}};
+    for (int k = 0; k < 2; k++) {
+      const char *v = Tcl_GetVar2(interp, "stim2_mirror_show", kinds[k][0], TCL_GLOBAL_ONLY);
+      bool on = !v || strcmp(v, "0");
+      if (k) ImGui::SameLine();
+      if (ImGui::Checkbox(kinds[k][1], &on)) {
+        Tcl_SetVar2(interp, "stim2_mirror_show", kinds[k][0], on ? "1" : "0", TCL_GLOBAL_ONLY);
+        if (!on) {             /* off now, not at the next update */
+          Tcl_Eval(interp, kinds[k][2]);
+          Tcl_Eval(interp, "if {[catch {frameRepaint}]} {catch {redraw}}");
+        }
+      }
+    }
     if (ImGui::Button("Stop mirroring")) {
       msg = Tcl_Eval(interp, "stimMirror stop") == TCL_OK ? "" : Tcl_GetStringResult(interp);
     }

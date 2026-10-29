@@ -34,6 +34,8 @@
 #       -eye NAME      the gaze datapoint, degrees (default
 #                      eyetracking/position; "off" for none)
 #       -trail MS      gaze trail length (default 100)
+#       -touch on|off  draw ESS's touches (ess/touch_press_deg,
+#                      ess/touch_release_deg) on the overlay (default on)
 #       -hold MS       keep the gaze up this long without a new sample
 #                      (default 500)
 #       -report S      print the lag and frame counts every S s (default 10)
@@ -98,6 +100,7 @@ set opt(live)    0
 set opt(wait)    50
 set opt(eye)     eyetracking/position
 set opt(trail)   100
+set opt(touch)   on
 set opt(hold)    500
 set opt(report)  10
 set opt(late)    5
@@ -122,6 +125,7 @@ while {[llength $args]} {
         -wait    { set opt(wait)  [lindex $args 0]; set args [lrange $args 1 end] }
         -eye     { set opt(eye)   [lindex $args 0]; set args [lrange $args 1 end] }
         -trail   { set opt(trail) [lindex $args 0]; set args [lrange $args 1 end] }
+        -touch   { set opt(touch) [lindex $args 0]; set args [lrange $args 1 end] }
         -hold    { set opt(hold)  [lindex $args 0]; set args [lrange $args 1 end] }
         -report  { set opt(report) [lindex $args 0]; set args [lrange $args 1 end] }
         -late    { set opt(late)  [lindex $args 0]; set args [lrange $args 1 end] }
@@ -199,7 +203,9 @@ set clock_ms 0              ;# the mirror's stepped clock
 set prevflip 0
 set offs {}                 ;# recent ticks_us - dserv ts, for tick_off
 set gaze {}                 ;# {t_us x y} newest last
-set gaze_shown ""
+set gaze_shown ""         ;# the overlay commands last sent (gaze, touch)
+set gaze_last ""          ;# the gaze part of them, for counting hides
+set touch ""              ;# {press|release x y arrival_us}, "" for none
 set last_present 0
 set period_ms 16.667        ;# the mirror display's refresh period
 set pump_after ""
@@ -526,6 +532,7 @@ proc ds_join {} {
     set base {stim/script stim/lib/* stim/bind stim/cmd stim/frame stimdg
         ess/screen_* ess/in_obs ess/status ess/rmt_connected ess/system ess/protocol ess/variant}
     if {$opt(eye) ne "off"} { lappend base $opt(eye) }
+    if {$opt(touch) ne "off"} { lappend base ess/touch_press_deg ess/touch_release_deg }
     follow $base
     # current values
     foreach n {ess/system ess/protocol ess/variant ess/rmt_connected ess/status ess/in_obs
@@ -667,6 +674,13 @@ proc on_dp {name type ts data} {
             return
         }
     }
+    if {$name in {ess/touch_press_deg ess/touch_release_deg}} {
+        lassign [string trim $data] x y
+        if {[string is double -strict $x] && [string is double -strict $y]} {
+            set ::touch [list [expr {$name eq "ess/touch_press_deg" ? "press" : "release"}] $x $y [now_us]]
+        }
+        return
+    }
     if {$name eq $opt(eye)} {
         if {[binary scan [binary decode base64 $data] f2 v] == 1 && [llength $v] == 2} {
             lappend ::gaze [list [now_us] $ts {*}$v]
@@ -771,6 +785,11 @@ proc stim_connect {} {
  ([expr {$::nopresent ? "computes every rig frame" : "no -nopresent: computes only the newest frame when behind"}]),\
  [framelock::send $s {screen_set WinWidth}]x[framelock::send $s {screen_set WinHeight}]"
     if {$opt(eye) ne "off"} { framelock::send $sock [framelock::gaze_style] }
+    framelock::send $sock {overlay set touch -size 1.2 -color {0.25 0.85 1 0.85} -show 0}
+    # what the stim2 shows of the overlay, switched in its imgui panel
+    # (::stim2_mirror_show(gaze|touch)); checked where the commands run,
+    # so a switch needs nothing from the driver
+    framelock::send $sock {proc ::mirror_shows {k} { expr {![info exists ::stim2_mirror_show($k)] || $::stim2_mirror_show($k)} }}
     return 1
 }
 # a request; a lost stim2 drops back to waiting (reconnected at the next try)
@@ -1021,35 +1040,65 @@ proc gaze_cmd_now {} {
     framelock::gaze_cmd [list $x $y] $trail
 }
 proc gaze_hidden {g} { string match "overlay set gaze -show 0*" $g }
+
+# a touch: a disc where the finger is, from the press to the release (3 s
+# at most: ESS publishes touches inside observation periods only), then a
+# fainter one at the release point for 300 ms
+proc touch_cmd_now {} {
+    global touch
+    if {$touch eq ""} { return "overlay set touch -show 0" }
+    lassign $touch kind x y t
+    set age [expr {([now_us] - $t) / 1000.0}]
+    if {($kind eq "press" && $age > 3000) || ($kind eq "release" && $age > 300)} {
+        set touch ""
+        return "overlay set touch -show 0"
+    }
+    set alpha [expr {$kind eq "press" ? 0.85 : 0.35}]
+    return "overlay set touch -show 1 -points {[format %.3f $x] [format %.3f $y]} -color {0.25 0.85 1 $alpha}"
+}
+
+# The overlay as it should be now -- gaze and touch, each only if this
+# stim2 shows it (::mirror_shows) -- and the gaze part alone
+proc overlay_now {} {
+    global opt
+    set g ""; set s ""
+    if {$opt(eye) ne "off"} {
+        set g [gaze_cmd_now]
+        append s "if {\[::mirror_shows gaze\]} {$g} else {overlay set gaze -show 0; overlay set gaze_trail -show 0}\n"
+    }
+    if {$opt(touch) ne "off"} {
+        append s "if {\[::mirror_shows touch\]} {[touch_cmd_now]} else {overlay set touch -show 0}\n"
+    }
+    list $s $g
+}
 proc gaze_pre {} {
-    global opt gaze_shown
-    if {$opt(eye) eq "off"} { return "" }
-    set g [gaze_cmd_now]
-    if {$g eq $gaze_shown} { return "" }
-    if {[gaze_hidden $g] && ![gaze_hidden $gaze_shown]} { incr ::st(hides) }
-    set gaze_shown $g
-    return "$g\n"
+    global gaze_shown gaze_last
+    lassign [overlay_now] o g
+    if {$o eq $gaze_shown} { return "" }
+    if {[gaze_hidden $g] && ![gaze_hidden $gaze_last]} { incr ::st(hides) }
+    set gaze_shown $o; set gaze_last $g
+    return $o
 }
 proc gaze_repaint {} {
-    global opt gaze_shown sock
-    if {$opt(eye) eq "off" || $sock eq ""} return
-    set g [gaze_cmd_now]
-    if {$g eq $gaze_shown} return
+    global gaze_shown gaze_last sock
+    if {$sock eq ""} return
+    lassign [overlay_now] o g
+    if {$o eq "" || $o eq $gaze_shown} return
     # frameRepaint needs a frame drawn with the overlay up; until then the
-    # next frame shows the gaze
-    if {[catch {stim "$g\nframeRepaint"} r]} return
+    # next frame shows it
+    if {[catch {stim "${o}frameRepaint"} r]} return
     if {![framelock::is_error $r]} {
-        if {[gaze_hidden $g] && ![gaze_hidden $gaze_shown]} { incr ::st(hides) }
-        set gaze_shown $g
+        if {[gaze_hidden $g] && ![gaze_hidden $gaze_last]} { incr ::st(hides) }
+        set gaze_shown $o; set gaze_last $g
         presented [now_us]
         incr ::st(repaints)
     } elseif {![string match "*empty*" $r]} {
-        set gaze_shown $g
+        set gaze_shown $o; set gaze_last $g
     } elseif {!$::stepped} {
         # nothing kept to repaint over yet (waiting, unstepped): draw.
         # Stepped, a redraw would be held and turn the next rig frame's
-        # update into a plain redraw; the next frame carries the gaze.
-        if {![catch {stim "$g\nredraw"}]} { set gaze_shown $g }
+        # update into a plain redraw; the next frame carries the overlay.
+        if {![catch {stim "${o}redraw"}]} { set gaze_shown $o; set gaze_last $g }
     }
 }
 # The gaze moves between rig frames: repaint it once a refresh, LATE in
