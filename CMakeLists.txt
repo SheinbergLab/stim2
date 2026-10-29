@@ -207,7 +207,14 @@ while(MIRROR_EMBED_SRC)
     string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _hex "${_hex}")
     string(APPEND _mirror_embed "/* ${_file} */\nstatic const unsigned char embed_${_name}_tcl[] = {${_hex}0x00};\n")
 endwhile()
-file(CONFIGURE OUTPUT ${MIRROR_EMBED_H} CONTENT "${_mirror_embed}" @ONLY)
+# written only when it changed, so an unrelated reconfigure rebuilds nothing
+set(_mirror_old "")
+if(EXISTS ${MIRROR_EMBED_H})
+    file(READ ${MIRROR_EMBED_H} _mirror_old)
+endif()
+if(NOT _mirror_old STREQUAL _mirror_embed)
+    file(WRITE ${MIRROR_EMBED_H} "${_mirror_embed}")
+endif()
 target_include_directories(stim2 PRIVATE ${CMAKE_BINARY_DIR}/generated)
 
 # Unit check of the draw-late scheduler arithmetic (src/latedraw.cpp is
