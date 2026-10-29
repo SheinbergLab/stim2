@@ -4689,7 +4689,15 @@ main(int argc, char *argv[]) {
   int late_wait_ms = -1;
 
   while (!glfwWindowShouldClose(app.window)) {
-    if (late_wait_ms < 0) app.wait_for_wakeup();
+    /* Stepped, the timer thread is stopped and nothing wakes the loop
+       but requests: a driver with nothing to send (an idle rig, no gaze)
+       left window events unhandled and macOS showed the app as not
+       responding.  So a stepped loop also wakes every 50 ms -- to poll
+       events and take messages, never to draw or move the clock. */
+    if (late_wait_ms < 0) {
+      if (StepMode) app.wait_for_wakeup_ms(50);
+      else app.wait_for_wakeup();
+    }
     else if (late_wait_ms > 0) app.wait_for_wakeup_ms(late_wait_ms);
     late_wait_ms = -1;
 
