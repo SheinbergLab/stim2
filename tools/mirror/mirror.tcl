@@ -7,6 +7,8 @@
 #     dlsh tools/mirror/mirror.tcl -dserv 192.168.88.40 -launch
 #
 #       -dserv H       the rig's dserv (required)
+#       -inproc        run inside stim2 (stim2 --mirror, tools/mirror/
+#                      inproc.tcl): requests go by stimSend, not a port
 #       -launch        start the mirror's stim2 too (on -port's base, a
 #                      window half the rig's size, ess/screen_w x _h), and
 #                      stop it on exit; the driver exits when it is closed
@@ -90,6 +92,7 @@ set opt(report)  10
 set opt(late)    5
 set opt(verbose) 0
 set opt(launch)  0
+set opt(inproc)  0
 set opt(size)    ""
 set opt(full)    0
 set opt(stim2)   ""
@@ -110,6 +113,7 @@ while {[llength $args]} {
         -late    { set opt(late)  [lindex $args 0]; set args [lrange $args 1 end] }
         -verbose { set opt(verbose) 1 }
         -launch  { set opt(launch) 1 }
+        -inproc  { set opt(inproc) 1 }
         -size    { set opt(size)  [lindex $args 0]; set args [lrange $args 1 end] }
         -fullscreen { set opt(full) 1 }
         -stim2   { set opt(stim2) [lindex $args 0]; set args [lrange $args 1 end] }
@@ -122,7 +126,8 @@ if {$opt(dserv) eq ""} {
  ?-launch ?-size WxH? ?-fullscreen? ?-stim2 PATH??"
     exit 2
 }
-if {$opt(port) == 4612 && !$opt(live)} {
+if {$opt(inproc) && $opt(launch)} { puts stderr "-inproc runs inside a stim2: no -launch"; exit 2 }
+if {$opt(port) == 4612 && !$opt(live) && !$opt(inproc)} {
     puts stderr "mirror: port 4612 is a live display's message port; start the mirror's stim2\
  with --port-base 5610 and use -port 5612 (the default), or pass -live if you mean it"
     exit 2
@@ -280,7 +285,10 @@ proc ds_join {} {
     # after it; an older load's stay in dserv, minutes or more away)
     set d [ds_get stim/script]
     set sts [expr {$d ne "" ? [lindex $d 2] : 0}]
-    foreach k [split [ds_req "%keys"] " "] {
+    # %getkeys answers "1 key key ..."
+    set keys [ds_req "%getkeys"]
+    if {[lindex $keys 0] ne "1"} { log "dserv's key list: $keys"; set keys {} }
+    foreach k [lrange $keys 1 end] {
         if {[string match stim/lib/* $k]} {
             set l [ds_get $k]
             if {$l ne "" && abs($sts - [lindex $l 2]) < 60000000} { note_value {*}$l }
@@ -442,14 +450,16 @@ proc on_frame {f} {
 proc stim_connect {} {
     global sock opt
     if {$sock ne ""} { return 1 }
-    if {[catch {framelock::connect $opt(host) $opt(port)} s]} { return 0 }
+    if {$opt(inproc)} {
+        set s inproc
+    } elseif {[catch {framelock::connect $opt(host) $opt(port)} s]} { return 0 }
     set v [framelock::send $s {package require stimess}]
     if {[framelock::is_error $v] || [catch {package vcompare $v 1.1} c] || $c < 0} {
         if {$v ne $::stimess_said} { log "stim2 at $opt(host):$opt(port) has no stimess 1.1 (got: $v)"; set ::stimess_said $v }
-        close $s; return 0
+        catch {close $s}; return 0
     }
     if {[framelock::send $s {info commands stepFrame}] ne "stepFrame"} {
-        log "stim2 at $opt(host):$opt(port) has no stepFrame (stim2 0.28.4 or newer)"; close $s; return 0
+        log "stim2 at $opt(host):$opt(port) has no stepFrame (stim2 0.28.4 or newer)"; catch {close $s}; return 0
     }
     set sock $s
     # a fresh driver starts its stim2 unstepped; then ask whether stepFrame
@@ -459,7 +469,7 @@ proc stim_connect {} {
     set ::nopresent [framelock::has_nopresent $s]
     set ::period_ms [framelock::send $s {screen_set FrameDuration}]
     if {![string is double -strict $::period_ms] || $::period_ms <= 0} { set ::period_ms 16.667 }
-    log "stim2 [framelock::send $s {catch {stimVersion} v; set v}] at $opt(host):$opt(port)\
+    log "stim2 [framelock::send $s {catch {stimVersion} v; set v}] [expr {$opt(inproc) ? "(this stim2: in-process)" : "at $opt(host):$opt(port)"}]\
  ([expr {$::nopresent ? "computes every rig frame" : "no -nopresent: computes only the newest frame when behind"}]),\
  [framelock::send $s {screen_set WinWidth}]x[framelock::send $s {screen_set WinHeight}]"
     if {$opt(eye) ne "off"} { framelock::send $sock [framelock::gaze_style] }
@@ -839,7 +849,7 @@ if {$opt(launch)} {
     proc exit {{code 0}} { stop_launched; _exit $code }
 }
 
-log "mirror: rig dserv $opt(dserv), stim2 $opt(host):$opt(port), command wait $opt(wait) ms, gaze $opt(eye)"
+log "mirror: rig dserv $opt(dserv), stim2 [expr {$opt(inproc) ? "in-process" : "$opt(host):$opt(port)"}], command wait $opt(wait) ms, gaze $opt(eye)"
 while {![stim_connect]} {
     if {![info exists warned]} { log "waiting for the mirror's stim2 at $opt(host):$opt(port)"; set warned 1 }
     if {$launched ne "" && ![alive $launched]} { log "the launched stim2 exited before answering"; exit 1 }

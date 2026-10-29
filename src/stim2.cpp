@@ -80,6 +80,8 @@
 static int MainWin = 0;
 
 static void do_wakeup(void);
+static Tcl_ThreadId RenderThread = 0;   /* stimSend refuses to wait on itself */
+static int Stimsend_Init(Tcl_Interp *interp);
 
 static int MessageLoop(void);
 static void drawGroup(OBJ_GROUP *g);
@@ -2454,6 +2456,9 @@ proc screen_config {} {
 
     interp = Tcl_CreateInterp();
     OurInterp = interp;
+    RenderThread = Tcl_GetCurrentThread();
+    /* for worker threads' interpreters: load {} Stimsend (see stimSendCmd) */
+    Tcl_StaticLibrary(NULL, "Stimsend", Stimsend_Init, NULL);
 
     if (!interp) {
       std::cerr << "Error initialializing tcl interpreter" << std::endl;
@@ -3045,6 +3050,49 @@ void log_message(const char* level, const char* fmt, ...) {
 static void do_wakeup(void)
 {
   app.wakeup();
+}
+
+/*
+ * stimSend script -- for interpreters in other threads (the Thread
+ * package: `load {} Stimsend`), not stim2's own.  Evaluates script in
+ * stim2's interpreter on the render thread exactly as a message-port
+ * request is: the same queue, the same point in the loop (stepped or
+ * not), waking the loop, and returns the result, or "!TCL_ERROR <msg>" as
+ * the port does.  The caller's thread waits for it, as a message-port
+ * client does; this is dserv's subprocess `send` to the render thread.
+ * A worker running a live mirror (tools/mirror/mirror.tcl -inproc) uses it
+ * in place of the message port's socket.
+ */
+static int stimSendCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
+{
+  if (objc != 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "script");
+    return TCL_ERROR;
+  }
+  if (Tcl_GetCurrentThread() == RenderThread) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                     ": called on the render thread, which would wait on itself", NULL);
+    return TCL_ERROR;
+  }
+  SharedQueue<std::string> rqueue;
+  client_request_t req;
+  req.script = Tcl_GetString(objv[1]);
+  req.rqueue = &rqueue;
+  req.wait_for_swap = false;
+  req.ack_header = false;
+  req.swap_at_queue = 0;
+  req.ticks_dequeue = 0.0;
+  app.queue.push_back(&req);
+  do_wakeup();
+  std::string r = rqueue.front();
+  rqueue.pop_front();
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(r.data(), (Tcl_Size) r.size()));
+  return TCL_OK;
+}
+static int Stimsend_Init(Tcl_Interp *interp)
+{
+  Tcl_CreateObjCommand(interp, "stimSend", stimSendCmd, NULL, NULL);
+  return Tcl_PkgProvide(interp, "Stimsend", "1.0");
 }
 
 /*
@@ -4269,6 +4317,7 @@ main(int argc, char *argv[]) {
   int interval = 2;
   int port_base = 4610;
   const char *startup_file = NULL;
+  const char *mirror_spec = NULL;   /* --mirror "HOST ?options?" */
   bool updated_display = false;
 
   char resolved_exe[PATH_MAX];
@@ -4306,6 +4355,9 @@ main(int argc, char *argv[]) {
      "(Linux: no display server, via EGL); see stepMode and frameSink",
      cxxopts::value<bool>(headless))
     ("f,file", "File name", cxxopts::value<std::string>())
+    ("mirror", "Mirror a rig: \"HOST ?options?\" -- HOST is the rig's dserv; "
+     "runs tools/mirror/mirror.tcl in a thread of this stim2 (docs/mirror.md)",
+     cxxopts::value<std::string>())
     ("port-base", "First of the four listener ports: command (N), "
      "dataserver (N+1), message (N+2), websocket (N+3)",
      cxxopts::value<int>(port_base)->default_value("4610"))
@@ -4317,6 +4369,9 @@ main(int argc, char *argv[]) {
 
     if (result.count("file")) {
       startup_file = strdup((result["file"].as<std::string>()).c_str());
+    }
+    if (result.count("mirror")) {
+      mirror_spec = strdup((result["mirror"].as<std::string>()).c_str());
     }
   }
   catch (const std::exception& e) {
@@ -4549,6 +4604,28 @@ main(int argc, char *argv[]) {
   if (startup_file) {
     if (app.sourceFile(startup_file) != TCL_OK) {
       std::cerr << Tcl_GetStringResult(OurInterp) << std::endl;
+    }
+  }
+
+  /* --mirror: start tools/mirror/inproc.tcl's worker once the startup
+     files have run; the tools are found beside the executable (the Mac
+     app's Resources, the .deb's /usr/local/stim2/tools) or in
+     $STIM2_TOOLS */
+  if (mirror_spec) {
+    Tcl_SetVar2(OurInterp, "stim2_mirror_spec", NULL, mirror_spec, TCL_GLOBAL_ONLY);
+    const char *start = R"tcl(
+      set _d [file dirname [file normalize [info nameofexecutable]]]
+      set _c [list [file join $_d .. Resources tools] [file join $_d tools] /usr/local/stim2/tools]
+      if {[info exists ::env(STIM2_TOOLS)]} { set _c [linsert $_c 0 $::env(STIM2_TOOLS)] }
+      set _f ""
+      foreach _t $_c { if {[file exists [file join $_t mirror inproc.tcl]]} { set _f [file join $_t mirror inproc.tcl]; break } }
+      unset _d _c _t
+      if {$_f eq ""} { error "--mirror: no tools/mirror/inproc.tcl beside stim2 (set STIM2_TOOLS)" }
+      source $_f; unset _f
+      mirror::start {*}$::stim2_mirror_spec
+    )tcl";
+    if (Tcl_Eval(OurInterp, start) != TCL_OK) {
+      std::cerr << "stim2: " << Tcl_GetStringResult(OurInterp) << std::endl;
     }
   }
 

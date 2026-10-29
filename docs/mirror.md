@@ -27,6 +27,34 @@ and from 0.28.8 `stim2.app/Contents/Resources/tools` in the Mac app
 
     dlsh /Applications/stim2.app/Contents/Resources/tools/mirror/mirror.tcl -dserv HOST -launch
 
+### One program: `stim2 --mirror`
+
+    stim2 -w 960 -h 540 --port-base 5610 --mirror "192.168.88.40 ?options?"
+
+This runs the same `mirror.tcl` inside stim2, in a worker thread of its
+own: the Thread package, shipped in `dlsh.zip` for Mac and Linux.
+`tools/mirror/inproc.tcl` starts it once stim2's startup files have run.
+The worker has its own interpreter, dserv subscription and timers.
+stim2's interpreter, whose `::dsCmds` and bindings a rig reload clears,
+sees only the requests any mirror sends: setup, frames and gaze. Those go
+by `stimSend` (stim2.cpp), dserv's subprocess `send` pointed at the render
+thread. A request joins the queue message-port commands use and runs at
+the same point in the loop, so stepping behaves exactly as with the
+separate driver. The options are `mirror.tcl`'s, without `-host`,
+`-port`, `-live` or `-launch`. The tools are found beside the executable
+(the Mac app's `Resources/tools`, the .deb's `/usr/local/stim2/tools`) or
+in `$STIM2_TOOLS`.
+
+Integrated or separate:
+
+- **Integrated:** one program to start and stop, and no `dlsh` interpreter
+  to install. It saves one localhost hop per request.
+- **Separate:** a crash in a C extension the driver loads cannot take the
+  display down. systemd restarts just the driver. The driver can be run
+  by hand with `-verbose`, or from another machine.
+
+Both run the same file.
+
 `-dserv localhost` mirrors a rig whose dserv runs on this machine. The
 mirror's stim2 must not be the one ESS drives: ESS uses 4612, the mirror
 5612.
@@ -121,6 +149,10 @@ one-request-per-frame builder. See `replay.md`, "Frame-locked".
   Before, they were placed a frame late after a 50 ms wait ("command waits
   ran out" on every one). The lag is then measured from dserv's receipt of
   the frame record, and the report says so.
+- **Lag on a rig without flip times** is measured from dserv's
+  timestamp, on dserv's clock. A dserv whose clock has drifted from this
+  machine's adds a constant: 51 ms against a local dserv on a Mac that had
+  been running for hours, the same on any thread or process.
 - **The waiting screen** is a line of text from the `text` stimdll. While
   waiting, stim2 is not stepped. Each setup starts with `resetObjList`.
 
