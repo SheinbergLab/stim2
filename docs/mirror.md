@@ -94,6 +94,8 @@ mirror's stim2 must not be the one ESS drives: ESS uses 4612, the mirror
 | option | |
 |---|---|
 | `-dserv H` | the rig's dserv (required) |
+| `-ws`, `-wss` | subscribe over dserv's WebSocket from the start (`-wss`: with TLS, needs the Tcl `tls` package); without them, the WebSocket is used when dserv cannot register the mirror |
+| `-wsport P` | dserv's WebSocket port (default 2565, its mDNS TXT `web`) |
 | `-launch` | start the mirror's stim2 as well: the installed one, on `-port`'s base, in a window in the rig's aspect (`ess/screen_w` x `_h`, no wider than 960). It is stopped when the driver exits, and the driver exits when it is closed. `-size WxH`, `-fullscreen` and `-stim2 PATH` adjust it. |
 | `-host H`, `-port P` | the mirror's stim2 (default `localhost:5612`, a stim2 started with `--port-base 5610`). Port 4612 is a rig's own and is refused without `-live`. |
 | `-wait MS` | the longest a frame waits for its commands (default 50) |
@@ -103,6 +105,35 @@ mirror's stim2 must not be the one ESS drives: ESS uses 4612, the mirror
 | `-late MS` | repaint the gaze this long before the next vsync (default 5) |
 | `-report S` | log the frame counts and lag every S seconds (default 10) |
 | `-verbose` | log every frame's commands |
+
+## Reaching a dserv: call-back or WebSocket
+
+The mirror subscribes in one of two ways:
+
+- **dserv's call-back (`%reg`).** The default. The driver asks dserv, on
+  4620, to send it datapoints, and dserv opens a connection back to the
+  driver for them. This works wherever dserv can reach the console: a lab
+  LAN.
+- **dserv's WebSocket** (`/ws`, port 2565, the way `ess_control.html`
+  subscribes). Everything travels on one connection the mirror opens, so
+  it works where dserv cannot reach the console: NAT, a VPN, a cloud
+  dserv. Requests are JSON (`subscribe`, `get`, `eval dservKeys`).
+  Datapoints are pushed as JSON and turned back into the call-back form,
+  binary values to their exact bytes.
+
+The driver tries the call-back first. If dserv cannot register it, either
+because it cannot connect back or because 4620 does not answer within 3 s,
+the driver moves to the WebSocket by itself. `-ws` uses the WebSocket from
+the start.
+
+**TLS.** A dserv with certificates (`ssl=1` in its mDNS record) serves its
+WebSocket only as `wss://`. That needs the Tcl `tls` package, which
+`dlsh.zip` does not have yet. Until it does, `-wss` reports so, and the
+WebSocket path reaches only dservs without TLS. The call-back path has no
+TLS.
+
+dserv's address is looked up once per join: a `.local` name has cost 5 s
+a lookup on some networks.
 
 ## How it works
 

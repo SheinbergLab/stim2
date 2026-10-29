@@ -7,6 +7,12 @@
 #     dlsh tools/mirror/mirror.tcl -dserv 192.168.88.40 -launch
 #
 #       -dserv H       the rig's dserv (required)
+#       -ws            subscribe over dserv's WebSocket (port -wsport, 2565)
+#                      from the start; without it the driver uses dserv's
+#                      %reg call-back and moves to the WebSocket by itself
+#                      when dserv cannot reach it (NAT, a VPN, a cloud dserv)
+#       -wss           the same with TLS (a dserv whose TXT says ssl=1); needs
+#                      the Tcl tls package
 #       -inproc        run inside stim2 (stim2 --mirror, which embeds this
 #                      file): requests go by stimSend, not a port
 #       -launch        start the mirror's stim2 too (on -port's base, a
@@ -101,6 +107,9 @@ set opt(inproc)  0
 set opt(size)    ""
 set opt(full)    0
 set opt(stim2)   ""
+set opt(ws)      0
+set opt(wss)     0
+set opt(wsport)  2565
 
 set args $argv
 while {[llength $args]} {
@@ -122,6 +131,9 @@ while {[llength $args]} {
         -size    { set opt(size)  [lindex $args 0]; set args [lrange $args 1 end] }
         -fullscreen { set opt(full) 1 }
         -stim2   { set opt(stim2) [lindex $args 0]; set args [lrange $args 1 end] }
+        -ws      { set opt(ws) 1 }
+        -wss     { set opt(ws) 1; set opt(wss) 1 }
+        -wsport  { set opt(wsport) [lindex $args 0]; set args [lrange $args 1 end] }
         default  { puts stderr "unknown option $a"; exit 2 }
     }
 }
@@ -202,31 +214,93 @@ stats_reset
 array set total {drawn 0 dropped 0 missing 0 errors 0}
 
 # ---------------------------------------------------------------------------
-# dserv: one-shot requests on 4620; datapoints arrive on a connection dserv
-# opens back to our listener, one text line each:
-#     <name> <type> <timestamp> <length> {<value>}
+# dserv, by one of two transports:
+#   reg  one-shot requests on 4620 (%reg, %match, %get); dserv opens a
+#        connection back to our listener and sends one text line per
+#        datapoint:  <name> <type> <timestamp> <length> {<value>}
+#   ws   dserv's WebSocket (/ws, port -wsport, 2565), the way ess_control.html
+#        subscribes: everything on one connection we open, so it works where
+#        dserv cannot reach us (NAT, a VPN, a cloud dserv).  JSON requests
+#        (subscribe, get, eval) and {"type":"datapoint",...} pushes, turned
+#        back into the reg transport's form for on_dp.
+# reg is tried first; when dserv cannot register us (it cannot connect back,
+# or 4620 is not reachable) the driver moves to ws, or uses it from the start
+# with -ws.
 # ---------------------------------------------------------------------------
-proc ds_req {line} {
-    set t [socket $::opt(dserv) 4620]
-    fconfigure $t -buffering line -encoding utf-8 -translation lf
-    set me [lindex [fconfigure $t -sockname] 0]
-    puts $t [string map [list @ME@ "$me $::listen_port"] $line]
-    gets $t r
-    close $t
+set transport [expr {$opt(ws) ? "ws" : "reg"}]
+
+# One request on 4620, answered within ms (a dserv that cannot connect
+# back, or a port that is filtered, must not hang the driver: for %reg a
+# timeout is what sends it to the WebSocket).  The wait runs the event loop.
+proc ds_req {line {ms 3000}} {
+    set t [socket -async $::dserv_ip 4620]
+    fconfigure $t -blocking 0 -buffering line -encoding utf-8 -translation lf
+    try {
+        if {[chan_wait $t writable $ms] ne "ok" || [fconfigure $t -error] ne ""} {
+            error "no connection to $::opt(dserv):4620"
+        }
+        set me [lindex [fconfigure $t -sockname] 0]
+        puts $t [string map [list @ME@ "$me $::listen_port"] $line]
+        flush $t
+        set deadline [expr {[clock milliseconds] + $ms}]
+        while {[gets $t r] < 0} {
+            if {[eof $t]} { error "dserv closed the request" }
+            set left [expr {$deadline - [clock milliseconds]}]
+            if {$left <= 0 || [chan_wait $t readable $left] ne "ok"} { error "no answer from dserv in $ms ms" }
+        }
+        return $r
+    } finally {
+        close $t
+    }
+}
+set chan_waits 0
+proc chan_wait {chan ev ms} {
+    set v ::chan_wait_[incr ::chan_waits]
+    set $v ""
+    fileevent $chan $ev [list set $v ok]
+    set id [after $ms [list set $v timeout]]
+    vwait $v
+    after cancel $id
+    catch { fileevent $chan $ev {} }
+    set r [set $v]
+    unset $v
     return $r
 }
-proc ds_match {name} { ds_req "%match @ME@ $name 1" }
-proc ds_unmatch {name} { ds_req "%unmatch @ME@ $name" }
+proc ds_match {name} {
+    if {$::transport eq "ws"} {
+        ws_send [dict_to_json [dict create cmd subscribe match $name every 1]]
+    } else {
+        ds_req "%match @ME@ $name 1"
+    }
+}
 
 # a line (from a subscription, or a %get reply without its leading status)
 proc ds_parse {line} {
     if {![regexp {^(\S+) (\d+) (\d+) (\d+) \{(.*)\}$} $line -> name type ts len data]} { return "" }
     list $name $type $ts $data
 }
+# the current value as {name type ts data}, "" when there is none
 proc ds_get {name} {
+    if {$::transport eq "ws"} {
+        set d [ws_call [dict_to_json [dict create cmd get name $name]]]
+        if {[dict exists $d error] || ![dict exists $d dtype]} { return "" }
+        return [ws_dp $d]
+    }
     set r [ds_req "%get $name"]
     if {![regexp {^1 (.*)$} $r -> line]} { return "" }
     ds_parse $line
+}
+# the names matching a glob
+proc ds_keys {pattern} {
+    if {$::transport eq "ws"} {
+        set d [ws_call [dict_to_json [dict create cmd eval script [list dservKeys $pattern]]]]
+        if {![dict exists $d result]} { log "dserv's keys: $d"; return {} }
+        return [dict get $d result]
+    }
+    # %getkeys answers "1 key key ..."
+    set keys [ds_req "%getkeys"]
+    if {[lindex $keys 0] ne "1"} { log "dserv's key list: $keys"; return {} }
+    lsearch -all -inline -glob [lrange $keys 1 end] $pattern
 }
 
 set listen_port 0
@@ -251,6 +325,150 @@ proc ds_read {s} {
     pump
 }
 
+# ---- the WebSocket client (RFC 6455, client side: text frames out, masked;
+#      text, continuation, ping and close in) ----
+set ws_sock ""
+set ws_buf ""
+set ws_frag ""
+set ws_reply ""
+set ws_joining 0
+set ws_pending {}
+
+proc ws_connect {host port} {
+    global opt ws_sock ws_buf ws_frag
+    if {$opt(wss)} {
+        if {[catch {package require tls}]} { error "-wss needs the Tcl tls package, which this dlsh.zip does not have" }
+        set s [tls::socket -servername $host $::dserv_ip $port]
+    } else {
+        set s [socket $::dserv_ip $port]
+    }
+    fconfigure $s -translation binary -blocking 1 -buffering none
+    set key [binary encode base64 [binary format c* [lmap i {0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15} {expr {int(rand() * 256)}}]]]
+    puts -nonewline $s "GET /ws HTTP/1.1\r\nHost: $host:$port\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: $key\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    flush $s
+    set hdr ""
+    while {![string match "*\r\n\r\n" $hdr]} {
+        set c [read $s 1]
+        if {$c eq ""} break
+        append hdr $c
+        if {[string length $hdr] > 8192} break
+    }
+    if {![regexp {^HTTP/1\.1 101} $hdr]} {
+        close $s
+        if {$hdr eq "" || [string index $hdr 0] ne "H"} {
+            error "no WebSocket handshake from $host:$port (it may want TLS: -wss, which needs the Tcl tls package)"
+        }
+        error "WebSocket handshake refused: [lindex [split $hdr \n] 0]"
+    }
+    set ws_sock $s; set ws_buf ""; set ws_frag ""
+    fconfigure $s -blocking 0
+    fileevent $s readable ws_read
+}
+
+proc ws_frame {op payload} {
+    set n [string length $payload]
+    set h [binary format c [expr {0x80 | $op}]]
+    if {$n < 126} { append h [binary format c [expr {0x80 | $n}]] } \
+    elseif {$n < 65536} { append h [binary format cS 0xFE $n] } \
+    else { append h [binary format cW 0xFF $n] }
+    set mask [lmap i {0 1 2 3} {expr {int(rand() * 256)}}]
+    append h [binary format c4 $mask]
+    binary scan $payload cu* b
+    set i 0
+    set m [lmap x $b { set y [expr {$x ^ [lindex $mask [expr {$i & 3}]]}]; incr i; set y }]
+    return $h[binary format c* $m]
+}
+proc ws_send {text} {
+    puts -nonewline $::ws_sock [ws_frame 1 [encoding convertto utf-8 $text]]
+    flush $::ws_sock
+}
+
+proc ws_read {} {
+    global ws_sock ws_buf ws_frag
+    if {[catch {append ws_buf [read $ws_sock]}] || [eof $ws_sock]} { ws_lost; return }
+    while {[string length $ws_buf] >= 2} {
+        binary scan $ws_buf cucu b0 b1
+        set op [expr {$b0 & 0x0f}]; set fin [expr {$b0 & 0x80}]
+        set len [expr {$b1 & 0x7f}]; set off 2
+        if {$len == 126} {
+            if {[string length $ws_buf] < 4} break
+            binary scan $ws_buf @2Su len; set off 4
+        } elseif {$len == 127} {
+            if {[string length $ws_buf] < 10} break
+            binary scan $ws_buf @2Wu len; set off 10
+        }
+        if {$b1 & 0x80} { incr off 4 }      ;# a server does not mask
+        if {[string length $ws_buf] < $off + $len} break
+        set payload [string range $ws_buf $off [expr {$off + $len - 1}]]
+        set ws_buf [string range $ws_buf [expr {$off + $len}] end]
+        switch -- $op {
+            0 - 1 {
+                append ws_frag $payload
+                if {$fin} {
+                    set msg [encoding convertfrom utf-8 $ws_frag]
+                    set ws_frag ""
+                    ws_message $msg
+                }
+            }
+            8 { ws_lost; return }
+            9 { catch { puts -nonewline $ws_sock [ws_frame 10 $payload]; flush $ws_sock } }
+        }
+    }
+    if {!$::ws_joining} pump
+}
+
+proc ws_message {msg} {
+    if {[catch {json_to_dict $msg} d]} return
+    if {[dict exists $d type] && [dict get $d type] eq "datapoint"} {
+        if {$::ws_joining} { lappend ::ws_pending $d; return }
+        set dp [ws_dp $d]
+        if {$dp ne ""} {
+            if {[catch {on_dp {*}$dp} err]} { log "error handling [lindex $dp 0]: $err\n$::errorInfo" }
+        }
+    } elseif {[dict exists $d action]} {
+        # a subscribe's acknowledgement
+    } else {
+        set ::ws_reply $d
+    }
+}
+
+# a request answered by the next message that is not a push or an ack
+proc ws_call {json} {
+    set ::ws_reply ""
+    ws_send $json
+    set id [after 5000 {set ::ws_reply {error "no reply from dserv"}}]
+    vwait ::ws_reply
+    after cancel $id
+    return $::ws_reply
+}
+
+# a datapoint's JSON as the reg transport's {name type ts data}: binary
+# types as base64 of their bytes, as dserv's text lines carry them
+proc ws_dp {d} {
+    set type [dict get $d dtype]
+    set v [expr {[dict exists $d data] ? [dict get $d data] : ""}]
+    switch -- $type {
+        0  { set data [binary encode base64 [binary format c* $v]] }
+        2  { set data [binary encode base64 [binary format f* $v]] }
+        3  { set data [binary encode base64 [binary format d* $v]] }
+        4  { set data [binary encode base64 [binary format s* $v]] }
+        5  { set data [binary encode base64 [binary format i* $v]] }
+        16 { set data [binary encode base64 [binary format w* $v]] }
+        9  { return "" }
+        default { set data $v }
+    }
+    # strings and JSON as they are; DG and the like arrive in base64 already
+    list [dict get $d name] $type [dict get $d timestamp] $data
+}
+
+proc ws_lost {} {
+    global ws_sock
+    catch { close $ws_sock }
+    set ws_sock ""
+    log "dserv's WebSocket closed; connecting again"
+    after 1000 ds_join
+}
+
 set followed {}
 proc follow {names} {
     global followed
@@ -261,19 +479,48 @@ proc follow {names} {
 
 # register, subscribe, then read the current values: a mirror started (or
 # restarted) mid-session draws from the next trial boundary
-proc ds_join {} {
-    global opt rig followed
-    if {[catch {
-        if {![info exists ::ds_srv]} {
-            set ::ds_srv [socket -server ds_accept 0]
-            set ::listen_port [lindex [fconfigure $::ds_srv -sockname] 2]
+# dserv's address, looked up once per join: a .local name can cost seconds
+# a lookup (an AAAA query no one answers), and the reg transport opens a
+# connection per request
+set dserv_ip ""
+proc resolve_dserv {} {
+    global opt
+    if {[regexp {^[0-9.]+$} $opt(dserv)]} { return $opt(dserv) }
+    foreach port [list 4620 $opt(wsport)] {
+        if {![catch {socket $opt(dserv) $port} s]} {
+            set ip [lindex [fconfigure $s -peername] 0]
+            close $s
+            return $ip
         }
-        set r [ds_req "%reg @ME@ 0"]
-        if {[string trim $r] ne "1"} { error "%reg answered \"$r\"" }
-    } err]} {
-        log "cannot register with dserv at $opt(dserv): $err; trying again"
-        after 2000 ds_join
-        return
+    }
+    return $opt(dserv)
+}
+
+proc ds_join {} {
+    global opt rig followed transport
+    set ::dserv_ip [resolve_dserv]
+    if {$transport eq "reg"} {
+        if {[catch {
+            if {![info exists ::ds_srv]} {
+                set ::ds_srv [socket -server ds_accept 0]
+                set ::listen_port [lindex [fconfigure $::ds_srv -sockname] 2]
+            }
+            set r [ds_req "%reg @ME@ 0"]
+            if {[string trim $r] ne "1"} { error "%reg answered \"$r\"" }
+        } err]} {
+            log "dserv at $opt(dserv) cannot register this mirror ($err): subscribing over its WebSocket"
+            set transport ws
+        }
+    }
+    if {$transport eq "ws"} {
+        if {[catch { ws_connect $opt(dserv) $opt(wsport) } err]} {
+            log "cannot reach dserv's WebSocket at $opt(dserv):$opt(wsport): $err; trying again"
+            if {!$opt(ws)} { set transport reg }
+            after 2000 ds_join
+            return
+        }
+        set ::ws_joining 1
+        set ::ws_pending {}
     }
     set followed {}
     set base {stim/script stim/lib/* stim/bind stim/cmd stim/frame stimdg
@@ -292,24 +539,29 @@ proc ds_join {} {
     # after it; an older load's stay in dserv, minutes or more away)
     set d [ds_get stim/script]
     set sts [expr {$d ne "" ? [lindex $d 2] : 0}]
-    # %getkeys answers "1 key key ..."
-    set keys [ds_req "%getkeys"]
-    if {[lindex $keys 0] ne "1"} { log "dserv's key list: $keys"; set keys {} }
-    foreach k [lrange $keys 1 end] {
-        if {[string match stim/lib/* $k]} {
-            set l [ds_get $k]
-            if {$l ne "" && abs($sts - [lindex $l 2]) < 60000000} { note_value {*}$l }
-        }
+    foreach k [ds_keys stim/lib/*] {
+        set l [ds_get $k]
+        if {$l ne "" && abs($sts - [lindex $l 2]) < 60000000} { note_value {*}$l }
     }
     foreach n $rig(bind) {
         set l [ds_get $n]
         if {$l ne ""} { note_value {*}$l }
     }
     if {$d ne ""} { note_value {*}$d }
-    log "joined dserv $opt(dserv) (callback port $::listen_port): $rig(load), stim2 [expr {$rig(connected) eq "1" ? "connected" : "NOT connected"}],\
+    log "joined dserv $opt(dserv) ([expr {$transport eq "ws" ? "WebSocket, port $opt(wsport)" : "callback port $::listen_port"}]): $rig(load), stim2 [expr {$rig(connected) eq "1" ? "connected" : "NOT connected"}],\
  [expr {$rig(script) ne "" ? "script [file tail $rig(path)]" : "no script"}], [llength $rig(bind)] bound streams,\
  [expr {$rig(status) eq "running" ? "running, in_obs $rig(in_obs)" : $rig(status)}]"
     to_waiting [expr {$rig(script) ne "" ? "ready" : "waiting"}] "joined mid-session"
+    if {$transport eq "ws"} {
+        # what was pushed while joining, in order
+        set ::ws_joining 0
+        foreach d $::ws_pending {
+            set dp [ws_dp $d]
+            if {$dp ne ""} { catch {on_dp {*}$dp} }
+        }
+        set ::ws_pending {}
+        pump
+    }
 }
 
 # ---------------------------------------------------------------------------
