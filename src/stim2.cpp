@@ -3074,7 +3074,14 @@ static int stimSendCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const 
                      ": called on the render thread, which would wait on itself", NULL);
     return TCL_ERROR;
   }
-  SharedQueue<std::string> rqueue;
+  /* One reply queue per calling thread, alive as long as the thread, as a
+     message-port client keeps one per connection.  A queue made per call
+     on this stack would die as soon as the reply is popped, and
+     SharedQueue::push_back notifies after unlocking: the render thread
+     could still be inside notify_one on it, writing into a stack frame
+     this thread has already reused (a worker's Tcl callback pointers,
+     corrupted: a mirror crashed so, 2026-10-28). */
+  static thread_local SharedQueue<std::string> rqueue;
   client_request_t req;
   req.script = Tcl_GetString(objv[1]);
   req.rqueue = &rqueue;
