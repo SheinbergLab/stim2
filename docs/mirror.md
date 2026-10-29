@@ -31,19 +31,25 @@ and from 0.28.8 `stim2.app/Contents/Resources/tools` in the Mac app
 
     stim2 -w 960 -h 540 --port-base 5610 --mirror "192.168.88.40 ?options?"
 
-This runs the same `mirror.tcl` inside stim2, in a worker thread of its
-own: the Thread package, shipped in `dlsh.zip` for Mac and Linux.
-`tools/mirror/inproc.tcl` starts it once stim2's startup files have run.
-The worker has its own interpreter, dserv subscription and timers.
-stim2's interpreter, whose `::dsCmds` and bindings a rig reload clears,
-sees only the requests any mirror sends: setup, frames and gaze. Those go
-by `stimSend` (stim2.cpp), dserv's subprocess `send` pointed at the render
-thread. A request joins the queue message-port commands use and runs at
-the same point in the loop, so stepping behaves exactly as with the
-separate driver. The options are `mirror.tcl`'s, without `-host`,
-`-port`, `-live` or `-launch`. The tools are found beside the executable
-(the Mac app's `Resources/tools`, the .deb's `/usr/local/stim2/tools`) or
-in `$STIM2_TOOLS`.
+This runs the same `mirror.tcl` inside stim2, in a thread of its own with
+its own Tcl interpreter: the shape of a dserv subprocess (`src/mirror.cpp`).
+The build embeds `tools/lib/framelock.tcl` and `tools/mirror/mirror.tcl` in
+the binary, so the driver always matches the stim2 it runs in.
+`$STIM2_TOOLS` names a `tools/` directory to source instead, for working on
+the driver.
+
+- **Isolation.** The thread's interpreter has its own dserv subscription,
+  state and timers, and runs the driver's event loop. stim2's interpreter,
+  whose `::dsCmds` and bindings a rig reload clears, sees only the
+  requests any mirror sends: setup, frames and gaze.
+- **`stimSend`.** Requests go by `stimSend`, dserv's subprocess `send`
+  pointed at the render thread. A request joins the queue message-port
+  commands use and runs at the same point in the loop, so stepping
+  behaves exactly as with the separate driver.
+- **Quitting,** by the window or by `exit`, stops the thread and joins it.
+- **Options** are `mirror.tcl`'s, without `-host`, `-port`, `-live` or
+  `-launch`.
+- **Without `--mirror`** none of this runs.
 
 Integrated or separate:
 

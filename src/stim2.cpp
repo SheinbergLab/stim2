@@ -41,6 +41,7 @@
 
 #include "SharedQueue.h"
 #include "framelog.h"
+#include "mirror.h"
 #include "overlay.h"
 #include "latedraw.h"
 #include "WebSocketServer.h"
@@ -2457,8 +2458,6 @@ proc screen_config {} {
     interp = Tcl_CreateInterp();
     OurInterp = interp;
     RenderThread = Tcl_GetCurrentThread();
-    /* for worker threads' interpreters: load {} Stimsend (see stimSendCmd) */
-    Tcl_StaticLibrary(NULL, "Stimsend", Stimsend_Init, NULL);
 
     if (!interp) {
       std::cerr << "Error initialializing tcl interpreter" << std::endl;
@@ -3053,8 +3052,9 @@ static void do_wakeup(void)
 }
 
 /*
- * stimSend script -- for interpreters in other threads (the Thread
- * package: `load {} Stimsend`), not stim2's own.  Evaluates script in
+ * stimSend script -- for interpreters in other threads (--mirror's,
+ * mirror.cpp, which adds it with Stimsend_Init), not stim2's own.
+ * Evaluates script in
  * stim2's interpreter on the render thread exactly as a message-port
  * request is: the same queue, the same point in the loop (stepped or
  * not), waking the loop, and returns the result, or "!TCL_ERROR <msg>" as
@@ -3073,6 +3073,10 @@ static int stimSendCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const 
     Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
                      ": called on the render thread, which would wait on itself", NULL);
     return TCL_ERROR;
+  }
+  if (mirrorStopping()) {       /* stim2 is quitting: no loop to answer */
+    Tcl_SetObjResult(interp, Tcl_NewStringObj("!TCL_ERROR stim2 is quitting", -1));
+    return TCL_OK;
   }
   /* One reply queue per calling thread, alive as long as the thread, as a
      message-port client keeps one per connection.  A queue made per call
@@ -3101,6 +3105,19 @@ static int Stimsend_Init(Tcl_Interp *interp)
   Tcl_CreateObjCommand(interp, "stimSend", stimSendCmd, NULL, NULL);
   return Tcl_PkgProvide(interp, "Stimsend", "1.0");
 }
+
+/* --mirror's thread is stopping: answer whatever it (or a message-port
+   client) still has queued for the render thread, which will not run it */
+static void mirrorDrain(void)
+{
+  while (app.queue.size()) {
+    client_request_t *req = app.queue.front();
+    app.queue.pop_front();
+    req->rqueue->push_back("!TCL_ERROR stim2 is quitting");
+  }
+}
+/* the Tcl exit command leaves through exit(), not the end of main */
+static void mirrorStopAtExit(void) { mirrorStop(mirrorDrain); }
 
 /*
  * stimLateDraw backing (tclproc.c).  All on the render thread: the Tcl
@@ -4614,26 +4631,17 @@ main(int argc, char *argv[]) {
     }
   }
 
-  /* --mirror: start tools/mirror/inproc.tcl's worker once the startup
-     files have run; the tools are found beside the executable (the Mac
-     app's Resources, the .deb's /usr/local/stim2/tools) or in
-     $STIM2_TOOLS */
+  /* --mirror: the live-mirror driver in a thread of its own (mirror.cpp),
+     once the startup files have set the package paths it inherits */
   if (mirror_spec) {
-    Tcl_SetVar2(OurInterp, "stim2_mirror_spec", NULL, mirror_spec, TCL_GLOBAL_ONLY);
-    const char *start = R"tcl(
-      set _d [file dirname [file normalize [info nameofexecutable]]]
-      set _c [list [file join $_d .. Resources tools] [file join $_d tools] /usr/local/stim2/tools]
-      if {[info exists ::env(STIM2_TOOLS)]} { set _c [linsert $_c 0 $::env(STIM2_TOOLS)] }
-      set _f ""
-      foreach _t $_c { if {[file exists [file join $_t mirror inproc.tcl]]} { set _f [file join $_t mirror inproc.tcl]; break } }
-      unset _d _c _t
-      if {$_f eq ""} { error "--mirror: no tools/mirror/inproc.tcl beside stim2 (set STIM2_TOOLS)" }
-      source $_f; unset _f
-      mirror::start {*}$::stim2_mirror_spec
-    )tcl";
-    if (Tcl_Eval(OurInterp, start) != TCL_OK) {
-      std::cerr << "stim2: " << Tcl_GetStringResult(OurInterp) << std::endl;
+    if (Tcl_Eval(OurInterp, "list $::auto_path [tcl::tm::path list]") != TCL_OK ||
+        mirrorStart(mirror_spec, Tcl_GetStringResult(OurInterp), Stimsend_Init) != 0) {
+      std::cerr << "stim2: --mirror could not start" << std::endl;
     }
+    else {
+      atexit(mirrorStopAtExit);
+    }
+    Tcl_ResetResult(OurInterp);
   }
 
 #ifdef EMBED_PYTHON
@@ -4746,6 +4754,9 @@ main(int argc, char *argv[]) {
   
   /* a sink still open gets its end of file (ffmpeg finishes the movie) */
   { int st; stimFrameSinkClose(&st); }
+
+  /* --mirror's thread, before anything it might still ask for goes */
+  mirrorStop(mirrorDrain);
 
   /* free allocated objects */
   setDynamicUpdate(0);

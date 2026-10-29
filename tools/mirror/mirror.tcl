@@ -7,8 +7,8 @@
 #     dlsh tools/mirror/mirror.tcl -dserv 192.168.88.40 -launch
 #
 #       -dserv H       the rig's dserv (required)
-#       -inproc        run inside stim2 (stim2 --mirror, tools/mirror/
-#                      inproc.tcl): requests go by stimSend, not a port
+#       -inproc        run inside stim2 (stim2 --mirror, which embeds this
+#                      file): requests go by stimSend, not a port
 #       -launch        start the mirror's stim2 too (on -port's base, a
 #                      window half the rig's size, ess/screen_w x _h), and
 #                      stop it on exit; the driver exits when it is closed
@@ -77,8 +77,13 @@
 # already waits for chrony.
 
 package require tcljson
-set mirror_script [file normalize [info script]]
-source [file join [file dirname $mirror_script] .. lib framelock.tcl]
+# embedded in stim2 (--mirror, src/mirror.cpp), framelock is evaluated
+# first and there is no script file
+set mirror_script [info script]
+if {$mirror_script ne ""} { set mirror_script [file normalize $mirror_script] }
+if {[info commands framelock::send] eq ""} {
+    source [file join [file dirname $mirror_script] .. lib framelock.tcl]
+}
 
 set opt(dserv)   ""
 set opt(host)    localhost

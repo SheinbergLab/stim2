@@ -45,7 +45,7 @@ proc framelock::connect {host port} {
     return $s
 }
 proc framelock::send {sock cmd} {
-    # "inproc": a worker thread inside stim2 itself (tools/mirror/inproc.tcl)
+    # "inproc": the driver's thread inside stim2 itself (stim2 --mirror)
     if {$sock eq "inproc"} { return [stimSend $cmd] }
     # one write: header and payload as two writes on an unbuffered socket
     # meet Nagle and the server's delayed ACK on Linux, ~40 ms per command
