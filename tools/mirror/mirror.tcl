@@ -676,6 +676,7 @@ proc on_dp {name type ts data} {
     }
     note_value $name $type $ts $data
     if {[string match ess/screen_* $name]} { note_screen $name; return }
+    if {$name in {ess/system ess/protocol ess/variant}} { retitle; publish_status; return }
     if {$name in $rig(bind) && $mode eq "run" && $ts > $start_ts} {
         framelock::plan_dp P $ts $name $type $data
     }
@@ -838,6 +839,16 @@ proc publish_status {} {
     set d [dict create dserv $opt(dserv) mode $mode why $why load $rig(load) \
                updated [clock seconds] {*}$last_report]
     catch { framelock::send $sock [list set ::stim2_mirror_status $d] }
+}
+
+# The window's title names the rig and its load as it is now: ESS publishes
+# system, protocol and variant on every load -- around the new script, not
+# in a fixed order with it -- and a variant reload changes the variant
+# alone, with no new setup.  Waiting, the waiting screen's title stays.
+proc retitle {} {
+    global mode opt rig sock
+    if {$sock eq "" || $mode ne "run"} return
+    catch { stim [list setWindowTitle "mirror of $opt(dserv): $rig(load)"] }
 }
 
 # a trial boundary: from waiting-for-a-trial, set up and start drawing
