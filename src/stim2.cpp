@@ -1622,7 +1622,6 @@ public:
   void updateDisplay(bool);
   void processImgui(void);
   void toggleImgui(void);
-  void showAppLog(bool *);
   int doUpdate(void);
   int fullscreen;
   int width;
@@ -3776,13 +3775,6 @@ Application::ds_client_process(int sockfd,
 }
 
 
-// Demonstrate creating a simple log window with basic filtering.
-void Application::showAppLog(bool* p_open)
-{
-  ImGui::SetNextWindowSize(ImVec2(500, 400), ImGuiCond_FirstUseEver);
-  log.Draw("Example: Log", p_open);
-}
-
 void Application::toggleImgui(void)
 {
     if (Headless) return;       /* no imgui context, and no one to see it */
@@ -3807,7 +3799,6 @@ void Application::toggleImgui(void)
 }
 void Application::processImgui(void)
 {
-  void ShowAppConsole(bool* p_open);
 
   ImGui_ImplOpenGL3_NewFrame();
   ImGui_ImplGlfw_NewFrame();

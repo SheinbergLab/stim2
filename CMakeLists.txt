@@ -168,11 +168,9 @@ set(STIM2_SOURCES
     src/glad.c
     src/rawapi.c
     src/diagnostics.cpp
-    src/imgui_console.cpp
     src/WebSocketServer.cpp
     src/TclCompletion.cpp
     ${IMGUI_DIR}/imgui.cpp
-    ${IMGUI_DIR}/imgui_demo.cpp
     ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
@@ -239,7 +237,6 @@ check_cxx_compiler_flag(-Wno-nontrivial-memcall HAVE_WNO_NONTRIVIAL_MEMCALL)
 if(HAVE_WNO_NONTRIVIAL_MEMCALL)
     set_source_files_properties(
         ${IMGUI_DIR}/imgui.cpp
-        ${IMGUI_DIR}/imgui_demo.cpp
         ${IMGUI_DIR}/imgui_draw.cpp
         ${IMGUI_DIR}/imgui_tables.cpp
         ${IMGUI_DIR}/imgui_widgets.cpp
