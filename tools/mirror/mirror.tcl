@@ -175,6 +175,8 @@ set why "joining"
 set sock ""                 ;# the mirror's stim2
 set stepped 0
 set nopresent 0             ;# stepFrame -nopresent (stim2 0.28.7)
+set saw_reload 0            ;# saw the empty stim/script of a reload
+set screen_pre [dict create] ;# ess/screen_* to apply with the next frame
 set P ""                    ;# the planner (framelock)
 set queue {}                ;# rig frames not yet drawn, {f arrival_us}
 set prev_cmds ""            ;# cmds_applied of the last frame taken
@@ -380,9 +382,16 @@ proc on_dp {name type ts data} {
                 # configure_stim publishes the empty record first, the new
                 # script last: a reload is under way
                 set rig(libs) [dict create]
+                set ::saw_reload 1
                 to_waiting waiting "the rig is loading [lindex [split $rig(load) /] 0]"
             } elseif {$mode eq "waiting" || $rig(hash) ne $old} {
                 to_waiting ready "new script [file tail $rig(path)]"
+                # A reload seen from its start leaves the rig in a known
+                # state -- this script, its stim_init, nothing else -- so
+                # mirror from here, not from the next trial: what the
+                # variant's init sends next (planko: setBackground) and the
+                # loaders' stimdg go in in order.
+                if {$::saw_reload} { set ::saw_reload 0; boundary $ts "load" }
             }
             return
         }
@@ -414,9 +423,40 @@ proc on_dp {name type ts data} {
         return
     }
     note_value $name $type $ts $data
+    if {[string match ess/screen_* $name]} { note_screen $name; return }
     if {$name in $rig(bind) && $mode eq "run" && $ts > $start_ts} {
         framelock::plan_dp P $ts $name $type $data
     }
+}
+
+# ess/screen_* while running: ESS republishes them after each load and at
+# each file open.  Applied with the next frame, and only where this stim2
+# differs -- a needless setBackground would hold a redraw and cost a rig
+# frame its update.
+proc note_screen {name} {
+    global rig mode
+    if {$mode ne "run"} return
+    set g $rig(geom)
+    switch -- $name {
+        ess/screen_bg {
+            if {[dict exists $g bg]} {
+                set bg [dict get $g bg]
+                dict set ::screen_pre bg "if {\[setBackground\] ne [list $bg]} { setBackground $bg }\n"
+            }
+        }
+        ess/screen_halfx - ess/screen_halfy {
+            if {[dict exists $g halfx] && [dict exists $g halfy]} {
+                set hx [dict get $g halfx]; set hy [dict get $g halfy]
+                dict set ::screen_pre deg "if {\[screen_set HalfScreenDegreeX\] != $hx ||\
+ \[screen_set HalfScreenDegreeY\] != $hy} { screen_set HalfScreenDegreeX $hx; screen_set HalfScreenDegreeY $hy }\n"
+            }
+        }
+    }
+}
+proc screen_pre {} {
+    set s [join [dict values $::screen_pre] ""]
+    set ::screen_pre [dict create]
+    return $s
 }
 
 proc on_frame {f} {
@@ -632,11 +672,11 @@ proc pump {} {
             set ev_us [lindex $tf 8]
             lappend fl [list $fi [expr {[lindex $tf 4] / 1000.0}] [expr {$ev_us ne "" ? $ev_us / 1000.0 : ""}]]
         }
-        set req [framelock::frames_request $fl clock_ms prevflip [gaze_pre]]
+        set req [framelock::frames_request $fl clock_ms prevflip "[screen_pre][gaze_pre]"]
     } else {
         set inputs [lsort -real -index 0 $inputs]
         set ev_us [lindex $f 8]
-        set req [framelock::frame_request $inputs clock_ms $prevflip $flip [gaze_pre] "" \
+        set req [framelock::frame_request $inputs clock_ms $prevflip $flip "[screen_pre][gaze_pre]" "" \
                      [expr {$ev_us ne "" ? $ev_us / 1000.0 : ""}]]
     }
     if {$opt(verbose)} {

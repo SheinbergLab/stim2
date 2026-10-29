@@ -32,8 +32,10 @@
 
 namespace eval framelock {
     # configure-time commands that may be in stim/cmd and that a playback
-    # must not repeat
-    variable skip_prefixes {stim::prelude stimFrameLog {set dservhost}}
+    # must not repeat: the rig's links to dserv, and its display's own
+    # timing (stimLateDraw: how the rig schedules a draw, not what it
+    # draws; a stepped stim2 is timed by its driver)
+    variable skip_prefixes {stim::prelude stimFrameLog {set dservhost} stimLateDraw}
 }
 
 # ---------------------------------------------------------------------------
