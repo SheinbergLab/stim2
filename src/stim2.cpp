@@ -3260,6 +3260,32 @@ lag [dict get $d lag_from]->present p50 [dict get $d lag_p50] ms, p95 [dict get 
         }
       }
     }
+    /* the gaze disc's size and transparency, live: `overlay set` keeps
+       what it is not given, and the driver's repaints give only -points
+       and -show, so this holds until the driver's next setup (its
+       -eyesize/-eyecolor) */
+    const char *gq = R"tcl(
+      if {[catch {overlay get gaze} d]} { return {} }
+      list [dict get $d size] {*}[dict get $d color])tcl";
+    if (Tcl_Eval(interp, gq) == TCL_OK && Tcl_GetStringResult(interp)[0]) {
+      float sz, r, g, b, a;
+      if (sscanf(Tcl_GetStringResult(interp), "%f %f %f %f %f", &sz, &r, &g, &b, &a) == 5) {
+        ImGui::SetNextItemWidth(110);
+        bool ch = ImGui::SliderFloat("gaze deg", &sz, 0.1f, 3.0f, "%.2f");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(110);
+        ch |= ImGui::SliderFloat("alpha", &a, 0.0f, 1.0f, "%.2f");
+        if (ch) {
+          char cmd[320];
+          snprintf(cmd, sizeof(cmd),
+                   "overlay set gaze -size %.3f -color {%.3f %.3f %.3f %.3f};"
+                   " overlay set gaze_trail -size %.3f -color {%.3f %.3f %.3f %.3f};"
+                   " catch {frameRepaint}",
+                   sz, r, g, b, a, sz * 0.36f, r, g, b, a * 0.4f);
+          Tcl_Eval(interp, cmd);
+        }
+      }
+    }
     if (ImGui::Button("Stop mirroring")) {
       msg = Tcl_Eval(interp, "stimMirror stop") == TCL_OK ? "" : Tcl_GetStringResult(interp);
     }

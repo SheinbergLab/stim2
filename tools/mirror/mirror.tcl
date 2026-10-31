@@ -33,6 +33,10 @@
 #       -wait MS       longest a frame waits for its commands (default 50)
 #       -eye NAME      the gaze datapoint, degrees (default
 #                      eyetracking/position; "off" for none)
+#       -eyesize DEG   the gaze disc's diameter (default 0.7)
+#       -eyecolor C    its color, {r g b ?a?} (default {1 0.55 0.1 0.9}); the
+#                      trail follows, smaller and fainter.  Both can also be
+#                      changed live in the stim2's panel (Mirror a rig).
 #       -trail MS      gaze trail length (default 100)
 #       -touch on|off  draw ESS's touches (ess/touch_press, _drag, _release,
 #                      in the rig's pixels) on the overlay (default on)
@@ -99,6 +103,8 @@ set opt(port)    5612
 set opt(live)    0
 set opt(wait)    50
 set opt(eye)     eyetracking/position
+set opt(eyesize) 0.7
+set opt(eyecolor) {1 0.55 0.1 0.9}
 set opt(trail)   100
 set opt(touch)   on
 set opt(hold)    500
@@ -124,6 +130,8 @@ while {[llength $args]} {
         -live    { set opt(live) 1 }
         -wait    { set opt(wait)  [lindex $args 0]; set args [lrange $args 1 end] }
         -eye     { set opt(eye)   [lindex $args 0]; set args [lrange $args 1 end] }
+        -eyesize { set opt(eyesize) [lindex $args 0]; set args [lrange $args 1 end] }
+        -eyecolor { set opt(eyecolor) [lindex $args 0]; set args [lrange $args 1 end] }
         -trail   { set opt(trail) [lindex $args 0]; set args [lrange $args 1 end] }
         -touch   { set opt(touch) [lindex $args 0]; set args [lrange $args 1 end] }
         -hold    { set opt(hold)  [lindex $args 0]; set args [lrange $args 1 end] }
@@ -143,9 +151,15 @@ while {[llength $args]} {
 }
 if {$opt(dserv) eq ""} {
     puts stderr "usage: dlsh mirror.tcl -dserv HOST ?-host H? ?-port P? ?-live? ?-wait MS?\
- ?-eye NAME|off? ?-trail MS? ?-hold MS? ?-report S? ?-late MS? ?-verbose?\
- ?-launch ?-size WxH? ?-fullscreen? ?-stim2 PATH??"
+ ?-eye NAME|off? ?-eyesize DEG? ?-eyecolor {r g b ?a?}? ?-trail MS? ?-hold MS? ?-report S?\
+ ?-late MS? ?-verbose? ?-launch ?-size WxH? ?-fullscreen? ?-stim2 PATH??"
     exit 2
+}
+if {![string is double -strict $opt(eyesize)] || $opt(eyesize) <= 0} {
+    puts stderr "-eyesize: a diameter in degrees, not \"$opt(eyesize)\""; exit 2
+}
+if {[llength $opt(eyecolor)] ni {3 4} || [lsearch -not -regexp $opt(eyecolor) {^[0-9.eE+-]+$}] >= 0} {
+    puts stderr "-eyecolor: {r g b ?a?}, each 0..1, not \"$opt(eyecolor)\""; exit 2
 }
 if {$opt(inproc) && $opt(launch)} { puts stderr "-inproc runs inside a stim2: no -launch"; exit 2 }
 if {$opt(port) == 4612 && !$opt(live) && !$opt(inproc)} {
@@ -840,7 +854,7 @@ proc stim_connect {} {
     log "stim2 [framelock::send $s {catch {stimVersion} v; set v}] [expr {$opt(inproc) ? "(this stim2: in-process)" : "at $opt(host):$opt(port)"}]\
  ([expr {$::nopresent ? "computes every rig frame" : "no -nopresent: computes only the newest frame when behind"}]),\
  [framelock::send $s {screen_set WinWidth}]x[framelock::send $s {screen_set WinHeight}]"
-    if {$opt(eye) ne "off"} { framelock::send $sock [framelock::gaze_style] }
+    if {$opt(eye) ne "off"} { framelock::send $sock [framelock::gaze_style $opt(eyesize) $opt(eyecolor)] }
     framelock::send $sock {overlay set touch -size 1.2 -color {0.25 0.85 1 0.85} -show 0}
     # what the stim2 shows of the overlay, switched in its imgui panel
     # (::stim2_mirror_show(gaze|touch)); checked where the commands run,

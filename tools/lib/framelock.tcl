@@ -342,11 +342,19 @@ proc framelock::has_nopresent {sock} {
 
 # ---------------------------------------------------------------------------
 # the gaze on stim2's overlay layer: a disc at the newest sample, a fading
-# trail behind (docs/headless.md, "Overlay")
+# trail behind (docs/headless.md, "Overlay").  size is the disc's diameter
+# in degrees and color its {r g b ?a?}; the trail's discs are 0.36 of the
+# size at 0.4 of the alpha.  Set once: the repaints (gaze_cmd) change only
+# the points and -show, so `overlay set gaze -size/-color` from stim2's
+# own console or panel holds until the next setup.
 # ---------------------------------------------------------------------------
-proc framelock::gaze_style {} {
-    return {overlay set gaze_trail -size 0.25 -color {1 0.55 0.1 0.35} -show 0;
-        overlay set gaze -size 0.7 -color {1 0.55 0.1 0.9} -show 0}
+proc framelock::gaze_style {{size 0.7} {color {1 0.55 0.1 0.9}}} {
+    lassign $color r g b a
+    if {$a eq ""} { set a 1 }
+    join [list \
+        [list overlay set gaze_trail -size [format %.3f [expr {$size * 0.36}]] \
+             -color [list $r $g $b [format %.3f [expr {$a * 0.4}]]] -show 0] \
+        [list overlay set gaze -size $size -color [list $r $g $b $a] -show 0]] "\n"
 }
 # xy the newest sample {x y}, trail {x y x y ...} newest first; "" hides
 proc framelock::gaze_cmd {xy trail} {

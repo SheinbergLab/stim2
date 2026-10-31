@@ -109,6 +109,8 @@ mirror's stim2 must not be the one ESS drives: ESS uses 4612, the mirror
 | `-host H`, `-port P` | the mirror's stim2 (default `localhost:5612`, a stim2 started with `--port-base 5610`). Port 4612 is a rig's own and is refused without `-live`. |
 | `-wait MS` | the longest a frame waits for its commands (default 50) |
 | `-eye NAME` | the gaze datapoint in degrees (default `eyetracking/position`; `off` for none) |
+| `-eyesize DEG` | the gaze disc's diameter (default 0.7); the trail's discs are 0.36 of it |
+| `-eyecolor {r g b ?a?}` | its color (default `{1 0.55 0.1 0.9}`); the trail at 0.4 of the alpha. Both are set once, so `overlay set gaze -size .. -color ..` in the stim2 changes them live, and the imgui panel has sliders for the size and alpha while mirroring |
 | `-trail MS` | gaze trail length (default 100) |
 | `-hold MS` | keep the gaze up this long without a new sample (default 500) |
 | `-touch on\|off` | draw ESS's touches (`ess/touch_press`, `_drag`, `_release`) on the overlay (default on) |
