@@ -79,6 +79,8 @@ For real experiment systems, it is of course essential to get these numbers corr
 | `-F` | `--fullscreen` | Run in fullscreen mode | off |
 | `-f` | `--file` | Tcl startup script to source | none |
 | | `--port-base` | First listener port N: command port N, dataserver N+1, message port N+2, websocket console N+3 | 4610 |
+| | `--mirror` | `"HOST ?options?"`: run as a live mirror of the rig whose dserv is HOST (see below) | off |
+| | `--headless` | No window: render offscreen (Linux, via EGL), for replays and frame sinks | off |
 | | `--help` | Print help message | |
 
 ### Examples
@@ -150,6 +152,47 @@ monotonic while the realtime clock is slewed by NTP/PTP, so resample
 occasionally rather than relying on one offset for a whole session.
 `stimClock` works as a plain command, as an `@` command, and inside a
 startup script.
+
+## Live mirror and replay
+
+A rig's display can be followed, frame for frame, by a second stim2
+anywhere on the network, while the session runs:
+
+```bash
+stim2 --port-base 5610 -w 960 -h 540 --mirror 192.168.88.40
+```
+
+or `stimMirror HOST` in a running stim2, or from the imgui panel
+(right-click, "Mirror a rig", which lists the dservs mDNS finds).
+
+The rig's stim2 does not know it is mirrored, and no pixels cross the
+network. It publishes to dserv the facts that determine what it drew: the
+loaded script and libraries, the stimulus data group, each command ESS
+sent with the swap it was applied at (the `@` ACK header above), and one
+small record per swap, `stim/frame`, with the flip time, the clock the
+frame was evaluated at and running counts of the commands and datapoints
+applied. The mirror subscribes to those, and to the eye and touch
+datapoints the rig never sees. From the next trial boundary it sets its
+stim2 up the way `configure_stim` did, puts it in step mode on the rig's
+clock, and re-executes the rig's inputs: each frame record says exactly
+which commands and datapoints preceded that frame, and one `stepFrame`
+evaluates it at the instant the rig did. The same scripts on the same
+inputs at the same stimulus time give the same frame, so the mirror is a
+deterministic replay a few milliseconds behind rather than a video. It
+draws the live gaze over the frame the subject saw, computes every rig
+frame even on a slower display and shows only the newest, and costs the
+rig one lock-free ring write per swap. Measured on a 60 Hz mirror of a
+120 Hz rig: 15 ms from the rig's flip to the mirror's present at p50,
+with no frames dropped.
+
+The driver is a Tcl script, `tools/mirror/mirror.tcl`, that runs either
+as a `dlsh` process beside any stim2 or embedded in a thread of the
+mirror's own stim2 (`--mirror`). The same frame-locked core replays
+recorded sessions offline, into a window or a movie (`tools/replay`), and
+a `--headless` stim2 renders without a display for that. See
+[docs/mirror.md](docs/mirror.md), [docs/replay.md](docs/replay.md),
+[docs/stim-frame.md](docs/stim-frame.md) and
+[docs/headless.md](docs/headless.md).
 
 ## Linux Systemd Service
 
