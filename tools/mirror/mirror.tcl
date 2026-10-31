@@ -784,7 +784,7 @@ proc note_screen {name} {
             if {[dict exists $g halfx] && [dict exists $g halfy]} {
                 set hx [dict get $g halfx]; set hy [dict get $g halfy]
                 dict set ::screen_pre deg "if {\[screen_set HalfScreenDegreeX\] != $hx ||\
- \[screen_set HalfScreenDegreeY\] != $hy} { screen_set HalfScreenDegreeX $hx; screen_set HalfScreenDegreeY $hy }\n"
+ \[screen_set HalfScreenDegreeY\] != $hy} { screen_set HalfScreenDegreeX $hx; screen_set HalfScreenDegreeY $hy; reshape }\n"
             }
         }
     }

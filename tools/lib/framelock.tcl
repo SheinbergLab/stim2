@@ -155,6 +155,10 @@ proc framelock::setup {sock d log} {
         if {[is_error $r1] || [is_error $r2]} {
             {*}$log "WARNING: could not set the rig's degree mapping: $r1 $r2"
         } else {
+            # screen_set only stores the degrees: the projection and the
+            # pixels per degree follow on a reshape, as screen_config does
+            # it (without this they followed the next window resize)
+            send $sock reshape
             {*}$log "geometry: +/-$hx x +/-$hy deg onto this ${win_w}x${win_h} window"
             if {[dict exists $geom w] && [dict exists $geom h] && $win_h > 0 && [dict get $geom h] > 0} {
                 set gw [dict get $geom w]; set gh [dict get $geom h]
