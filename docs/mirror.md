@@ -48,7 +48,16 @@ Any stim2 can become a mirror and go back, with no restart:
   refuses it, because ESS's commands and the mirror's would interleave.
 - **After `stop`,** the stim2 is unstepped, with the overlay cleared and
   in playback (nothing subscribed). The next `configure_stim` from ESS
-  starts from its usual clean slate.
+  starts from its usual clean slate. A stop lands within milliseconds
+  wherever the driver is, including inside a connect to a host that does
+  not answer: its connects are asynchronous, and the stop ends every
+  nested wait. A message-port client's request queued at that moment is
+  left to run; only the driver's own requests are answered with an error.
+- **A driver that ends on its own** (a script error, an unknown option)
+  is not running: `stimMirror` reports `running 0` with `mode failed`
+  and the reason in `why`, the panel shows it, and the next `stimMirror
+  HOST` starts afresh. Before it goes, the driver puts stim2 back the way
+  `stop` does.
 - **Discovery.** Every dserv advertises `_dserv._tcp` through the host's
   mDNS responder (dserv `docs/discovery.md`). stim2 browses with the
   system's own tool: `dns-sd` on a Mac, `avahi-browse` (avahi-utils) on

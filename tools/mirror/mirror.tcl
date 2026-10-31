@@ -261,17 +261,31 @@ proc ds_req {line {ms 3000}} {
 }
 set chan_waits 0
 proc chan_wait {chan ev ms} {
+    if {[info exists ::forever]} { return stop }     ;# stopping: no new wait
     set v ::chan_wait_[incr ::chan_waits]
     set $v ""
     fileevent $chan $ev [list set $v ok]
     set id [after $ms [list set $v timeout]]
+    lappend ::waits $v
     vwait $v
+    set ::waits [lsearch -all -inline -not -exact $::waits $v]
     after cancel $id
     catch { fileevent $chan $ev {} }
     set r [set $v]
     unset $v
     return $r
 }
+# Inside stim2 (-inproc), `stimMirror stop` sets ::forever to end the
+# driver's event loop.  A wait nested in it -- a request to dserv in
+# flight, a connect -- would hold the thread until its own timeout; this
+# ends them all with the stop, and chan_wait and ws_call start none after
+# it (a failed connect moves on to the next transport), so the driver
+# unwinds at once.  Standalone, ::forever is never set.
+set waits {}
+trace add variable ::forever write {apply {args {
+    foreach v $::waits { catch { set $v stop } }
+    set ::ws_reply {error "the mirror is stopping"}
+}}}
 proc ds_match {name} {
     if {$::transport eq "ws"} {
         ws_send [dict_to_json [dict create cmd subscribe match $name every 1]]
@@ -318,9 +332,7 @@ proc ds_accept {s addr port} {
 proc ds_read {s} {
     while {[gets $s line] >= 0} {
         set d [ds_parse $line]
-        if {$d ne ""} {
-            if {[catch {on_dp {*}$d} err]} { log "error handling [lindex $d 0]: $err\n$::errorInfo" }
-        }
+        if {$d ne ""} { deliver $d }
     }
     if {[eof $s]} {
         close $s
@@ -328,7 +340,19 @@ proc ds_read {s} {
         after 1000 ds_join
         return
     }
-    pump
+    if {!$::joining} pump
+}
+
+# A pushed datapoint, on either transport.  While ds_join reads the current
+# values, pushes are held and delivered after them in order: each of its
+# requests runs the event loop, so a push handled in the middle would be
+# followed by an older value from a %get (stim/script is read first and
+# applied last), and a trial boundary could start a run on a half-read rig.
+set joining 0
+set pending {}
+proc deliver {d} {
+    if {$::joining} { lappend ::pending $d; return }
+    if {[catch {on_dp {*}$d} err]} { log "error handling [lindex $d 0]: $err\n$::errorInfo" }
 }
 
 # ---- the WebSocket client (RFC 6455, client side: text frames out, masked;
@@ -337,28 +361,40 @@ set ws_sock ""
 set ws_buf ""
 set ws_frag ""
 set ws_reply ""
-set ws_joining 0
-set ws_pending {}
 
 proc ws_connect {host port} {
     global opt ws_sock ws_buf ws_frag
     if {$opt(wss)} {
         if {[catch {package require tls}]} { error "-wss needs the Tcl tls package, which this dlsh.zip does not have" }
         set s [tls::socket -servername $host $::dserv_ip $port]
+        fconfigure $s -translation binary -blocking 0 -buffering none
     } else {
-        set s [socket $::dserv_ip $port]
+        # connect and read the handshake without blocking the thread: a
+        # host that accepts and never answers, or does not answer the
+        # connect, ends here in 5 s (and at once on a stop)
+        set s [socket -async $::dserv_ip $port]
+        fconfigure $s -translation binary -blocking 0 -buffering none
+        if {[chan_wait $s writable 5000] ne "ok" || [fconfigure $s -error] ne ""} {
+            set e [fconfigure $s -error]
+            close $s
+            error "no connection to $host:$port[expr {$e ne "" ? " ($e)" : ""}]"
+        }
     }
-    fconfigure $s -translation binary -blocking 1 -buffering none
     set key [binary encode base64 [binary format c* [lmap i {0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15} {expr {int(rand() * 256)}}]]]
     puts -nonewline $s "GET /ws HTTP/1.1\r\nHost: $host:$port\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: $key\r\nSec-WebSocket-Version: 13\r\n\r\n"
     flush $s
     set hdr ""
+    set deadline [expr {[clock milliseconds] + 5000}]
     while {![string match "*\r\n\r\n" $hdr]} {
-        set c [read $s 1]
-        if {$c eq ""} break
+        set left [expr {$deadline - [clock milliseconds]}]
+        if {$left <= 0 || [chan_wait $s readable $left] ne "ok"} break
+        set c [read $s]
+        if {$c eq "" && [eof $s]} break
         append hdr $c
         if {[string length $hdr] > 8192} break
     }
+    # what followed the handshake in the same read is the first frame
+    if {[regexp {^(.*?\r\n\r\n)(.*)$} $hdr -> hdr rest]} { set ws_buf $rest } else { set ws_buf "" }
     if {![regexp {^HTTP/1\.1 101} $hdr]} {
         close $s
         if {$hdr eq "" || [string index $hdr 0] ne "H"} {
@@ -366,9 +402,9 @@ proc ws_connect {host port} {
         }
         error "WebSocket handshake refused: [lindex [split $hdr \n] 0]"
     }
-    set ws_sock $s; set ws_buf ""; set ws_frag ""
-    fconfigure $s -blocking 0
+    set ws_sock $s; set ws_frag ""
     fileevent $s readable ws_read
+    if {$ws_buf ne ""} { after idle ws_read }
 }
 
 proc ws_frame {op payload} {
@@ -391,6 +427,7 @@ proc ws_send {text} {
 
 proc ws_read {} {
     global ws_sock ws_buf ws_frag
+    if {$ws_sock eq ""} return
     if {[catch {append ws_buf [read $ws_sock]}] || [eof $ws_sock]} { ws_lost; return }
     while {[string length $ws_buf] >= 2} {
         binary scan $ws_buf cucu b0 b1
@@ -420,17 +457,14 @@ proc ws_read {} {
             9 { catch { puts -nonewline $ws_sock [ws_frame 10 $payload]; flush $ws_sock } }
         }
     }
-    if {!$::ws_joining} pump
+    if {!$::joining} pump
 }
 
 proc ws_message {msg} {
     if {[catch {json_to_dict $msg} d]} return
     if {[dict exists $d type] && [dict get $d type] eq "datapoint"} {
-        if {$::ws_joining} { lappend ::ws_pending $d; return }
         set dp [ws_dp $d]
-        if {$dp ne ""} {
-            if {[catch {on_dp {*}$dp} err]} { log "error handling [lindex $dp 0]: $err\n$::errorInfo" }
-        }
+        if {$dp ne ""} { deliver $dp }
     } elseif {[dict exists $d action]} {
         # a subscribe's acknowledgement
     } else {
@@ -440,6 +474,7 @@ proc ws_message {msg} {
 
 # a request answered by the next message that is not a push or an ack
 proc ws_call {json} {
+    if {[info exists ::forever]} { return {error "the mirror is stopping"} }
     set ::ws_reply ""
     ws_send $json
     set id [after 5000 {set ::ws_reply {error "no reply from dserv"}}]
@@ -492,12 +527,16 @@ set dserv_ip ""
 proc resolve_dserv {} {
     global opt
     if {[regexp {^[0-9.]+$} $opt(dserv)]} { return $opt(dserv) }
+    # an async connect: the event loop runs while it is on its way, so a
+    # stop is seen (a plain socket would hold the thread for the kernel's
+    # whole connect timeout).  The name lookup itself is still synchronous.
     foreach port [list 4620 $opt(wsport)] {
-        if {![catch {socket $opt(dserv) $port} s]} {
-            set ip [lindex [fconfigure $s -peername] 0]
-            close $s
-            return $ip
-        }
+        if {[catch {socket -async $opt(dserv) $port} s]} continue
+        fconfigure $s -blocking 0
+        set ok [expr {[chan_wait $s writable 3000] eq "ok" && [fconfigure $s -error] eq ""}]
+        set ip [expr {$ok ? [lindex [fconfigure $s -peername] 0] : ""}]
+        close $s
+        if {$ip ne ""} { return $ip }
     }
     return $opt(dserv)
 }
@@ -525,50 +564,56 @@ proc ds_join {} {
             after 2000 ds_join
             return
         }
-        set ::ws_joining 1
-        set ::ws_pending {}
     }
-    set followed {}
-    set base {stim/script stim/lib/* stim/bind stim/cmd stim/frame stimdg
-        ess/screen_* ess/in_obs ess/status ess/rmt_connected ess/system ess/protocol ess/variant}
-    if {$opt(eye) ne "off"} { lappend base $opt(eye) }
-    if {$opt(touch) ne "off"} { lappend base ess/touch_press ess/touch_drag ess/touch_release }
-    follow $base
-    # current values
-    foreach n {ess/system ess/protocol ess/variant ess/rmt_connected ess/status ess/in_obs
-        ess/screen_halfx ess/screen_halfy ess/screen_w ess/screen_h ess/screen_refresh_rate ess/screen_bg
-        stimdg stim/bind} {
-        set d [ds_get $n]
+    # pushes start with the first %match and are held until the current
+    # values are in (deliver); a failed read leaves nothing held
+    set ::joining 1
+    set ::pending {}
+    if {[catch {
+        set followed {}
+        set base {stim/script stim/lib/* stim/bind stim/cmd stim/frame stimdg
+            ess/screen_* ess/in_obs ess/status ess/rmt_connected ess/system ess/protocol ess/variant}
+        if {$opt(eye) ne "off"} { lappend base $opt(eye) }
+        if {$opt(touch) ne "off"} { lappend base ess/touch_press ess/touch_drag ess/touch_release }
+        follow $base
+        # current values
+        foreach n {ess/system ess/protocol ess/variant ess/rmt_connected ess/status ess/in_obs
+            ess/screen_halfx ess/screen_halfy ess/screen_w ess/screen_h ess/screen_refresh_rate ess/screen_bg
+            stimdg stim/bind} {
+            set d [ds_get $n]
+            if {$d ne ""} { note_value {*}$d }
+        }
+        # the script's libraries: those published with it (configure_stim sends
+        # them just before the script, and a file open re-emits them just
+        # after it; an older load's stay in dserv, minutes or more away)
+        set d [ds_get stim/script]
+        set sts [expr {$d ne "" ? [lindex $d 2] : 0}]
+        foreach k [ds_keys stim/lib/*] {
+            set l [ds_get $k]
+            if {$l ne "" && abs($sts - [lindex $l 2]) < 60000000} { note_value {*}$l }
+        }
+        foreach n $rig(bind) {
+            set l [ds_get $n]
+            if {$l ne ""} { note_value {*}$l }
+        }
         if {$d ne ""} { note_value {*}$d }
+    } err]} {
+        set ::joining 0; set ::pending {}
+        if {[info exists ::forever]} return
+        log "joining dserv $opt(dserv) failed ($err); trying again"
+        after 2000 ds_join
+        return
     }
-    # the script's libraries: those published with it (configure_stim sends
-    # them just before the script, and a file open re-emits them just
-    # after it; an older load's stay in dserv, minutes or more away)
-    set d [ds_get stim/script]
-    set sts [expr {$d ne "" ? [lindex $d 2] : 0}]
-    foreach k [ds_keys stim/lib/*] {
-        set l [ds_get $k]
-        if {$l ne "" && abs($sts - [lindex $l 2]) < 60000000} { note_value {*}$l }
-    }
-    foreach n $rig(bind) {
-        set l [ds_get $n]
-        if {$l ne ""} { note_value {*}$l }
-    }
-    if {$d ne ""} { note_value {*}$d }
     log "joined dserv $opt(dserv) ([expr {$transport eq "ws" ? "WebSocket, port $opt(wsport)" : "callback port $::listen_port"}]): $rig(load), stim2 [expr {$rig(connected) eq "1" ? "connected" : "NOT connected"}],\
  [expr {$rig(script) ne "" ? "script [file tail $rig(path)]" : "no script"}], [llength $rig(bind)] bound streams,\
  [expr {$rig(status) eq "running" ? "running, in_obs $rig(in_obs)" : $rig(status)}]"
     to_waiting [expr {$rig(script) ne "" ? "ready" : "waiting"}] "joined mid-session"
-    if {$transport eq "ws"} {
-        # what was pushed while joining, in order
-        set ::ws_joining 0
-        foreach d $::ws_pending {
-            set dp [ws_dp $d]
-            if {$dp ne ""} { catch {on_dp {*}$dp} }
-        }
-        set ::ws_pending {}
-        pump
-    }
+    # what was pushed while joining, in order
+    set ::joining 0
+    set held $::pending
+    set ::pending {}
+    foreach d $held { deliver $d }
+    pump
 }
 
 # ---------------------------------------------------------------------------
@@ -772,6 +817,7 @@ proc on_frame {f} {
 proc stim_connect {} {
     global sock opt
     if {$sock ne ""} { return 1 }
+    if {[info exists ::forever]} { return 0 }      ;# stopping (in stim2)
     if {$opt(inproc)} {
         set s inproc
     } elseif {[catch {framelock::connect $opt(host) $opt(port)} s]} { return 0 }
@@ -1128,13 +1174,20 @@ proc presented {t} {
 proc gaze_tick {} {
     global gaze_after period_ms last_present opt
     set gaze_after ""
+    if {[info exists ::forever]} return          ;# stopping (in stim2)
     if {$::mode ne "run" || ![llength $::queue]} { gaze_repaint }
     if {$gaze_after eq ""} {
-        # nothing presented: keep the phase of the last present
-        set now [now_us]
-        set next [expr {$last_present / 1000.0 + $period_ms - $opt(late)}]
-        while {$next < $now / 1000.0 + 1} { set next [expr {$next + $period_ms}] }
-        set gaze_after [after [expr {max(1, int($next - $now / 1000.0))}] gaze_tick]
+        # nothing presented: keep the phase of the last present, or, before
+        # any present (last_present 0, or a repaint that failed), start from
+        # now.  The catch-up is one step, not a walk: stepping one period at
+        # a time from 0 toward the epoch clock never ends.
+        set now_ms [expr {[now_us] / 1000.0}]
+        set base [expr {$last_present > 0 ? $last_present / 1000.0 : $now_ms}]
+        set next [expr {$base + $period_ms - $opt(late)}]
+        if {$next < $now_ms + 1} {
+            set next [expr {$next + ceil(($now_ms + 1 - $next) / $period_ms) * $period_ms}]
+        }
+        set gaze_after [after [expr {max(1, int($next - $now_ms))}] gaze_tick]
     }
 }
 
@@ -1235,14 +1288,33 @@ if {$opt(launch)} {
     proc exit {{code 0}} { stop_launched; _exit $code }
 }
 
+# a pause that runs the event loop (so a stop, in stim2, is seen and ends
+# it), unlike a plain `after ms`
+proc sleep_ms {ms} {
+    set v ::sleep_[incr ::chan_waits]
+    set $v ""
+    set id [after $ms [list set $v ok]]
+    lappend ::waits $v
+    vwait $v
+    set ::waits [lsearch -all -inline -not -exact $::waits $v]
+    after cancel $id
+    unset $v
+}
+
 log "mirror: rig dserv $opt(dserv), stim2 [expr {$opt(inproc) ? "in-process" : "$opt(host):$opt(port)"}], command wait $opt(wait) ms, gaze $opt(eye)"
-while {![stim_connect]} {
+while {![info exists ::forever] && ![stim_connect]} {
     if {![info exists warned]} { log "waiting for the mirror's stim2 at $opt(host):$opt(port)"; set warned 1 }
     if {$launched ne "" && ![alive $launched]} { log "the launched stim2 exited before answering"; exit 1 }
-    after [expr {$launched ne "" ? 200 : 1000}]
+    sleep_ms [expr {$launched ne "" ? 200 : 1000}]
 }
-show_waiting
-ds_join
-after [expr {int($opt(report) * 1000)}] report
-gaze_tick
-vwait forever
+# a stop (::forever set, in stim2) that landed during the connect or the
+# join has nothing left to end: vwait waits for a write, not for the variable
+if {![info exists ::forever]} {
+    show_waiting
+    ds_join
+}
+if {![info exists ::forever]} {
+    after [expr {int($opt(report) * 1000)}] report
+    gaze_tick
+}
+if {![info exists ::forever]} { vwait forever }

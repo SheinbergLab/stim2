@@ -1143,6 +1143,8 @@ typedef struct client_request_s {
   int swap_at_queue;        // SwapCount when the reply was deferred
   double ticks_dequeue;     // glfwGetTime()*1000 when the render thread
                             // dequeued the request (header stamp)
+  bool from_mirror = false; // queued by stimSend from --mirror's thread:
+                            // what mirrorDrain answers when that thread stops
 } client_request_t;
 
 /* Reply header requested by a '@' command.  Fixed wire format -- the ESS
@@ -3083,8 +3085,9 @@ static int stimSendCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const 
                      ": called on the render thread, which would wait on itself", NULL);
     return TCL_ERROR;
   }
-  if (mirrorStopping()) {       /* stim2 is quitting: no loop to answer */
-    Tcl_SetObjResult(interp, Tcl_NewStringObj("!TCL_ERROR stim2 is quitting", -1));
+  if (mirrorStopping()) {       /* the mirror is being stopped (or stim2 is
+                                   quitting): the loop is not answering */
+    Tcl_SetObjResult(interp, Tcl_NewStringObj("!TCL_ERROR the mirror is stopping", -1));
     return TCL_OK;
   }
   /* One reply queue per calling thread, alive as long as the thread, as a
@@ -3102,6 +3105,7 @@ static int stimSendCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const 
   req.ack_header = false;
   req.swap_at_queue = 0;
   req.ticks_dequeue = 0.0;
+  req.from_mirror = true;
   app.queue.push_back(&req);
   do_wakeup();
   std::string r = rqueue.front();
@@ -3115,15 +3119,20 @@ static int Stimsend_Init(Tcl_Interp *interp)
   return Tcl_PkgProvide(interp, "Stimsend", "1.0");
 }
 
-/* --mirror's thread is stopping: answer whatever it (or a message-port
-   client) still has queued for the render thread, which will not run it */
+/* --mirror's thread is stopping: answer whatever it still has queued for
+   the render thread, which will not run it while it waits for the thread.
+   A message-port client's request stays queued (a `stimMirror stop` is
+   not its concern) and runs once the loop goes on. */
 static void mirrorDrain(void)
 {
+  std::vector<client_request_t *> keep;
   while (app.queue.size()) {
     client_request_t *req = app.queue.front();
     app.queue.pop_front();
-    req->rqueue->push_back("!TCL_ERROR stim2 is quitting");
+    if (req->from_mirror) req->rqueue->push_back("!TCL_ERROR the mirror is stopping");
+    else keep.push_back(req);
   }
+  for (client_request_t *req : keep) app.queue.push_back(req);
 }
 /* the Tcl exit command leaves through exit(), not the end of main */
 static void mirrorStopAtExit(void) { mirrorStop(mirrorDrain); }
@@ -3142,17 +3151,6 @@ static void mirrorStopAtExit(void) { mirrorStop(mirrorDrain); }
  * ::dservhost) is that rig's display and is refused: ESS's commands and a
  * mirror's would interleave.  One in playback, or never configured, is free.
  */
-static const char *MirrorStopCleanup = R"tcl(
-  catch {stepMode 0}
-  catch {overlay clear}
-  catch {package require stimess; stim::prelude playback}
-  catch {resetObjList}
-  catch {glistInit 1}
-  catch {setWindowTitle stim2}
-  catch {redraw}
-  unset -nocomplain ::stim2_mirror_status
-)tcl";
-
 static int stimMirrorCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
   static bool atexit_set = false, discover_loaded = false;
@@ -3164,9 +3162,15 @@ static int stimMirrorCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *cons
   }
   const char *sub = Tcl_GetString(objv[1]);
   if (!strcmp(sub, "stop")) {
-    if (!mirrorRunning()) { Tcl_SetResult(interp, (char *) "not mirroring", TCL_STATIC); return TCL_OK; }
+    if (!mirrorRunning()) {
+      /* a driver that ended on its own has already cleaned up; a stop
+         collects its thread and clears the status it left */
+      mirrorStop(mirrorDrain);
+      Tcl_Eval(interp, "unset -nocomplain ::stim2_mirror_status");
+      Tcl_SetResult(interp, (char *) "not mirroring", TCL_STATIC); return TCL_OK;
+    }
     mirrorStop(mirrorDrain);
-    Tcl_Eval(interp, MirrorStopCleanup);
+    Tcl_Eval(interp, mirrorCleanupScript());
     Tcl_SetResult(interp, (char *) "stopped", TCL_STATIC);
     return TCL_OK;
   }
@@ -3232,6 +3236,7 @@ static void drawMirrorSection(void)
       set d $::stim2_mirror_status
       set s "[dict get $d dserv]: [dict get $d mode]"
       if {[dict get $d load] ne ""} { append s "  ([dict get $d load])" }
+      if {[dict get $d mode] ne "run" && [dict exists $d why]} { append s "\n[dict get $d why]" }
       if {[dict exists $d lag_p50] && [dict get $d lag_p50] ne "-"} {
         append s "
 lag [dict get $d lag_from]->present p50 [dict get $d lag_p50] ms, p95 [dict get $d lag_p95] ms"

@@ -18,8 +18,15 @@
  * Stopping (mirrorStop, at quit and from the Tcl exit command): stimSend
  * starts failing at once, pending requests are answered with an error by
  * the caller's drain function, and an event posted to the thread ends its
- * vwait; the thread deletes its interpreter and is joined.  A thread that
- * has not finished within a second is detached and left to the exit.
+ * vwait (and, through a trace in mirror.tcl, any nested wait); the thread
+ * deletes its interpreter and is joined.  A thread that has not finished
+ * within a few seconds is detached and left to the exit; once it does
+ * finish (Done), a new mirror may start.
+ *
+ * A driver that ends on its own -- a script error, a bad option -- is not
+ * running: mirrorRunning says so as soon as the thread is done, the next
+ * mirrorStart joins it, and before it goes it puts stim2 back the way
+ * `stimMirror stop` does and leaves the reason in ::stim2_mirror_status.
  */
 
 #include <atomic>
@@ -27,6 +34,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <tcl.h>
@@ -36,15 +44,34 @@
 
 static std::thread MirrorThread;
 static std::atomic<bool> Stopping{false};
-static std::atomic<bool> Done{false};
+static std::atomic<bool> Done{false};        /* the thread has finished with Tcl */
 static std::atomic<bool> Running{false};     /* started and not yet stopped */
-static std::atomic<bool> Wedged{false};      /* a thread that would not stop was left */
-static std::atomic<Tcl_ThreadId> MirrorTclThread{nullptr};
+static std::atomic<bool> Wedged{false};      /* a thread that would not stop was detached */
 static Tcl_Interp *MirrorInterp = nullptr;    /* used on the mirror thread only */
 
+/* The stop event is posted to the mirror thread's Tcl queue; the thread
+   must not finalize its Tcl state between the post and its delivery.
+   PostMutex covers MirrorTclThread: the stopper reads it and posts under
+   the lock, and the thread clears it under the lock before finalizing. */
+static std::mutex PostMutex;
+static Tcl_ThreadId MirrorTclThread = nullptr;
+
 int mirrorStopping(void) { return Stopping.load() ? 1 : 0; }
-int mirrorRunning(void) { return Running.load() ? 1 : 0; }
+int mirrorRunning(void) { return Running.load() && !Done.load() ? 1 : 0; }
 const char *mirrorDiscoverScript(void) { return (const char *) embed_discover_tcl; }
+
+/* what `stimMirror stop` leaves behind: an ordinary, unstepped stim2 */
+static const char *CleanupScript = R"tcl(
+  catch {stepMode 0}
+  catch {overlay clear}
+  catch {package require stimess; stim::prelude playback}
+  catch {resetObjList}
+  catch {glistInit 1}
+  catch {setWindowTitle stim2}
+  catch {redraw}
+  unset -nocomplain ::stim2_mirror_status
+)tcl";
+const char *mirrorCleanupScript(void) { return CleanupScript; }
 
 /* on the mirror thread: end the driver's `vwait forever` */
 static int stopEventProc(Tcl_Event *, int)
@@ -56,7 +83,10 @@ static int stopEventProc(Tcl_Event *, int)
 static void mirrorMain(std::string spec, std::string paths, std::string tools,
                        Tcl_LibraryInitProc *sendInit)
 {
-  MirrorTclThread = Tcl_GetCurrentThread();
+  {
+    std::lock_guard<std::mutex> lk(PostMutex);
+    MirrorTclThread = Tcl_GetCurrentThread();
+  }
   Tcl_Interp *interp = Tcl_CreateInterp();
   MirrorInterp = interp;
   if (Tcl_Init(interp) != TCL_OK)
@@ -64,6 +94,7 @@ static void mirrorMain(std::string spec, std::string paths, std::string tools,
   sendInit(interp);                       /* stimSend */
   Tcl_SetVar2(interp, "mirror_spec", NULL, spec.c_str(), TCL_GLOBAL_ONLY);
   Tcl_SetVar2(interp, "mirror_paths", NULL, paths.c_str(), TCL_GLOBAL_ONLY);
+  Tcl_SetVar2(interp, "mirror_cleanup", NULL, CleanupScript, TCL_GLOBAL_ONLY);
   /* dlsh.zip's packages, as stim2's interpreter finds them; argv as the
      driver parses it; and an exit that ends this thread, never stim2 */
   const char *setup = R"tcl(
@@ -92,12 +123,25 @@ static void mirrorMain(std::string spec, std::string paths, std::string tools,
       if (rc == TCL_OK) rc = Tcl_Eval(interp, (const char *) embed_mirror_tcl);
     }
   }
-  if (rc != TCL_OK && !Stopping.load()) {
-    const char *msg = Tcl_GetStringResult(interp);
-    if (!strstr(msg, "mirror driver exit"))
-      fprintf(stderr, "mirror: %s\n", msg);
+  if (!Stopping.load()) {
+    /* ended on its own: say why, and leave stim2 as a stop would.  A
+       driver exit (its own `exit`) says so without a stack. */
+    std::string why = rc == TCL_OK ? "the driver ended" : Tcl_GetStringResult(interp);
+    if (rc != TCL_OK && !strstr(why.c_str(), "mirror driver exit"))
+      fprintf(stderr, "mirror: %s\n", why.c_str());
+    Tcl_SetVar2(interp, "mirror_why", NULL, why.c_str(), TCL_GLOBAL_ONLY);
+    Tcl_Eval(interp, R"tcl(
+      catch { stimSend $::mirror_cleanup }
+      catch { stimSend [list set ::stim2_mirror_status [dict create \
+          dserv [lindex $::mirror_spec 0] mode failed load "" updated [clock seconds] \
+          why [string range [lindex [split $::mirror_why \n] 0] 0 200]]] }
+    )tcl");
   }
-  MirrorInterp = nullptr;
+  {
+    std::lock_guard<std::mutex> lk(PostMutex);
+    MirrorTclThread = nullptr;        /* no more stop events from here on */
+    MirrorInterp = nullptr;
+  }
   Tcl_DeleteInterp(interp);
   Tcl_FinalizeThread();
   Done = true;
@@ -105,11 +149,18 @@ static void mirrorMain(std::string spec, std::string paths, std::string tools,
 
 int mirrorStart(const char *spec, const char *paths, Tcl_LibraryInitProc *sendInit)
 {
-  if (Running.load()) return -1;
-  if (Wedged.load()) return -2;      /* the last thread may still be running */
+  if (Running.load()) {
+    if (!Done.load()) return -1;
+    /* the last driver ended on its own: collect it */
+    if (MirrorThread.joinable()) MirrorThread.join();
+    Running = false;
+  }
+  if (Wedged.load()) {
+    if (!Done.load()) return -2;   /* the detached thread may still be running */
+    Wedged = false;                /* it has finished since */
+  }
   Stopping = false;
   Done = false;
-  MirrorTclThread = nullptr;
   Running = true;
   const char *t = getenv("STIM2_TOOLS");
   MirrorThread = std::thread(mirrorMain, std::string(spec), std::string(paths ? paths : ""),
@@ -119,19 +170,25 @@ int mirrorStart(const char *spec, const char *paths, Tcl_LibraryInitProc *sendIn
 
 void mirrorStop(void (*drain)(void))
 {
-  if (!Running.load() || !MirrorThread.joinable()) return;
+  if (!Running.load()) return;
+  if (!MirrorThread.joinable()) { Running = false; return; }   /* detached earlier */
   Stopping = true;
   bool posted = false;
-  for (int i = 0; i < 100 && !Done.load(); i++) {
+  /* the driver unwinds within milliseconds once the event lands (its
+     nested waits end with the stop too); the budget covers a request of
+     its own that dserv is slow to answer */
+  for (int i = 0; i < 300 && !Done.load(); i++) {
     if (drain) drain();       /* answer what it queued for the render thread */
-    Tcl_ThreadId tid = MirrorTclThread.load();
-    if (!posted && tid) {     /* set as soon as the thread has begun */
-      Tcl_Event *ev = (Tcl_Event *) Tcl_Alloc(sizeof(Tcl_Event));
-      ev->proc = stopEventProc;
-      ev->nextPtr = nullptr;
-      Tcl_ThreadQueueEvent(tid, ev, TCL_QUEUE_TAIL);
-      Tcl_ThreadAlert(tid);
-      posted = true;
+    if (!posted) {
+      std::lock_guard<std::mutex> lk(PostMutex);
+      if (MirrorTclThread) {  /* set as soon as the thread has begun */
+        Tcl_Event *ev = (Tcl_Event *) Tcl_Alloc(sizeof(Tcl_Event));
+        ev->proc = stopEventProc;
+        ev->nextPtr = nullptr;
+        Tcl_ThreadQueueEvent(MirrorTclThread, ev, TCL_QUEUE_TAIL);
+        Tcl_ThreadAlert(MirrorTclThread);
+        posted = true;
+      }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
