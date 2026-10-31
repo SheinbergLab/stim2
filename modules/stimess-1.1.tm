@@ -586,9 +586,39 @@ proc ::stim::prelude_live {host port} {
         set ::mouse_bridge_lx -1
         set ::mouse_bridge_ly -1
         if { ![info exists ::mouse_bridge_mouse] } { set ::mouse_bridge_mouse 0 }
+        # The pixel grid the events are in: the window's size in the
+        # cursor's coordinates (points: WinWidth is the framebuffer, ScaleX
+        # the desktop scaling) as it is NOW, at this configure.  ESS reads
+        # the same size now as ess/screen_w|h and maps touch pixels to
+        # degrees with it for the rest of the load, as it would a
+        # touchscreen's fixed grid.  A window resized after the load keeps
+        # reporting in this grid: each event is scaled from the window's
+        # current size to it, so a press lands on the degrees it was made
+        # at.  (Before, the raw cursor was sent, and a resize after the
+        # load skewed every press by the ratio of the sizes.)
+        proc mouse_bridge_win {} {
+            # {0 0} without screen_set (not inside stim2): events pass as is
+            if { [catch {
+                set sx [screen_set ScaleX]; set sy [screen_set ScaleY]
+                if { ![string is double -strict $sx] || $sx <= 0 } { set sx 1.0 }
+                if { ![string is double -strict $sy] || $sy <= 0 } { set sy 1.0 }
+                set wh [list [expr {[screen_set WinWidth] / double($sx)}] \
+                             [expr {[screen_set WinHeight] / double($sy)}]]
+            }] } { return {0 0} }
+            return $wh
+        }
+        lassign [mouse_bridge_win] ::mouse_bridge_w ::mouse_bridge_h
+        proc mouse_bridge_xy { x y } {
+            lassign [mouse_bridge_win] w h
+            if { $w <= 0 || $h <= 0 || ($w == $::mouse_bridge_w && $h == $::mouse_bridge_h) } {
+                return [list $x $y]
+            }
+            list [expr {int(round($x * $::mouse_bridge_w / $w))}] \
+                 [expr {int(round($y * $::mouse_bridge_h / $h))}]
+        }
         if { $::mouse_bridge_mouse } {
-            dl_local range [dl_create long 0 [screen_set WinWidth] \
-                                           0 [screen_set WinHeight]]
+            dl_local range [dl_create long 0 [expr {int($::mouse_bridge_w)}] \
+                                           0 [expr {int($::mouse_bridge_h)}]]
             dserv_send mouse/event/range $range
             dserv_send_string mouse/event/emulated 1
         }
@@ -596,19 +626,22 @@ proc ::stim::prelude_live {host port} {
             set ::mouse_bridge_down 1
             set ::mouse_bridge_lx $::MouseXPos
             set ::mouse_bridge_ly $::MouseYPos
-            dl_local coords [dl_create short $::MouseXPos $::MouseYPos 0]
+            lassign [mouse_bridge_xy $::MouseXPos $::MouseYPos] x y
+            dl_local coords [dl_create short $x $y 0]
             dserv_send mtouch/event $coords
             if { $::mouse_bridge_mouse } { dserv_send mouse/event $coords }
         }
         proc onMouseRelease {} {
             set ::mouse_bridge_down 0
-            dl_local coords [dl_create short $::MouseXPos $::MouseYPos 2]
+            lassign [mouse_bridge_xy $::MouseXPos $::MouseYPos] x y
+            dl_local coords [dl_create short $x $y 2]
             dserv_send mtouch/event $coords
             if { $::mouse_bridge_mouse } { dserv_send mouse/event $coords }
         }
         proc onMouseMove { x y } {
             if { $::mouse_bridge_mouse } {
-                dl_local mcoords [dl_create short $x $y \
+                lassign [mouse_bridge_xy $x $y] mx my
+                dl_local mcoords [dl_create short $mx $my \
                                       [expr {$::mouse_bridge_down ? 1 : 3}]]
                 dserv_send mouse/event $mcoords
             }
@@ -616,6 +649,7 @@ proc ::stim::prelude_live {host port} {
             if { $x == $::mouse_bridge_lx && $y == $::mouse_bridge_ly } return
             set ::mouse_bridge_lx $x
             set ::mouse_bridge_ly $y
+            lassign [mouse_bridge_xy $x $y] x y
             dl_local coords [dl_create short $x $y 1]
             dserv_send mtouch/event $coords
         }

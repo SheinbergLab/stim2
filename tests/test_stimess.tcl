@@ -418,6 +418,17 @@ set lport [lindex [fconfigure $listener -sockname] 2]
 set qpcs::added {}
 set qpcs::unregistered 0
 set ::mouse_bridge_mouse 0
+# stim2's screen_set and dlsh's dl_create/dl_local as the mouse bridge uses
+# them: a window of 960x540 framebuffer pixels at 2x desktop scaling (480x270
+# in the cursor's points), which the test resizes later
+array set ::screen {WinWidth 960 WinHeight 540 ScaleX 2.0 ScaleY 2.0}
+proc screen_set {name args} {
+    if {[llength $args]} { set ::screen($name) [lindex $args 0] }
+    set ::screen($name)
+}
+proc dl_create {type args} { return $args }
+proc dl_local {var val} { uplevel 1 [list set $var $val] }
+set ::MouseXPos 0; set ::MouseYPos 0
 set r [stim::prelude live -host 127.0.0.1 -port $lport]
 check "prelude live returns its mode" [expr {$r eq "live"}]
 check "live: ::dservhost set from -host" [expr {$::dservhost eq "127.0.0.1"}]
@@ -442,6 +453,47 @@ check "live: _puts is the original puts" [expr {[info commands _puts] ne ""}]
 set r [stim::bind ess/dial/pointer {x y show band}]
 check "live bind registers with the server again" \
     [expr {$r == 1 && [lindex $qpcs::added end] eq {127.0.0.1 ess/dial/pointer}}]
+
+# ---- the mouse-as-touch bridge: events in the grid ESS read at configure --
+# ESS takes ess/screen_w|h from WinWidth|Height / ScaleX|Y at configure_stim
+# and maps touch pixels to degrees with them for the whole load, so the
+# bridge must keep reporting in that grid (480x270 here) whatever the
+# window's size becomes.
+check "bridge: the grid is the window in points at configure" \
+    [expr {$::mouse_bridge_w == 480 && $::mouse_bridge_h == 270}] \
+    "got $::mouse_bridge_w x $::mouse_bridge_h"
+set ::sent {}
+set ::MouseXPos 100; set ::MouseYPos 50
+onMousePress
+check "bridge: a press reports the cursor as is while the window is unchanged" \
+    [expr {[lindex $::sent end] eq {mtouch/event {100 50 0}}}] "sent {$::sent}"
+# the window grows to 1920x1080 (960x540 points): the same spot on the
+# display is now under the cursor at 200,100 and must still report as 100,50
+set ::screen(WinWidth) 1920; set ::screen(WinHeight) 1080
+set ::MouseXPos 200; set ::MouseYPos 100
+onMouseRelease
+check "bridge: after a resize the release is scaled back to the grid" \
+    [expr {[lindex $::sent end] eq {mtouch/event {100 50 2}}}] "sent {$::sent}"
+set ::mouse_bridge_drag 1
+onMousePress
+onMouseMove 400 300
+check "bridge: a drag is scaled too" \
+    [expr {[lindex $::sent end] eq {mtouch/event {200 150 1}}}] "sent {$::sent}"
+onMouseMove 400 300
+check "bridge: an unmoved drag sends nothing" \
+    [expr {[lindex $::sent end] eq {mtouch/event {200 150 1}} && [llength $::sent] == 4}] \
+    "sent {$::sent}"
+set ::mouse_bridge_drag 0
+onMouseRelease
+# a window shrunk to a third (odd sizes): rounding, not truncation
+set ::screen(WinWidth) 320; set ::screen(WinHeight) 180
+set ::MouseXPos 53; set ::MouseYPos 29
+onMousePress
+check "bridge: a shrunk window scales up, rounded" \
+    [expr {[lindex $::sent end] eq {mtouch/event {159 87 0}}}] "sent {$::sent}"
+onMouseRelease
+set ::screen(WinWidth) 960; set ::screen(WinHeight) 540
+
 check "prelude live without -host errors" [catch {stim::prelude live}]
 check "prelude with an unknown mode errors" [catch {stim::prelude sideways}]
 check "prelude playback with options errors" [catch {stim::prelude playback -x 1}]
