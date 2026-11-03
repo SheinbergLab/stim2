@@ -847,7 +847,12 @@ if {$opt(dry)} {
 # ---------------------------------------------------------------------------
 # connect and set up, as configure_stim does
 # ---------------------------------------------------------------------------
-set sock [framelock::connect $opt(host) $opt(port)]
+if {[catch {framelock::connect $opt(host) $opt(port)} sock]} {
+    puts stderr "no stim2 answers at $opt(host):$opt(port) ($sock). Start one beside any live display, e.g.\
+\n    stim2 --headless -w 1920 -h 1080 -r 120 --port-base [expr {$opt(port) - 2}]\
+\nand give it a few seconds to load before replaying."
+    exit 1
+}
 set v [framelock::send $sock {package require stimess}]
 if {[framelock::is_error $v] || [catch {package vcompare $v 1.1} c] || $c < 0} {
     puts stderr "stim2 at $opt(host):$opt(port) has no stimess 1.1 (got: $v); it cannot take a playback prelude"
