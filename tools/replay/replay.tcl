@@ -65,6 +65,17 @@
 #                      when the file has them
 #       -bg R,G,B      the background (0-255) the display had at file open,
 #                      for a file without ess/screen_bg; overrides it
+#       -launch        start a stim2 of our own on -port's base and stop it on
+#                      exit: with -render, headless at the rig's pixel size
+#                      and refresh (ess/screen_w/h/refresh_rate), so the
+#                      movie is the rig's picture; otherwise a window in the
+#                      rig's aspect, no wider than 960. -host must be
+#                      localhost, and nothing may already answer on -port.
+#       -keep          with -launch, leave that stim2 running at exit (a
+#                      batch of files, one startup)
+#       -size WxH      with -launch, this size instead
+#       -stim2 PATH    with -launch, the stim2 to start (default: the app
+#                      bundle these tools came with, else the installed one)
 #
 # What it does, in the order ESS's configure_stim does it:
 #
@@ -118,10 +129,15 @@ set opt(bg)      ""
 set opt(dumpplan) ""
 set opt(crf)     14
 set opt(each)    0
+set opt(launch)  0
+set opt(keep)    0
+set opt(size)    ""
+set opt(stim2)   ""
 
 if {[llength $argv] < 1} {
     puts stderr "usage: dlsh replay.tcl FILE.ess ?-host H? ?-port P? ?-live? ?-trial N | -trials A-B?\
- ?-speed X? ?-gap S? ?-stream NAME ...? ?-dry? ?-verbose? ?-render OUT? ?-each? ?-fps F? ?-noblend? ?-crf N? ?-eye MODE? ?-geometry HX,HY[,HZ]? ?-bg R,G,B?"
+ ?-speed X? ?-gap S? ?-stream NAME ...? ?-dry? ?-verbose? ?-render OUT? ?-each? ?-fps F? ?-noblend? ?-crf N? ?-eye MODE? ?-geometry HX,HY[,HZ]? ?-bg R,G,B?\
+ ?-launch ?-keep? ?-size WxH? ?-stim2 PATH??"
     exit 2
 }
 set path [lindex $argv 0]
@@ -142,6 +158,11 @@ while {[llength $args]} {
         -fps     { set opt(fps)   [lindex $args 0]; set args [lrange $args 1 end] }
         -noblend { set opt(blend) 0 }
         -each    { set opt(each) 1 }
+        -launch  { set opt(launch) 1 }
+        -keep    { set opt(keep) 1 }
+        -size    { set opt(size) [lindex $args 0]; set args [lrange $args 1 end]
+                   if {![regexp {^\d+x\d+$} $opt(size)]} { puts stderr "-size wants WxH"; exit 2 } }
+        -stim2   { set opt(stim2) [lindex $args 0]; set args [lrange $args 1 end] }
         -dumpplan { set opt(dumpplan) [lindex $args 0]; set args [lrange $args 1 end] }
         -bg      { set opt(bg) [split [lindex $args 0] ,]; set args [lrange $args 1 end]
                    if {[llength $opt(bg)] != 3} { puts stderr "-bg wants R,G,B"; exit 2 } }
@@ -162,6 +183,12 @@ if {$opt(port) == 4612 && !$opt(live)} {
     puts stderr "replay: port 4612 is the live display's message port; start a stim2 with\
  --port-base 5610 and use -port 5612 (the default), or pass -live if you mean it"
     exit 2
+}
+if {($opt(keep) || $opt(size) ne "" || $opt(stim2) ne "") && !$opt(launch)} {
+    puts stderr "-keep, -size and -stim2 go with -launch"; exit 2
+}
+if {$opt(launch) && $opt(host) ni {localhost 127.0.0.1}} {
+    puts stderr "-launch starts stim2 on this machine: -host must be localhost"; exit 2
 }
 if {$opt(each)} {
     if {$opt(render) eq "" || [string index $opt(render) 0] eq "|" \
@@ -845,13 +872,98 @@ if {$opt(dry)} {
 }
 
 # ---------------------------------------------------------------------------
+# -launch: a stim2 of our own, started here and stopped on exit (unless
+# -keep). For -render it is headless at the rig's pixel size and refresh,
+# so the movie is the rig's picture; otherwise a window in the rig's
+# aspect, like the mirror's. Same recipe as mirror.tcl's launch_stim2.
+# ---------------------------------------------------------------------------
+set launched ""
+proc alive {pid} { expr {![catch {exec kill -0 $pid}]} }
+proc launch_stim2 {} {
+    global opt launched geom
+    set exe $opt(stim2)
+    # the stim2 these tools came with: an app bundle's own binary when run
+    # from its Resources/tools, else the installed one
+    set me [file normalize [info script]]
+    if {$exe eq "" && [regexp {^(.*\.app)/Contents/Resources/tools/} $me -> app]} {
+        set exe $app/Contents/MacOS/stim2
+    }
+    if {$exe eq ""} {
+        set exe [expr {$::tcl_platform(os) eq "Darwin" ? "/Applications/stim2.app/Contents/MacOS/stim2" : "/usr/local/stim2/stim2"}]
+    }
+    if {![file executable $exe]} { puts stderr "-launch: no stim2 at $exe (-stim2 PATH)"; exit 2 }
+    if {![catch {socket localhost $opt(port)} s]} {
+        close $s
+        puts stderr "-launch: a stim2 already answers on port $opt(port); stop it, pick another -port, or run without -launch"
+        exit 2
+    }
+    set rw ""; set rh ""
+    if {[info exists geom(w)] && [info exists geom(h)] && [string is integer -strict $geom(w)] \
+            && [string is integer -strict $geom(h)] && $geom(w) > 0 && $geom(h) > 0} {
+        set rw $geom(w); set rh $geom(h)
+    }
+    set args [list --port-base [expr {$opt(port) - 2}] --title "stim2 replay"]
+    if {$opt(render) ne ""} {
+        # the movie's pixels are the rig's (1920x1080 when the file does
+        # not say), at the rig's refresh
+        set w 1920; set h 1080
+        if {$rw ne ""} { set w $rw; set h $rh }
+        regexp {^(\d+)x(\d+)$} $opt(size) -> w h
+        lappend args --headless -w $w -h $h
+        if {[info exists geom(hz)] && [string is double -strict $geom(hz)] && $geom(hz) > 0} {
+            lappend args -r [expr {int(round($geom(hz)))}]
+        }
+    } else {
+        # a window in the rig's aspect, no wider than 960
+        set w 960; set h 540
+        if {$rw ne ""} {
+            if {$rw > 960} { set w 960; set h [expr {round($rh * 960.0 / $rw)}] } else { set w $rw; set h $rh }
+        }
+        regexp {^(\d+)x(\d+)$} $opt(size) -> w h
+        lappend args -w $w -h $h
+    }
+    if {$::tcl_platform(os) ne "Darwin" && [file exists /usr/local/stim2/config/linux.cfg]} {
+        lappend args -f /usr/local/stim2/config/linux.cfg
+    }
+    # not dlsh's own Tcl/Tk library paths (inside its zip): stim2 would
+    # look for its library, and its modules (stimess), there
+    set saved {}
+    foreach v {TCL_LIBRARY TK_LIBRARY} {
+        if {[info exists ::env($v)]} { dict set saved $v $::env($v); unset ::env($v) }
+    }
+    set launched [exec $exe {*}$args >/dev/null 2>/dev/null &]
+    dict for {v val} $saved { set ::env($v) $val }
+    puts "  launched stim2 (pid $launched): $exe $args"
+}
+proc stop_launched {} {
+    if {$::launched ne "" && [alive $::launched]} { catch {exec kill $::launched} }
+}
+if {$opt(launch)} {
+    launch_stim2
+    if {$opt(keep)} {
+        puts "  -keep: that stim2 stays up after this replay (port $opt(port)); stop it with `echo exit | nc localhost [expr {$opt(port) - 2}]`"
+    } else {
+        # a terminal's Ctrl-C reaches stim2 too (same process group); a
+        # plain exit of the driver stops it here
+        rename exit _exit
+        proc exit {{code 0}} { stop_launched; _exit $code }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # connect and set up, as configure_stim does
 # ---------------------------------------------------------------------------
-if {[catch {framelock::connect $opt(host) $opt(port)} sock]} {
-    puts stderr "no stim2 answers at $opt(host):$opt(port) ($sock). Start one beside any live display, e.g.\
+set deadline [expr {[clock milliseconds] + 30000}]
+while {[catch {framelock::connect $opt(host) $opt(port)} sock]} {
+    if {$launched eq ""} {
+        puts stderr "no stim2 answers at $opt(host):$opt(port) ($sock). Add -launch to start one here, or start one beside any live display, e.g.\
 \n    stim2 --headless -w 1920 -h 1080 -r 120 --port-base [expr {$opt(port) - 2}]\
 \nand give it a few seconds to load before replaying."
-    exit 1
+        exit 1
+    }
+    if {![alive $launched]} { puts stderr "the launched stim2 exited before answering"; exit 1 }
+    if {[clock milliseconds] > $deadline} { puts stderr "the launched stim2 did not answer on port $opt(port) within 30 s"; exit 1 }
+    after 200
 }
 set v [framelock::send $sock {package require stimess}]
 if {[framelock::is_error $v] || [catch {package vcompare $v 1.1} c] || $c < 0} {

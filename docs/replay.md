@@ -12,6 +12,7 @@ datapoints in the same order and at the same pace.
     stim2 --headless -w 1920 -h 1080 -r 120 --port-base 5610 &
     dlsh tools/replay/replay.tcl FILE.ess -render movie.mp4     # frame-locked
     dlsh tools/replay/replay.tcl FILE.ess -render out/trial.mp4 -each -fps 60   # one movie per trial
+    dlsh tools/replay/replay.tcl FILE.ess -render out/trial.mp4 -each -launch   # starts and stops its own stim2
 
 `FILE` may also be the obs DG dfconf writes for each `.ess` at close
 (`FILE.obs.dgz`, `dslog::readESS`), with the same options. For `-render`
@@ -23,6 +24,7 @@ columns empty, which the script reports. The `.ess` always works.
 | option | |
 |---|---|
 | `-host H`, `-port P` | the stim2 to drive (default `localhost:5612`, a stim2 started with `--port-base 5610`). Port 4612 is the live display's and is refused unless `-live` is given. |
+| `-launch` | start a stim2 of our own on `-port`'s base and stop it on exit. With `-render` it is headless at the rig's pixel size and refresh from the file's `ess/screen_*` records, so the movie is the rig's picture; otherwise a window in the rig's aspect, no wider than 960. `-host` must be localhost, and nothing may already answer on `-port`. Startup is a few seconds; the driver waits for it. `-keep` leaves that stim2 running for the next file, `-size WxH` overrides the size, `-stim2 PATH` names the binary (default: the app bundle these tools came with, else the installed one). |
 | `-live` | allow `-port 4612`. Only when you mean to draw on the live display. |
 | `-trial N`, `-trials A-B` | one trial or a range, 1-based by observation period. A trial's window runs from the previous period's end to its own, so the commands that set it up (`nexttrial`, `targets_on`) travel with it. Default: the whole file. |
 | `-speed X` | playback rate, default 1.0. `0` sends as fast as stim2 takes it. |
