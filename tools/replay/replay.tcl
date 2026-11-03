@@ -6,8 +6,9 @@
 #     dlsh tools/replay/replay.tcl FILE.obs.dgz ?options?
 #
 # FILE may also be the obs DG dfconf converts each .ess into at close
-# (dslog::readESS, df wide_datafiles on -- off, stim/frame's int64 records
-# are dropped and nothing can be frame-locked). See read_obs below.
+# (dslog::readESS with df wide_datafiles on, the default from dserv
+# 0.60.16; converted narrow, stim/frame's int64 records are dropped and
+# nothing can be frame-locked -- the script says so). See read_obs below.
 #
 #       -host H        stim2 host (default localhost)
 #       -port P        stim2 message port (default 5612: a stim2 started with
@@ -38,6 +39,14 @@
 #                      ignored; -gap compresses only when given. Needs a stim2
 #                      with stepFrame (headless or not) and a file with
 #                      stim/frame and ACK-stamped stim/cmd records.
+#       -each          with -render OUT into a movie file: one movie per trial
+#                      of the range (default: every trial), each holding the
+#                      rig frames of that trial's window and the gaze over
+#                      them. OUT names the files: a % format takes the trial
+#                      number (out/planko_t%03d.mp4), else _tNNN goes before
+#                      the extension. A trial's last frame holds for one
+#                      movie frame; the rig's idle time before the next
+#                      trial starts the next movie
 #       -fps F         the movie's frame rate (default: the rig's refresh; above
 #                      60, QuickTime Player slows down -- -fps 60 for it).
 #                      Below the rig's refresh, into a movie file, every rig
@@ -108,10 +117,11 @@ set opt(geometry) ""
 set opt(bg)      ""
 set opt(dumpplan) ""
 set opt(crf)     14
+set opt(each)    0
 
 if {[llength $argv] < 1} {
     puts stderr "usage: dlsh replay.tcl FILE.ess ?-host H? ?-port P? ?-live? ?-trial N | -trials A-B?\
- ?-speed X? ?-gap S? ?-stream NAME ...? ?-dry? ?-verbose? ?-render OUT? ?-fps F? ?-noblend? ?-crf N? ?-eye MODE? ?-geometry HX,HY[,HZ]? ?-bg R,G,B?"
+ ?-speed X? ?-gap S? ?-stream NAME ...? ?-dry? ?-verbose? ?-render OUT? ?-each? ?-fps F? ?-noblend? ?-crf N? ?-eye MODE? ?-geometry HX,HY[,HZ]? ?-bg R,G,B?"
     exit 2
 }
 set path [lindex $argv 0]
@@ -131,6 +141,7 @@ while {[llength $args]} {
         -render  { set opt(render) [lindex $args 0]; set args [lrange $args 1 end] }
         -fps     { set opt(fps)   [lindex $args 0]; set args [lrange $args 1 end] }
         -noblend { set opt(blend) 0 }
+        -each    { set opt(each) 1 }
         -dumpplan { set opt(dumpplan) [lindex $args 0]; set args [lrange $args 1 end] }
         -bg      { set opt(bg) [split [lindex $args 0] ,]; set args [lrange $args 1 end]
                    if {[llength $opt(bg)] != 3} { puts stderr "-bg wants R,G,B"; exit 2 } }
@@ -152,6 +163,13 @@ if {$opt(port) == 4612 && !$opt(live)} {
  --port-base 5610 and use -port 5612 (the default), or pass -live if you mean it"
     exit 2
 }
+if {$opt(each)} {
+    if {$opt(render) eq "" || [string index $opt(render) 0] eq "|" \
+            || ![regexp -nocase {\.(mp4|mov|mkv)$} $opt(render)]} {
+        puts stderr "-each wants -render OUT with OUT a movie file (.mp4/.mov/.mkv): one is written per trial"
+        exit 2
+    }
+}
 
 # ---------------------------------------------------------------------------
 # read the file
@@ -170,6 +188,7 @@ foreach s $opt(streams) { dict set stream_set $s 1 }
 set records {}
 set stimdg_b64 ""
 set obs_note ""
+set obs_frames_narrow 0   ;# an obs DG whose stim/frame columns are there but empty
 
 # ---------------------------------------------------------------------------
 # read_obs: the same structures from dfconf's obs DG (.obs.dgz), not the .ess.
@@ -201,9 +220,16 @@ set obs_note ""
 # joined by spaces.
 # ---------------------------------------------------------------------------
 proc median {l} { set l [lsort -real $l]; lindex $l [expr {[llength $l] / 2}] }
+
+# -each: the movie file for one trial. OUT with a % format takes the trial
+# number (out/planko_t%03d.mp4); otherwise _tNNN goes before the extension.
+proc each_name {out trial} {
+    if {[string first % $out] >= 0} { return [format $out $trial] }
+    return "[file rootname $out]_t[format %03d $trial][file extension $out]"
+}
 proc read_obs {path} {
     global script script_path libs bind_names stimdg stimdg_b64 obs_begin obs_end \
-        events frames eye_recs em_settings counts hashed records geom obs_note
+        events frames eye_recs em_settings counts hashed records geom obs_note obs_frames_narrow
     set g [dg_read $path]
     set names [dg_tclListnames $g]
     # the absolute anchor (a wide DG from a dlsh that writes it): the file's
@@ -416,6 +442,11 @@ proc read_obs {path} {
         }
     }
     dict set counts stim/cmd [expr {[dict exists $counts stim/cmd] ? [dict get $counts stim/cmd] : 0}]
+    # stim/frame is DSERV_INT64: a dslog converting with wide types off
+    # (dfconf's `df wide_datafiles`, off by default before dserv 0.60.16)
+    # keeps the columns and drops every value, so the frames were in the
+    # .ess but are not here
+    if {![llength $frames] && [dl_exists $g:<ds>stim/frame]} { set obs_frames_narrow 1 }
     dg_delete $g
 }
 
@@ -553,7 +584,14 @@ foreach e $events { if {[lindex $e 1] eq "cmd"} { incr ncmd } else { incr ndp } 
 # ---------------------------------------------------------------------------
 if {$opt(render) ne ""} {
     if {![llength $frames]} {
-        puts stderr "-render needs stim/frame records, and $path has none (recorded before stimFrameLog)"; exit 1
+        if {$obs_frames_narrow} {
+            puts stderr "-render needs stim/frame records: $path has the stim/frame columns but they\
+ are empty, because the .ess was converted with wide types off (the rig's `df wide_datafiles` setting;\
+ stim/frame is int64). Render from the .ess, or reconvert it with `dslog::wideTypes 1` first."
+        } else {
+            puts stderr "-render needs stim/frame records, and $path has none (recorded before stimFrameLog)"
+        }
+        exit 1
     }
     set frames [lsort -integer -index 2 $frames]
     if {$w0 ne ""} {
@@ -561,6 +599,20 @@ if {$opt(render) ne ""} {
         foreach f $frames { set ts [lindex $f 0]; if {$ts > $w0 && $ts <= $w1} { lappend sel $f } }
         set frames $sel
         if {![llength $frames]} { puts stderr "no stim/frame records in $span_note"; exit 1 }
+    }
+    # -each: a frame belongs to the trial whose window (endobs_{i-1},
+    # endobs_i] holds it; frames after the last period are in no trial
+    set ftrial {}
+    if {$opt(each)} {
+        set sel {}; set t 0
+        foreach f $frames {
+            set ts [lindex $f 0]
+            while {$t < $ntrials && $ts > [lindex $obs_end $t]} { incr t }
+            if {$t >= $ntrials} break
+            lappend sel $f; lappend ftrial [expr {$t + 1}]
+        }
+        set frames $sel
+        if {![llength $frames]} { puts stderr "no stim/frame records inside an observation period in $span_note"; exit 1 }
     }
     set nf [llength $frames]
     set sc_first [lindex $frames 0 2]; set sc_last [lindex $frames end 2]
@@ -625,6 +677,17 @@ if {$opt(render) ne ""} {
     set writes {}
     for {set i 0} {$i < $nf - 1} {incr i} { lappend writes [expr {[lindex $pos [expr {$i + 1}]] - [lindex $pos $i]}] }
     lappend writes 1
+    # -each: a trial's last frame holds for one movie frame; the rig's idle
+    # time up to the next trial's first frame belongs to the next movie
+    set movie_each [dict create]
+    if {$opt(each)} {
+        for {set i 0} {$i < $nf - 1} {incr i} {
+            if {[lindex $ftrial $i] != [lindex $ftrial [expr {$i + 1}]]} {
+                lset writes $i [expr {min([lindex $writes $i], $blend)}]
+            }
+        }
+        foreach w $writes t $ftrial { dict incr movie_each $t $w }
+    }
     set movie_frames [expr {[tcl::mathop::+ {*}$writes] / $blend}]
 
     # the gaze: every eyetracking/raw sample in degrees on the rig clock.
@@ -755,6 +818,11 @@ if {$opt(render) ne ""} {
     puts "          commands placed by ACK stamp: [expr {$ncmd - $cmd_after}][expr {$cmd_before ? " ($cmd_before applied before the first frame)" : ""}][expr {$cmd_after ? ", $cmd_after after the last frame (not drawn)" : ""}]"
     puts "          datapoints placed by ds_dispatched: $k of $ndps[expr {$dp_after ? ", $dp_after after the last frame" : ""}]; $dp_foreign forwarded datapoints were not in the file's streams"
     puts "          stim clock - dserv clock: [format %.3f [expr {$tick_off / 1e6}]] s"
+    if {$opt(each)} {
+        set ts [dict keys $movie_each]
+        puts "  each    [llength $ts] movies, one per trial ([lindex $ts 0]..[lindex $ts end]),\
+ [each_name $opt(render) [lindex $ts 0]] .. [file tail [each_name $opt(render) [lindex $ts end]]]"
+    }
     if {$n_eye} {
         puts "  gaze    $n_eye samples ([expr {$eye_deg_n ? "$eye_deg_n already degrees" : ""}][expr {$eye_deg_n && $eye_cal_n ? ", " : ""}][expr {$eye_cal_n ? "$eye_cal_n calibrated via em/settings" : ""}]), $eye_zero exact 0,0 dropped, -eye $opt(eye) ($eye_mode)[expr {$cal_changes ? ", em/settings changed $cal_changes times in the file" : ""}]"
     } elseif {[llength $eye_recs] && $opt(eye) eq "off"} {
@@ -805,15 +873,29 @@ if {$opt(render) ne ""} {
         puts stderr "this stim2 has no stepFrame (step mode): -render needs the headless/step build"; exit 1
     }
     set out $opt(render)
-    # "|command" is always a command (it may well end in .mp4 itself)
-    if {$movie_out} {
+    # the sink target for an output: "|command" is always a command (it may
+    # well end in .mp4 itself); a movie file goes through ffmpeg
+    proc sink_target {out} {
+        global movie_out blend opt win_w win_h render_fps
+        if {!$movie_out} { return $out }
         set vf [expr {$blend > 1 ? "-vf tmix=frames=$blend,fps=$opt(fps)" : ""}]
-        set target "|ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgba -s ${win_w}x${win_h}\
+        return "|ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgba -s ${win_w}x${win_h}\
  -r $render_fps -i - $vf -c:v libx264 -preset medium -tune animation -crf $opt(crf)\
  -pix_fmt yuv420p -movflags +faststart [list [file normalize $out]]"
-    } else { set target $out }
-    set r [framelock::send $sock [list frameSink open -manual $target]]
-    if {[framelock::is_error $r]} { puts stderr "frameSink: $r"; exit 1 }
+    }
+    proc sink_open {out} {
+        global sock movie_out
+        if {$movie_out} { file mkdir [file dirname [file normalize $out]] }
+        set r [framelock::send $sock [list frameSink open -manual [sink_target $out]]]
+        if {[framelock::is_error $r]} { puts stderr "frameSink: $r"; exit 1 }
+    }
+    proc sink_close {} {
+        global sock
+        return [framelock::send $sock {frameSink close}]   ;# {frames N status S}
+    }
+    set movies {}             ;# -each: {trial out status-dict} per movie
+    set cur_trial ""; set cur_out $out
+    if {!$opt(each)} { sink_open $out }
     set t_start [expr {[lindex $frames 0 4] / 1000.0}]
     if {[llength $fev(0)]} { set t_start [expr {min($t_start, [lindex $fev(0) 0 0])}] }
     set t_start [expr {$t_start - 1.0}]
@@ -840,6 +922,14 @@ if {$opt(render) ne ""} {
     set kinds [dict create]
     set wall0 [clock microseconds]
     for {set i 0} {$i < $nf} {incr i} {
+        if {$opt(each) && [lindex $ftrial $i] ne $cur_trial} {
+            # the next trial's movie: close this one, open its own
+            if {$cur_trial ne ""} { lappend movies [list $cur_trial $cur_out [sink_close]] }
+            set cur_trial [lindex $ftrial $i]
+            set cur_out [each_name $out $cur_trial]
+            sink_open $cur_out
+            if {$opt(verbose)} { puts "  trial $cur_trial -> $cur_out" }
+        }
         set flip [expr {[lindex $frames $i 4] / 1000.0}]
         set nw [lindex $writes $i]
         # One request per rig frame, however many movie ticks it spans: its
@@ -892,23 +982,37 @@ if {$opt(render) ne ""} {
         if {$opt(verbose) && $i % 600 == 0} { puts "  frame $i of $nf" }
     }
     set elapsed [expr {([clock microseconds] - $wall0)/1e6}]
-    set st [framelock::send $sock {frameSink close}]
+    set st [sink_close]
+    if {$opt(each) && $cur_trial ne ""} { lappend movies [list $cur_trial $cur_out $st] }
     framelock::send $sock {stepMode 0}
     if {$n_eye} { framelock::send $sock {overlay delete gaze; overlay delete gaze_trail} }
     puts "done: $i rig frames drawn ([join [lmap {k v} $kinds {list $k $v}] {, }]), $sent events\
  ($errors errors, $skipped configure-time commands skipped) in [format %.1f $elapsed] s"
     if {$n_eye} { puts "  gaze: $n_eye samples over the movie, $repaints held-frame repaints" }
-    set mf [expr {[dict get $st frames] / $blend}]
-    puts "  movie: $mf frames at $opt(fps) fps\
+    set bad 0
+    if {$opt(each)} {
+        set tot 0
+        foreach m $movies {
+            lassign $m t o s
+            set mf [expr {[dict get $s frames] / $blend}]; incr tot $mf
+            if {[dict get $s status] != 0} { incr bad }
+            puts "  trial [format %4d $t]: $mf frames ([format %.1f [expr {$mf / double($opt(fps))}]] s) -> $o[expr {[dict get $s status] != 0 ? ", status [dict get $s status]" : ""}]"
+        }
+        puts "  movies: [llength $movies], $tot frames at $opt(fps) fps[expr {$blend > 1 ? ", each the mean of $blend rig ticks" : ""}], $bad failed"
+    } else {
+        set mf [expr {[dict get $st frames] / $blend}]
+        if {[dict get $st status] != 0} { incr bad }
+        puts "  movie: $mf frames at $opt(fps) fps\
  ([format %.1f [expr {$mf / double($opt(fps))}]] s)[expr {$blend > 1 ? ", each the mean of $blend rig ticks" : ""}]\
  -> $out, status [dict get $st status]"
+    }
     foreach n [dict keys $stream_set] {
         # a stimess binding reports its count (stimdg is stim2's own readdg)
         set c [framelock::send $sock [list stim::count $n]]
         if {![framelock::is_error $c]} { puts "  $n: $c injected, last [framelock::send $sock [list stim::get $n]]" }
     }
     close $sock
-    exit [expr {$errors || [dict get $st status] != 0 ? 1 : 0}]
+    exit [expr {$errors || $bad ? 1 : 0}]
 }
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,14 @@ datapoints in the same order and at the same pace.
     dlsh tools/replay/replay.tcl FILE.ess -dry
     stim2 --headless -w 1920 -h 1080 -r 120 --port-base 5610 &
     dlsh tools/replay/replay.tcl FILE.ess -render movie.mp4     # frame-locked
+    dlsh tools/replay/replay.tcl FILE.ess -render out/trial.mp4 -each -fps 60   # one movie per trial
+
+`FILE` may also be the obs DG dfconf writes for each `.ess` at close
+(`FILE.obs.dgz`, `dslog::readESS`), with the same options. For `-render`
+the DG must have been converted with wide types on (dfconf's `df
+wide_datafiles` setting, the default from dserv 0.60.16; `dslog::wideTypes
+1` by hand): `stim/frame` is int64, and a narrow conversion leaves its
+columns empty, which the script reports. The `.ess` always works.
 
 | option | |
 |---|---|
@@ -23,6 +31,7 @@ datapoints in the same order and at the same pace.
 | `-dry` | read and plan, print the summary and the first events, send nothing. |
 | `-verbose` | print every event as it goes out. |
 | `-render OUT` | frame-locked into a movie on the rig's timeline (below). `OUT` ending `.mp4`/`.mov`/`.mkv` goes through ffmpeg; anything else gets raw RGBA (a file, or `"|command"`). `-speed` is ignored; `-gap` compresses only when given. |
+| `-each` | with `-render OUT` into a movie file: one movie per trial of the range (default every trial), holding that trial's rig frames and gaze. `OUT` names them: a `%` format takes the trial number (`out/planko_t%03d.mp4`), otherwise `_tNNN` goes before the extension. A trial's last frame holds for one movie frame; the rig's idle time before the next trial opens the next movie. The stim2 runs straight through, as for one movie, so each trial starts from the state the previous ones left, exactly as on the rig. |
 | `-eye MODE` | with `-render`, draw the logged gaze (`eyetracking/raw` with `em/settings`) over each movie tick (below). `auto` (default), `analog`, `video`, `degrees` or `off`. |
 | `-crf N` | x264 quality for a movie file, default 14 (lower is better and bigger; 0 is lossless). Encoded with `-tune animation`, which suits flat stimulus graphics. |
 | `-noblend` | with `-fps` below the rig's refresh, drop rig ticks instead of averaging them. |
