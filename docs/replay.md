@@ -215,7 +215,8 @@ the clip's first frame:
 | `trial`, `obsid`, `ntrials` | 1-based trial (observation period), the same 0-based, the file's count |
 | `fps`, `movie_frames`, `width`, `height` | the clip |
 | `screen` | the rig's `halfx`, `halfy` (degrees), `w`, `h`, `hz`, `bg` |
-| `obs_begin_ms`, `obs_end_ms` | BEGINOBS and ENDOBS. Data timed from BEGINOBS (a trials DG's `em_seconds`, event times) is at `t + obs_begin_ms` |
+| `obs_begin_ms`, `obs_end_ms` | BEGINOBS and ENDOBS. Data timed from BEGINOBS (event times) is at `t + obs_begin_ms` |
+| `em_zero_ms` | the period's first eye record (`null` without one). A trials DG's `em_seconds` counts from there (`em::normalize_timestamps`), not from BEGINOBS: it is at `t + em_zero_ms`, typically 2 to 5 ms after BEGINOBS |
 | `window_start_ms` | the previous period's end, where the trial's window opens |
 | `rig_frames` | per rig frame: `movie_ms` (where it starts in the clip), `flip_ms` (its flip; they differ by the rounding to movie ticks) and `swap` |
 | `cmds` | each command, with the index of the rig frame that first showed it |

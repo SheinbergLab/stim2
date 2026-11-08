@@ -19,7 +19,7 @@ memory; any trial can follow any other.
 | request | answer |
 |---|---|
 | `GET /session?file=NAME` | loads the session: `{file, path, ntrials, screen, width, height}` |
-| `GET /trial?file=NAME&trial=N` | trial N (1-based), or `&obsid=K` (0-based, a trials DG's `obsid`). Renders it unless cached, then answers `{clip, cached, timing}`; the request waits for the render |
+| `GET /trial?file=NAME&trial=N` | trial N (1-based), or `&obsid=K` (0-based, a trials DG's `obsid`). Renders it unless cached, then answers `{clip, cached, timing}`; the request waits for the render. `&then=K,K` names the obsids to render next (the rows a viewer steps to: not every obs period is a trial); without it, the next `-prefetch` trials |
 | `GET /clips/...` | the clip (`clip` above) and its JSON, with byte ranges (`Range`, `206`), which browsers need to seek |
 | `GET /status` | the stim2, the sessions in memory, the clip rendering and its progress, the queue |
 
@@ -32,8 +32,21 @@ the cache.
 
 `timing` is the clip's timing JSON (`docs/replay.md`): BEGINOBS and ENDOBS
 on the clip's timeline, each rig frame's place and flip, the commands, the
-rig's screen in degrees and pixels. Data timed from BEGINOBS (a trials
-DG's `em_seconds`) is at `t + obs_begin_ms` in the clip.
+rig's screen in degrees and pixels. Data timed from BEGINOBS is at
+`t + obs_begin_ms` in the clip; a trials DG's `em_seconds`, which counts
+from the period's first eye record, is at `t + em_zero_ms`.
+
+dserv's `www/dg_viewer.html` is the viewer: with a server answering
+(`?render=URL`, else port 8140 on the page's host), its world panel plays
+the selected trial's clip, the clip is the clock while it plays, and the
+gaze is drawn over it (`www/js/stim2_view.js`). Its Sessions panel lists
+the dserv host's sessions (`df`'s `list_trials_files`: those whose trials
+file is in the work directory) and opens them from dserv's read-only
+`/data/trials/NAME.trials.dgz`; dserv also serves
+`/data/obs/NAME.obs.dgz`, streamed in 64 KB pieces so its web loop keeps
+serving datapoints meanwhile. A session stim2 cannot replay (a 422 here:
+recorded before stim2 kept frame records) shows the viewer plugin's own
+drawing, with the stim2 checkbox reading "stim2: no clip".
 
 Errors are JSON `{error}` with 400 (a bad request), 404 (no such file),
 422 (a file that cannot be replayed, with the reason) or 500 (a render
@@ -60,11 +73,13 @@ page served by dserv can use a server on another port or machine.
   session with another aspect or refresh relaunches it (about a second).
   Its version is part of the cache's directory name.
 - **The queue.** A request goes to the front. After answering, the server
-  queues the next `-prefetch` trials, so stepping forward through a
+  queues the next `-prefetch` trials (or the request's `then=` obsids, the
+  rows the viewer will step to next), so stepping forward through a
   session mostly finds clips waiting. A request for somewhere else drops
   the queued prefetches; the clip already rendering finishes first.
 - **Still answering while it renders.** The render runs in a coroutine
-  that yields every 30 rig frames (`render -progress`), so clips,
+  that yields every 10 rig frames (`render -progress`); a clip being sent
+  goes first (the render waits on it, up to 100 ms a turn), so clips,
   `/status` and new requests are served meanwhile, and several clients
   waiting on one trial get the one render.
 - **The cache.** `CACHE/NAME/c<format>_<W>x<H>_<mtime>_<size>_s<stim2>/tNNN.mp4`
