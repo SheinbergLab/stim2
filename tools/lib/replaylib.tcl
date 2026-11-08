@@ -943,6 +943,9 @@ proc replay::play {P sock args} {
 #   -crf N       x264 quality for a movie file (default 14)
 #   -keyint N    at most N frames between keyframes (default: x264's own);
 #                short for a clip a browser will scrub
+#   -progress CMD  called with {frames-done of} every 30 rig frames: a
+#                server rendering inside a coroutine yields there, so it
+#                keeps answering while a clip renders
 #   -verbose 0|1  -log CMD
 # ---------------------------------------------------------------------------
 proc replay::_sink_target {out movie_out blend fps win_w win_h render_fps crf keyint} {
@@ -971,7 +974,7 @@ proc replay::_gaze_at {t} {
 }
 
 proc replay::render {P sock args} {
-    array set o {-crf 14 -keyint "" -verbose 0 -log replay::say}
+    array set o {-crf 14 -keyint "" -progress "" -verbose 0 -log replay::say}
     foreach {k v} $args {
         if {![info exists o($k)]} { fail 2 "replay::render: unknown option $k" }
         set o($k) $v
@@ -1073,6 +1076,7 @@ proc replay::render {P sock args} {
         dict incr kinds [dict get $res kind]
         set prevflip $clock
         if {$o(-verbose) && $i % 600 == 0} { {*}$log "frame $i of $nf" }
+        if {$o(-progress) ne "" && $i % 30 == 29} { {*}$o(-progress) [expr {$i + 1}] $nf }
     }
     set elapsed [expr {([clock microseconds] - $wall0)/1e6}]
     set st [framelock::send $sock {frameSink close}]   ;# {frames N status S}
@@ -1101,10 +1105,11 @@ proc replay::render {P sock args} {
 # an adaptive staircase in stim2) can differ from the rig here, where a
 # straight-through render (-each) does not.
 #   -fps F  -crf N  -keyint N (default 12, for scrubbing)  -eye MODE
-#   (default off: a viewer draws the gaze itself)  -json PATH  -verbose  -log
+#   (default off: a viewer draws the gaze itself)  -json PATH  -progress CMD
+#   -verbose  -log
 # ---------------------------------------------------------------------------
 proc replay::render_trial {S sock trial out args} {
-    array set o {-fps "" -crf 14 -keyint 12 -eye off -json "" -verbose 0 -log replay::say}
+    array set o {-fps "" -crf 14 -keyint 12 -eye off -json "" -progress "" -verbose 0 -log replay::say}
     foreach {k v} $args {
         if {![info exists o($k)]} { fail 2 "replay::render_trial: unknown option $k" }
         set o($k) $v
@@ -1118,7 +1123,8 @@ proc replay::render_trial {S sock trial out args} {
     framelock::setup $sock [setup_dict $S "replay: [file tail [set ${S}::path]] (trial $trial)"] \
         [expr {$o(-verbose) ? $o(-log) : $quiet}]
     if {$trial > 1} { framelock::send $sock reset }
-    set r [render $P $sock -crf $o(-crf) -keyint $o(-keyint) -verbose $o(-verbose) -log $o(-log)]
+    set r [render $P $sock -crf $o(-crf) -keyint $o(-keyint) -progress $o(-progress) \
+               -verbose $o(-verbose) -log $o(-log)]
     set jpath [expr {$o(-json) ne "" ? $o(-json) : "[file rootname $out].json"}]
     set fd [open $jpath w]
     puts $fd [timing $S $P $r $trial]

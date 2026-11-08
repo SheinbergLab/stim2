@@ -498,12 +498,12 @@ elseif(APPLE)
         COMPONENT stim2
     )
 
-    # The replay and live-mirror drivers (dlsh scripts), as on Linux; the
-    # Linux-only setup (install-mirror.sh, the X11 launcher, systemd units)
-    # stays out.  dlsh .../Contents/Resources/tools/mirror/mirror.tcl
+    # The replay, render-server and live-mirror drivers (dlsh scripts), as
+    # on Linux; the Linux-only setup (install-mirror.sh, the X11 launcher,
+    # systemd units) stays out.  dlsh .../Contents/Resources/tools/mirror/mirror.tcl
     # -dserv HOST -launch starts this app's stim2 (docs/mirror.md).
     install(
-        DIRECTORY tools/lib tools/replay tools/mirror
+        DIRECTORY tools/lib tools/replay tools/render tools/mirror
         DESTINATION ${APP_BUNDLE}/Contents/Resources/tools
         COMPONENT stim2
         PATTERN "systemd" EXCLUDE
@@ -644,11 +644,12 @@ else()
 	COMPONENT stim2
     )
 
-    # The replay and live-mirror drivers (dlsh scripts) and their shared
-    # frame-locked core; tools/mirror/install-mirror.sh sets a box up as a
-    # mirror from them (docs/mirror.md). Nothing is enabled by the package.
+    # The replay, render-server and live-mirror drivers (dlsh scripts) and
+    # their shared frame-locked core; tools/mirror/install-mirror.sh sets a
+    # box up as a mirror from them (docs/mirror.md). Nothing is enabled by
+    # the package.
     install(
-	DIRECTORY tools/lib tools/replay tools/mirror
+	DIRECTORY tools/lib tools/replay tools/render tools/mirror
 	DESTINATION "/usr/local/stim2/tools"
 	USE_SOURCE_PERMISSIONS
 	COMPONENT stim2
