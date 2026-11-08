@@ -173,6 +173,66 @@ in degrees) alongside the raw samples would remove the guesswork.
   counted. Configure-time commands that may appear in a file
   (`stim::prelude`, `stimFrameLog`, `set dservhost`) are skipped too.
 
+## As a library: `tools/lib/replaylib.tcl`
+
+`replay.tcl` is the command line over `tools/lib/replaylib.tcl`, which a
+program that renders many parts of one session uses directly (a trial
+viewer's render service): the file is read once, and any trial can be
+planned and rendered after any other, on one stim2.
+
+    source /usr/local/stim2/tools/lib/replaylib.tcl   ;# also sources framelock.tcl
+    set S    [replay::load FILE.obs.dgz]              ;# -streams, -geometry, -bg
+    set pid  [replay::launch -port 5612 -geom [replay::get $S geom] -render 1 -size 960x540]
+    set sock [replay::connect localhost 5612 $pid]
+    replay::check_stimess $sock
+    replay::render_trial $S $sock 7 clips/t007.mp4    ;# + clips/t007.json
+    replay::render_trial $S $sock 3 clips/t003.mp4
+
+| proc | |
+|---|---|
+| `load FILE ?opts?` | read a `.ess` or obs DG into a session (a namespace); errors if it has no script, stimdg or events |
+| `plan S ?-trials {A B}? ?-render OUT? ?-each? ?-fps? ?-blend? ?-gap? ?-eye?` | what to play, as a dict; with `-render`, the frame-locked plan. The session is not changed |
+| `dumpplan P FILE` | the `-dumpplan` text |
+| `launch`, `connect`, `check_stimess`, `setup_dict` | a stim2 to draw on, and `framelock::setup`'s input |
+| `play P SOCK` | paced by time |
+| `render P SOCK ?-crf? ?-keyint?` | frame-locked into the plan's output |
+| `render_trial S SOCK N OUT` | one trial from a fresh setup, into a movie file and its timing JSON |
+
+Errors carry `-errorcode {REPLAY n}`, `n` being the command line's exit
+code. `render_trial` sets the stim2 up again each time (`stepMode 0`,
+prelude, script, stimdg, `reset`), so trials can come in any order; the
+result is the command line's `-trial N`, frame for frame. Defaults suit a
+browser: `-keyint 12` (a keyframe every 0.1 s at 120 fps, for scrubbing)
+and `-eye off` (the viewer draws the gaze). As with `-trial N`, a script
+that carries state from trial to trial inside stim2 starts each trial from
+the script as loaded; `-each` is the straight-through, exact form.
+
+The timing JSON puts the clip on the trial's timeline. Times are ms from
+the clip's first frame:
+
+| key | |
+|---|---|
+| `trial`, `obsid`, `ntrials` | 1-based trial (observation period), the same 0-based, the file's count |
+| `fps`, `movie_frames`, `width`, `height` | the clip |
+| `screen` | the rig's `halfx`, `halfy` (degrees), `w`, `h`, `hz`, `bg` |
+| `obs_begin_ms`, `obs_end_ms` | BEGINOBS and ENDOBS. Data timed from BEGINOBS (a trials DG's `em_seconds`, event times) is at `t + obs_begin_ms` |
+| `window_start_ms` | the previous period's end, where the trial's window opens |
+| `rig_frames` | per rig frame: `movie_ms` (where it starts in the clip), `flip_ms` (its flip; they differ by the rounding to movie ticks) and `swap` |
+| `cmds` | each command, with the index of the rig frame that first showed it |
+| `tick_off_us` | the stim clock minus the dserv clock, by which datapoint times were placed |
+
+The clip starts at the window's first rig frame. stim2 swaps only when
+something changes, so that can be after BEGINOBS (`obs_begin_ms` < 0):
+the rig was still showing an earlier frame.
+
+Measured 2026-11-08 on the dev Mac (M3), headless, a planko obs DG
+(133 trials) loaded once in 0.8 s: a 7 s trial (809 rig frames) renders
+in 0.5 s at 320x180, 1.7 s at 960x540 and 5.1 s at 1920x1080, where
+x264 sets the pace. Planned and rendered through the library, the four
+test files' plans (`-dry`, `-dumpplan`, with and without `-trials`,
+`-each`, `-gap`) and their raw frames are identical to the script before
+the split.
+
 ## For the browser player
 
 This script is the reference for the WebAssembly viewer: the same five
