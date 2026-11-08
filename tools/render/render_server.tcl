@@ -13,7 +13,9 @@
 #
 #   GET /session?file=NAME            load a session: trial count, screen
 #   GET /trial?file=NAME&trial=N      (or &obsid=K, 0-based) render if not
-#                                     cached; {clip, cached, timing}
+#                                     cached; {clip, cached, timing}.
+#                                     &then=K,K: obsids to render next
+#                                     (default: the next -prefetch trials)
 #   GET /clips/...                    the movies and JSON, with byte ranges
 #   GET /status                       stim2, sessions, queue
 #
@@ -36,7 +38,7 @@
 #   -sessions N    sessions kept in memory (default 3)
 #
 # One stim2, one clip at a time: rendering runs in a coroutine that yields
-# every 30 rig frames, so the server keeps answering (clips, status, new
+# every 10 rig frames, so the server keeps answering (clips, status, new
 # requests) while a trial renders.
 
 source [file join [file dirname [file normalize [info script]]] .. lib replaylib.tcl]
@@ -79,7 +81,7 @@ if {![llength $opt(data)]} {
 file mkdir $opt(cache)
 
 # the clip format; a change here starts a fresh cache
-set clip_version 1
+set clip_version 2
 
 proc log {msg} { puts "[clock format [clock seconds] -format %H:%M:%S] $msg"; flush stdout }
 
@@ -286,12 +288,21 @@ proc work {} {
 }
 coroutine worker work
 
-# called from inside the render: let the event loop run, then go on
+# called from inside the render: let the event loop run, then go on.  A
+# clip being sent goes first (a viewer is waiting on it, while the render is
+# usually a prefetch): the render waits for it, up to 100 ms a turn, so a
+# slow client cannot stall the rendering
+set sending 0
 proc progress {key done of} {
-    global jobs
+    global jobs sending
     if {[dict exists $jobs $key]} { dict set jobs $key progress [expr {double($done) / $of}] }
+    set until [expr {[clock milliseconds] + 100}]
     after 0 [info coroutine]
     yield
+    while {$sending > 0 && [clock milliseconds] < $until} {
+        after 2 [info coroutine]
+        yield
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -352,7 +363,14 @@ proc serve_file {chan path method range} {
     if {$method eq "HEAD"} { flush $chan; close $chan; return }
     set fd [open $path rb]
     seek $fd $from
-    fcopy $fd $chan -size $len -command [list apply {{fd chan args} { close $fd; catch {close $chan} }} $fd $chan]
+    # large buffers: during a render the event loop runs only between
+    # batches of rig frames, and fcopy moves one buffer per turn
+    fconfigure $fd -buffersize 1048576
+    fconfigure $chan -buffersize 1048576
+    incr ::sending
+    fcopy $fd $chan -size $len -command [list apply {{fd chan args} {
+        incr ::sending -1; close $fd; catch {close $chan}
+    }} $fd $chan]
 }
 
 proc query {q} {
@@ -375,13 +393,14 @@ proc accept {chan addr port} {
 }
 
 proc read_request {chan lines} {
-    if {[catch {gets $chan line} n] || ($n < 0 && [eof $chan])} { catch {close $chan}; return }
-    if {$n < 0} return
-    if {$line ne ""} {
+    # every line there is, each time: during a render the event loop turns
+    # only between batches of rig frames
+    while 1 {
+        if {[catch {gets $chan line} n] || ($n < 0 && [eof $chan])} { catch {close $chan}; return }
+        if {$n < 0} { fileevent $chan readable [list read_request $chan $lines]; return }
+        if {$line eq ""} break
         lappend lines $line
-        if {[llength $lines] > 100} { catch {close $chan} }
-        fileevent $chan readable [list read_request $chan $lines]
-        return
+        if {[llength $lines] > 100} { catch {close $chan}; return }
     }
     fileevent $chan readable {}
     set req [lindex $lines 0]
@@ -446,9 +465,20 @@ proc handle {chan req hdr} {
             } else {
                 want $s $trial $chan
             }
-            for {set k 1} {$k <= $opt(prefetch)} {incr k} {
-                set t [expr {$trial + $k}]
-                if {$t <= $n && ![cached $s $t]} { want $s $t }
+            # what to render next: the client's then=K,K,... (obsids, the
+            # rows it will step to; some obs periods are not trials), else
+            # the next -prefetch trials
+            if {[dict exists $q then]} {
+                set next {}
+                foreach k [lrange [split [dict get $q then] ,] 0 [expr {$opt(prefetch) - 1}]] {
+                    if {[string is integer -strict $k]} { lappend next [expr {$k + 1}] }
+                }
+            } else {
+                set next {}
+                for {set k 1} {$k <= $opt(prefetch)} {incr k} { lappend next [expr {$trial + $k}] }
+            }
+            foreach t $next {
+                if {$t >= 1 && $t <= $n && ![cached $s $t]} { want $s $t }
             }
         }
         /status {

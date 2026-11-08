@@ -943,7 +943,7 @@ proc replay::play {P sock args} {
 #   -crf N       x264 quality for a movie file (default 14)
 #   -keyint N    at most N frames between keyframes (default: x264's own);
 #                short for a clip a browser will scrub
-#   -progress CMD  called with {frames-done of} every 30 rig frames: a
+#   -progress CMD  called with {frames-done of} every 10 rig frames: a
 #                server rendering inside a coroutine yields there, so it
 #                keeps answering while a clip renders
 #   -verbose 0|1  -log CMD
@@ -1076,7 +1076,7 @@ proc replay::render {P sock args} {
         dict incr kinds [dict get $res kind]
         set prevflip $clock
         if {$o(-verbose) && $i % 600 == 0} { {*}$log "frame $i of $nf" }
-        if {$o(-progress) ne "" && $i % 30 == 29} { {*}$o(-progress) [expr {$i + 1}] $nf }
+        if {$o(-progress) ne "" && $i % 10 == 9} { {*}$o(-progress) [expr {$i + 1}] $nf }
     }
     set elapsed [expr {([clock microseconds] - $wall0)/1e6}]
     set st [framelock::send $sock {frameSink close}]   ;# {frames N status S}
@@ -1148,6 +1148,10 @@ proc replay::render_trial {S sock trial out args} {
 #                              movie ticks) and swap (its swapcount)
 #   cmds                       each command, with the rig frame (index into
 #                              rig_frames) that first showed it
+#   em_zero_ms                 the period's first eyetracking/raw record (null
+#                              without one): where em::'s em_seconds is 0,
+#                              since it counts from the trial's first eye
+#                              sample, a few ms after BEGINOBS
 # Datapoint times are dserv's receipt on the rig clock, through the median
 # stim - dserv clock offset of the trial's frames (tick_off_us).
 # ---------------------------------------------------------------------------
@@ -1195,6 +1199,15 @@ proc replay::timing {S P r trial} {
         if {[info exists geom($key)] && [string is double -strict $geom($key)]} { lappend scr $key $geom($key) }
     }
     if {[info exists geom(bg)]} { lappend scr bg [_jarr $geom(bg)] }
+    # the period's first eye record (eye_recs is sorted by time)
+    set em_zero null
+    set ob [lindex $obs_begin $k]; set oe [lindex $obs_end $k]
+    set eye_recs [set ${S}::eye_recs]
+    set j [expr {[lsearch -bisect -integer -index 0 -sorted $eye_recs $ob] + 1}]
+    if {$j > 0 && [lindex $eye_recs [expr {$j - 1}] 0] == $ob} { incr j -1 }
+    if {$j < [llength $eye_recs] && [lindex $eye_recs $j 0] <= $oe} {
+        set em_zero [_jnum [apply $clip [lindex $eye_recs $j 0] $tick_off $F0]]
+    }
     _jobj [list \
         version 1 \
         file [_jstr [file tail [set ${S}::path]]] \
@@ -1206,6 +1219,7 @@ proc replay::timing {S P r trial} {
         window_start_ms [_jnum [apply $clip [dict get $P w0] $tick_off $F0]] \
         obs_begin_ms [_jnum [apply $clip [lindex $obs_begin $k] $tick_off $F0]] \
         obs_end_ms [_jnum [apply $clip [lindex $obs_end $k] $tick_off $F0]] \
+        em_zero_ms $em_zero \
         rig_frames [_jobj [list movie_ms [_jarr $movie_ms] flip_ms [_jarr $flip_ms] swap [_jarr $swap]]] \
         cmds [_jarr $cmds]]
 }
