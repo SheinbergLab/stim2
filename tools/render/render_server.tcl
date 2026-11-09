@@ -22,7 +22,10 @@
 # NAME is a session's base name, with or without .obs.dgz, .trials.dgz,
 # .ess: a viewer holding a trials DG passes its filename column.  It is
 # looked for in the -data directories (default ~/data/obs, ~/data/ess,
-# /usr/local/dserv/work/obs).
+# /usr/local/dserv/work/obs), then on each -dserv: its /data/obs/ route,
+# fetched into the cache in the background (curl) and checked again (HEAD)
+# at most every 30 s.  So a render host on the lab network serves a rig
+# whose dserv is elsewhere, e.g. a Pi with a stim box on its own network.
 #
 #   -port P        HTTP port (default 8140)
 #   -host A        address to listen on (default 127.0.0.1; 0.0.0.0 for
@@ -36,6 +39,8 @@
 #   -stim2 PATH    the stim2 to launch (default: as replay.tcl -launch)
 #   -stim2-port P  its message port (default 5652: --port-base 5650)
 #   -sessions N    sessions kept in memory (default 3)
+#   -dserv URL     a dserv to fetch sessions from, e.g. http://rpi500.local:2565
+#                  (repeatable)
 #
 # One stim2, one clip at a time: rendering runs in a coroutine that yields
 # every 10 rig frames, so the server keeps answering (clips, status, new
@@ -55,6 +60,7 @@ set opt(prefetch) 2
 set opt(stim2) ""
 set opt(stim2port) 5652
 set opt(sessions) 3
+set opt(dserv) {}
 set args $argv
 while {[llength $args]} {
     set a [lindex $args 0]; set v [lindex $args 1]; set args [lrange $args 2 end]
@@ -68,6 +74,12 @@ while {[llength $args]} {
         -stim2      { set opt(stim2) $v }
         -stim2-port { set opt(stim2port) $v }
         -sessions   { set opt(sessions) $v }
+        -dserv      {
+            if {![regexp {^https?://[A-Za-z0-9.:\[\]-]+$} [string trimright $v /]]} {
+                puts stderr "-dserv wants http(s)://host:port, not $v"; exit 2
+            }
+            lappend opt(dserv) [string trimright $v /]
+        }
         default     { puts stderr "unknown option $a"; exit 2 }
     }
 }
@@ -90,7 +102,8 @@ proc log {msg} { puts "[clock format [clock seconds] -format %H:%M:%S] $msg"; fl
 # ---------------------------------------------------------------------------
 set sessions [dict create]   ;# base -> dict S path mtime size used
 
-# the file for NAME: base.obs.dgz in a data dir, else base.ess
+# the file for NAME: base.obs.dgz in a data dir, else base.ess, else a
+# dserv's copy (remote, which may wait on a download: call from a coroutine)
 proc resolve {name} {
     global opt
     if {![regexp {^[A-Za-z0-9._-]+$} $name]} { http_error 400 "bad file name: $name" }
@@ -101,7 +114,138 @@ proc resolve {name} {
             if {[file isfile $p]} { return [list $base $p] }
         }
     }
-    http_error 404 "no $base.obs.dgz or $base.ess in [join $opt(data) {, }]"
+    set p [remote $base]
+    if {$p ne ""} { return [list $base $p] }
+    set where [concat $opt(data) [lmap u $opt(dserv) {set u $u/data/obs/}]]
+    http_error 404 "no $base.obs.dgz or $base.ess in [join $where {, }]"
+}
+
+# ---------------------------------------------------------------------------
+# sessions from a dserv: /data/obs/NAME.obs.dgz copied into the cache
+# (curl -R keeps the dserv file's mtime, which names the clips' directory)
+# ---------------------------------------------------------------------------
+set checked [dict create]     ;# base -> {when path}: the last HEAD check
+set fetching [dict create]    ;# base -> coroutines waiting on its download
+
+proc remote_path {url base} {
+    global opt
+    regsub -all {[^A-Za-z0-9.-]} [regsub {^https?://} $url {}] _ host
+    file join $opt(cache) remote $host $base.obs.dgz
+}
+
+# run a command without holding the event loop: {exit-code output}
+proc run_async {args} {
+    set co [info coroutine]
+    if {$co eq ""} { error "run_async needs a coroutine" }
+    set fd [open |[list {*}$args 2>@1] r]
+    fconfigure $fd -blocking 0 -translation binary
+    fileevent $fd readable [list $co]
+    set out ""
+    while 1 {
+        yield
+        append out [read $fd]
+        if {[eof $fd]} break
+    }
+    fileevent $fd readable {}
+    fconfigure $fd -blocking 1
+    set code 0
+    if {[catch {close $fd} e opts]} {
+        set ec [dict get $opts -errorcode]
+        set code [expr {[lindex $ec 0] eq "CHILDSTATUS" ? [lindex $ec 2] : 1}]
+    }
+    list $code $out
+}
+
+# curl's options for a dserv URL.  -4 unless the host is an IPv6 literal:
+# macOS waits 5 s on an IPv6 lookup of a rig's NAME.local that never
+# answers (rpi500.local: 5 s, against 4 ms with -4)
+proc curl_opts {u} {
+    expr {[string match {*://\[*} $u] ? {-s -k} : {-s -k -4}}
+}
+
+# HEAD: {status length mtime} (0 when it did not answer; "" for what the
+# dserv did not say)
+proc remote_head {u} {
+    lassign [run_async curl {*}[curl_opts $u] -I --max-time 5 -w "\nSTATUS %{http_code}\n" $u] code out
+    set status 0; set len ""; set mtime ""
+    foreach line [split [string map {\r ""} $out] \n] {
+        if {[regexp {^STATUS (\d+)$} $line -> s]} { set status $s }
+        if {[regexp -nocase {^content-length:\s*(\d+)} $line -> v]} { set len $v }
+        if {[regexp -nocase {^last-modified:\s*(.+)$} $line -> v]} {
+            catch { set mtime [clock scan [string trim $v] -format {%a, %d %b %Y %H:%M:%S GMT} -gmt 1] }
+        }
+    }
+    list $status $len $mtime
+}
+
+# the local copy of base from a -dserv, fetched or refreshed as needed; ""
+# when none has it
+proc remote {base} {
+    global opt checked fetching
+    if {![llength $opt(dserv)]} { return "" }
+    # one download per session: later askers wait for the first
+    if {[dict exists $fetching $base]} {
+        dict lappend fetching $base [info coroutine]
+        yield
+        return [remote $base]
+    }
+    # checked lately: the copy stands
+    if {[dict exists $checked $base]} {
+        lassign [dict get $checked $base] when path
+        if {[clock seconds] - $when < 30 && [file isfile $path]} { return $path }
+    }
+    dict set fetching $base {}
+    try {
+        foreach url $opt(dserv) {
+            set u $url/data/obs/$base.obs.dgz
+            set path [remote_path $url $base]
+            set have [file isfile $path]
+            lassign [remote_head $u] status len mtime
+            if {$status == 200 && $have
+                    && ($len eq "" || $len == [file size $path])
+                    && ($mtime eq "" || $mtime == [file mtime $path])} {
+                dict set checked $base [list [clock seconds] $path]
+                return $path                                   ;# current
+            }
+            if {$status == 0} {
+                if {!$have} continue                           ;# unreachable
+                log "$url did not answer: using the copy of $base from before"
+                dict set checked $base [list [clock seconds] $path]
+                return $path
+            }
+            # new or changed (200), or a dserv without HEAD: GET decides
+            file mkdir [file dirname $path]
+            set tmp $path.part
+            set t0 [clock milliseconds]
+            lassign [run_async curl {*}[curl_opts $u] -f -R --max-time 600 -o $tmp $u] code out
+            if {$code != 0 || ![file isfile $tmp]} {
+                file delete $tmp
+                if {$have} {
+                    dict set checked $base [list [clock seconds] $path]
+                    return $path                               ;# keep what we have
+                }
+                continue                                       ;# not there
+            }
+            if {$have && $mtime eq "" && [file size $tmp] == [file size $path]
+                    && [lindex [run_async cmp -s $tmp $path] 0] == 0} {
+                # the same bytes (a dserv that sends no Last-Modified): keep
+                # the copy and its mtime, which names its clips
+                file delete $tmp
+                dict set checked $base [list [clock seconds] $path]
+                return $path
+            }
+            file rename -force $tmp $path
+            log [format "fetched %s (%.1f MB) from %s in %d ms" $base \
+                     [expr {[file size $path] / 1048576.0}] $url [expr {[clock milliseconds] - $t0}]]
+            dict set checked $base [list [clock seconds] $path]
+            return $path
+        }
+        return ""
+    } finally {
+        set waiting [dict get $fetching $base]
+        dict unset fetching $base
+        foreach co $waiting { after 0 $co }
+    }
 }
 
 proc session {name} {
@@ -131,6 +275,15 @@ proc session {name} {
     }
     set t0 [clock milliseconds]
     if {[catch {replay::load $path} S]} { http_error 422 "$base: $S" }
+    # no frame records, no clips: say so for the session (a 422, which a
+    # viewer takes as "no clips here") rather than fail each trial's render
+    if {![llength [replay::get $S frames]]} {
+        set why [expr {[replay::get $S obs_frames_narrow]
+            ? "its stim/frame records are empty: converted with the rig's df wide_datafiles off"
+            : "it has no stim/frame records: recorded before stim2 kept them"}]
+        replay::delete $S
+        http_error 422 "$base: $why"
+    }
     log "loaded $path ([replay::ntrials $S] trials) in [expr {[clock milliseconds] - $t0}] ms"
     dict set sessions $base [dict create S $S base $base path $path mtime $mtime size $size \
                                   used [clock milliseconds]]
@@ -408,6 +561,13 @@ proc read_request {chan lines} {
     foreach l [lrange $lines 1 end] {
         if {[regexp {^([^:]+):\s*(.*)$} $l -> k v]} { dict set hdr [string tolower $k] $v }
     }
+    # each request in a coroutine of its own: one waiting on a download
+    # from a dserv lets everything else go on
+    coroutine ::request[incr ::nrequest] serve_request $chan $req $hdr
+}
+set nrequest 0
+
+proc serve_request {chan req hdr} {
     if {[catch {handle $chan $req $hdr} e opts]} {
         set ec [dict get $opts -errorcode]
         set code [expr {[lindex $ec 0] eq "HTTP" ? [lindex $ec 1] : 500}]
@@ -492,7 +652,9 @@ proc handle {chan req hdr} {
                 stim2 [json_obj [list pid [expr {[dict get $stim2 pid] eq "" ? "null" : [dict get $stim2 pid]}] \
                     version [replay::_jstr [dict get $stim2 version]] size [replay::_jstr [dict get $stim2 size]]]] \
                 sessions [replay::_jarr $ss] rendering $cur queue [replay::_jarr $qs] \
-                cache [replay::_jstr $opt(cache)] data [replay::_jarr [lmap d $opt(data) {replay::_jstr $d}]]]]
+                cache [replay::_jstr $opt(cache)] data [replay::_jarr [lmap d $opt(data) {replay::_jstr $d}]] \
+                dserv [replay::_jarr [lmap d $opt(dserv) {replay::_jstr $d}]] \
+                fetching [replay::_jarr [lmap b [dict keys $::fetching] {replay::_jstr $b}]]]]
         }
         / {
             respond_json $chan 200 [json_obj [list service [replay::_jstr "stim2 trial renderer"] \
@@ -516,4 +678,5 @@ if {[catch {socket -server accept -myaddr $opt(host) $opt(port)} e]} {
     puts stderr "cannot listen on $opt(host):$opt(port): $e"; exit 1
 }
 log "listening on http://$opt(host):$opt(port)/  data: [join $opt(data) {, }]  cache: $opt(cache)"
+if {[llength $opt(dserv)]} { log "sessions also from: [join $opt(dserv) {, }]" }
 vwait forever

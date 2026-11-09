@@ -26,7 +26,7 @@ memory; any trial can follow any other.
 `NAME` is a session's base name, with or without `.obs.dgz`,
 `.trials.dgz` or `.ess`, so a viewer holding a trials DG passes its
 `filename`. The server looks for `NAME.obs.dgz`, then `NAME.ess`, in its
-data directories. Names with anything but letters, digits, `.`, `_` and
+data directories, then on each `-dserv` (below). Names with anything but letters, digits, `.`, `_` and
 `-` are refused, and `/clips/` serves only `.mp4` and `.json` files inside
 the cache.
 
@@ -37,16 +37,51 @@ rig's screen in degrees and pixels. Data timed from BEGINOBS is at
 from the period's first eye record, is at `t + em_zero_ms`.
 
 dserv's `www/dg_viewer.html` is the viewer: with a server answering
-(`?render=URL`, else port 8140 on the page's host), its world panel plays
+(`?render=URL`, else the dserv's `df render_url` setting, else port 8140
+on the page's host), its world panel plays
 the selected trial's clip, the clip is the clock while it plays, and the
 gaze is drawn over it (`www/js/stim2_view.js`). Its Sessions panel lists
-the dserv host's sessions (`df`'s `list_trials_files`: those whose trials
-file is in the work directory) and opens them from dserv's read-only
-`/data/trials/NAME.trials.dgz`; dserv also serves
+the dserv host's sessions (`df`'s `list_sessions`: those whose obs file
+is in the work directory) and opens them from dserv's read-only
+`/data/trials/NAME.trials.dgz`. `df` deletes a trials file once it is
+exported, so for a session without one the panel first asks `df` to
+extract it again (`viewer_trials`, sent without waiting; refused while an
+experiment runs). dserv also serves
 `/data/obs/NAME.obs.dgz`, streamed in 64 KB pieces so its web loop keeps
 serving datapoints meanwhile. A session stim2 cannot replay (a 422 here:
 recorded before stim2 kept frame records) shows the viewer plugin's own
 drawing, with the stim2 checkbox reading "stim2: no clip".
+
+## A rig whose dserv is elsewhere
+
+A rig's dserv need not be the render host. With a Pi running dserv and a
+stim box on the rig's own network, a lab machine runs the render server:
+
+    dlsh tools/render/render_server.tcl -host 0.0.0.0 -dserv http://rpi500.local:2565
+
+and the rig's `df render_url` setting (dserv's settings gear, or
+`settings::put df render_url http://<render host>:8140 -persist` in `df`)
+sends its viewers there.
+
+A session not in the data directories is fetched from the dserv's
+`/data/obs/NAME.obs.dgz` into `CACHE/remote/HOST_PORT/` with `curl`, and
+loaded from there. The rig does no more than send the file, once.
+
+- **Not waiting on the fetch.** The fetch is a child process, and each
+  request runs in a coroutine of its own. A request waiting on a fetch
+  holds up nothing else: renders, clips, `/status` (which lists the
+  sessions being fetched) and other requests go on. Several requests for
+  one session share its one fetch.
+- **Changed files.** A copy checked in the last 30 s is used as it is.
+  After that, a `HEAD` asks the dserv for the file's size and
+  `Last-Modified`. A copy that matches stays; otherwise the file is fetched
+  again. `curl -R` gives the copy the dserv file's mtime, which names its
+  clips' directory, so clips survive a restart of either side.
+- **Older dservs.** A dserv without `HEAD` on `/data/` gets a plain `GET`.
+  Without `Last-Modified`, a download that matches the copy byte for byte
+  keeps the copy, and with it the copy's mtime and clips.
+- **A dserv that does not answer** leaves the copy from before in use. With
+  several `-dserv`, they are asked in turn.
 
 Errors are JSON `{error}` with 400 (a bad request), 404 (no such file),
 422 (a file that cannot be replayed, with the reason) or 500 (a render
@@ -60,6 +95,7 @@ page served by dserv can use a server on another port or machine.
 | `-port P` | HTTP port (default 8140) |
 | `-host A` | address to listen on (default `127.0.0.1`; `0.0.0.0` to serve other machines) |
 | `-data DIR` | where sessions are (repeatable; replaces the defaults `~/data/obs`, `~/data/ess`, `/usr/local/dserv/work/obs`, those that exist) |
+| `-dserv URL` | a dserv to fetch sessions from, `http(s)://host:port` (repeatable; asked after the data directories) |
 | `-cache DIR` | where clips go (default `~/.cache/stim2-render`) |
 | `-width W` | clip width (default 960); the height follows the rig's aspect |
 | `-prefetch N` | trials after the one asked for to render next (default 2) |
