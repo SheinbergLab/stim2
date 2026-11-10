@@ -208,6 +208,17 @@ if [ ! -f /etc/systemd/system/stim2.service ] && [ ! -f /etc/systemd/system/stim
     fi
 fi
 
+# stim2-render ships enabled-by-hand in /usr/lib/systemd/system: pick up a
+# new or changed unit, and restart it where it runs so it serves this
+# version's render server (its clips are cached by stim2 version anyway)
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+    systemctl try-restart stim2-render >/dev/null 2>&1 || true
+fi
+if [ ! -x /usr/local/bin/dlsh ]; then
+    echo "Note: the stim2-render service and tools/replay need the dlsh interpreter (dlsh-interp package)"
+fi
+
 # Bootstrap dlsh if not already installed
 if [ ! -f /usr/local/dlsh/dlsh.zip ]; then
     echo "dlsh not found, installing..."
