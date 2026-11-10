@@ -98,9 +98,6 @@ OBJ_LIST *OBJList = NULL;  /* main entry point to object stimuli  */
 OBJ_LIST curobjlist;
 OBJ_LIST *curobjlistp = &curobjlist;
 
-// for z-sorting comparison
-static OBJ_LIST *sort_objlist_context;
-
 float BackgroundColor[]      = { 0.0f,  0.0f, 0.0f, 1.0f };
 float GreenBackgroundColor[] = { 0.0f,  .8f, .2f };
 float RedBackgroundColor[]   = { .85f, .0f, .1f };
@@ -823,24 +820,36 @@ void defaultProjection(void)
 }
 
 
-static int compareGroupPriority(const void *a, const void *b)
+/* Does object id a belong strictly after object id b in draw order?
+   Lower priority draws first; missing objects go to the end. */
+static int drawsAfter(OBJ_LIST *ol, int a, int b)
 {
-  int idA = *(const int *)a;
-  int idB = *(const int *)b;
-  GR_OBJ *objA = OL_OBJ(sort_objlist_context, idA);
-  GR_OBJ *objB = OL_OBJ(sort_objlist_context, idB);
-  float diff;
+  GR_OBJ *objA = OL_OBJ(ol, a);
+  GR_OBJ *objB = OL_OBJ(ol, b);
+  if (!objA) return objB != NULL;
+  if (!objB) return 0;
+  return GR_PRIORITY(objA) > GR_PRIORITY(objB);
+}
 
-  /* Handle NULL objects - push to end */
-  if (!objA && !objB) return 0;
-  if (!objA) return 1;
-  if (!objB) return -1;
-
-  diff = GR_PRIORITY(objA) - GR_PRIORITY(objB);
-  if (diff != 0.0f) return (diff > 0.0f) - (diff < 0.0f);
-
-  /* Stable sort: preserve original order for equal priorities */
-  return (a > b) - (a < b);
+/* Sort a group's draw list by priority, in place. This must be a
+   stable sort: objects of equal priority (the default is 0 for all of
+   them) have to keep the order they were added in. It runs every frame
+   on the same array, and qsort is not stable -- on macOS it swapped
+   equal-priority objects on alternate frames, so overlapping objects
+   flickered between front and back. Insertion sort is stable, and on a
+   list that is already sorted, which is nearly every frame, it is a
+   single pass. */
+static void sortGroupByPriority(OBJ_LIST *ol, int *ids, int n)
+{
+  for (int i = 1; i < n; i++) {
+    int id = ids[i];
+    int j = i - 1;
+    while (j >= 0 && drawsAfter(ol, ids[j], id)) {
+      ids[j + 1] = ids[j];
+      j--;
+    }
+    ids[j + 1] = id;
+  }
 }
 
 static void drawGroup(OBJ_GROUP *g) 
@@ -856,10 +865,8 @@ static void drawGroup(OBJ_GROUP *g)
 
   /* Sort objects by priority
      (stable - preserves insertion order for equal priorities) */
-  if (g && OG_NOBJS(g) > 1) {
-    sort_objlist_context = OBJList;
-    qsort(OG_OBJIDLIST(g), OG_NOBJS(g), sizeof(int), compareGroupPriority);
-  }
+  if (g && OG_NOBJS(g) > 1)
+    sortGroupByPriority(OBJList, OG_OBJIDLIST(g), OG_NOBJS(g));
 
   /* Kick the animation if we just turned on a dynamic stimulus */
   if (OGL_NEWLY_VISIBLE(GList) && g && 
