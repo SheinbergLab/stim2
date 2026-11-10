@@ -149,9 +149,39 @@ jobs:
           prerelease: true
           omitPrereleaseDuringUpdate: true
 
+  # stim2-render: the architecture-independent package that turns the
+  # render service on (packaging/stim2-render). One per tag, not per distro.
+  render-package:
+
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: write
+
+    steps:
+
+      - name: Check out our stim2 code for the current tag
+        uses: actions/checkout@v4
+
+      - name: Build the stim2-render package
+        run: |
+          packaging/stim2-render/build-deb.sh ${{ github.ref_name }} .
+          dpkg-deb --info stim2-render_${{ github.ref_name }}_all.deb
+          dpkg-deb --contents stim2-render_${{ github.ref_name }}_all.deb
+
+      - name: Upload release artifact
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: ./stim2-render_*_all.deb
+          body: stim2 version ${{ github.ref_name }}
+          generateReleaseNotes: true
+          allowUpdates: true
+          prerelease: true
+          omitPrereleaseDuringUpdate: true
+
   check:
 
-    needs: release
+    needs: [release, render-package]
 
     strategy:
       matrix:

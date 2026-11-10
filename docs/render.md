@@ -55,19 +55,30 @@ drawing, with the stim2 checkbox reading "stim2: no clip".
 
 ## On the rig: the stim2-render service
 
-A rig whose dserv and stim2 share a machine (a Pi with its display, say)
-can render its own clips. The stim2 package installs a systemd unit for
-it, not enabled:
+A machine that runs dserv can render its own clips: a rig whose dserv
+and stim2 share it (a Pi with its display, say), the dserv box of a rig
+whose display is another machine, or a server. stim2 ships the unit,
+not enabled. Installing the `stim2-render` package turns it on:
 
-    sudo systemctl enable --now stim2-render
+    sudo apt install ./stim2-render_VERSION_all.deb
 
-It needs the dlsh interpreter (the `dlsh-interp` package, which the stim2
-package recommends; the unit does not start without `/usr/local/bin/dlsh`)
-and `ffmpeg`. It listens on port 8140 of every address, reads
+(or from the dserv-agent panel, where it is an optional component, or
+at setup with `?with=stim2-render`). The package depends on `stim2`,
+`dlsh-interp` and `ffmpeg`; removing it turns the service off. Without
+the package, `sudo systemctl enable --now stim2-render` does the same,
+given `/usr/local/bin/dlsh` (the unit does not start without it) and
+`ffmpeg`.
+
+It listens on port 8140 of every address, reads
 `/usr/local/dserv/work/obs`, and keeps clips in `/var/cache/stim2-render`.
 dg_viewer finds it with no setting: with `df render_url` empty it asks
-port 8140 of the dserv's host. Options go in a drop-in
-(`sudo systemctl edit stim2-render`):
+port 8140 of the dserv's host. Options go in `/etc/default/stim2-render`
+(then `sudo systemctl restart stim2-render`):
+
+    RENDER_OPTS="-width 640 -cache-max 1000"
+
+or, without the package, in a drop-in (`sudo systemctl edit
+stim2-render`; the settings file wins where both set `RENDER_OPTS`):
 
     [Service]
     Environment=RENDER_OPTS=-width 640 -cache-max 1000

@@ -1,0 +1,23 @@
+#!/bin/sh
+# The unit file belongs to stim2 and outlives this package, so removal
+# DISABLES it rather than masking it (masking would also block an admin's
+# own `systemctl enable --now stim2-render`). It also forgets the state
+# deb-systemd-helper kept, so installing the package again turns the
+# service back on instead of reading the removal as an admin's "disabled".
+set -e
+
+UNIT=stim2-render.service
+
+case "$1" in
+    remove|purge)
+        if [ -x /usr/bin/deb-systemd-helper ]; then
+            deb-systemd-helper disable "$UNIT" >/dev/null || true
+            deb-systemd-helper purge "$UNIT" >/dev/null || true
+        fi
+        if [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null || true
+        fi
+        ;;
+esac
+
+exit 0
