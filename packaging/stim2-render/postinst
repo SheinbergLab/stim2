@@ -1,0 +1,26 @@
+#!/bin/sh
+# Installing stim2-render is the decision to run it: enable and start the
+# unit (stim2 ships it, disabled). deb-systemd-helper keeps an admin's
+# choice -- a box where someone ran `systemctl disable stim2-render` stays
+# disabled across upgrades -- and an upgrade restarts a running server.
+set -e
+
+UNIT=stim2-render.service
+
+case "$1" in
+    configure|abort-upgrade|abort-deconfigure|abort-remove)
+        deb-systemd-helper unmask "$UNIT" >/dev/null || true
+        if deb-systemd-helper --quiet was-enabled "$UNIT"; then
+            deb-systemd-helper enable "$UNIT" >/dev/null || true
+        else
+            deb-systemd-helper update-state "$UNIT" >/dev/null || true
+        fi
+        if [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null || true
+            if [ -n "$2" ]; then action=restart; else action=start; fi
+            deb-systemd-invoke "$action" "$UNIT" >/dev/null || true
+        fi
+        ;;
+esac
+
+exit 0

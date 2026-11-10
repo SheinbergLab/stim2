@@ -1,0 +1,14 @@
+# stim2-render: trial clips for dserv's trial viewer (docs/render.md).
+# Read by stim2-render.service; takes effect on
+#
+#     sudo systemctl restart stim2-render
+#
+# Options for tools/render/render_server.tcl, for example
+#   -cache-max MB   clip cache size, oldest-served clips go first (default 2000)
+#   -width W        clip width (default 960)
+#   -guard H:P      dserv whose running experiment pauses rendering
+#                   (default localhost:2570; none to render regardless)
+#   -prefetch N     trials after the one asked for to render next (default 2)
+#   -http           serve http even where a certificate is found
+#
+#RENDER_OPTS="-cache-max 4000 -width 640"

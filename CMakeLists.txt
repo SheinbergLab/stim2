@@ -633,6 +633,8 @@ else()
     # replay and the stim2-render service: the dlsh interpreter runs
     # tools/replay and tools/render, ffmpeg writes their movies
     set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "dlsh-interp, ffmpeg")
+    # installing stim2-render (packaging/stim2-render) turns the service on
+    set(CPACK_DEBIAN_PACKAGE_SUGGESTS "stim2-render")
     set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA ${CMAKE_CURRENT_SOURCE_DIR}/dpkg/postinst)
     
     install(TARGETS stim2 DESTINATION "/usr/local/stim2")
@@ -783,8 +785,9 @@ else()
     )
 
     # stim2-render: trial clips for dserv's trial viewer.  A package-owned
-    # unit, so upgrades refresh it; installed but not enabled (postinst
-    # restarts it on upgrade where it runs)
+    # unit, so upgrades refresh it; installed but not enabled -- the
+    # stim2-render package enables it (postinst restarts it on upgrade
+    # where it runs)
     install(
         FILES systemd/stim2-render.service
         DESTINATION /usr/lib/systemd/system

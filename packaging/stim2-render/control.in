@@ -1,0 +1,16 @@
+Package: stim2-render
+Version: @VERSION@
+Architecture: all
+Maintainer: SheinbergLab
+Section: misc
+Priority: optional
+Depends: stim2 (>= @MIN_STIM2@), dlsh-interp, ffmpeg, init-system-helpers
+Description: stim2 trial clips for dserv's trial viewer
+ Installing this package turns on the stim2-render service: a headless
+ stim2 that re-renders recorded trials frame-locked, as video clips for
+ dserv's trial viewer (dg_viewer), on port 8140. It pauses while this
+ machine's dserv runs an experiment. Removing the package turns it off.
+ .
+ The unit and the render server ship with stim2; this package is the
+ switch, its settings (/etc/default/stim2-render), and what the server
+ needs to run (the dlsh interpreter and ffmpeg).

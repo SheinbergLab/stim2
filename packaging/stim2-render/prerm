@@ -1,0 +1,10 @@
+#!/bin/sh
+# Removing stim2-render turns the service off. The unit stays (stim2 owns
+# it), so stop it here; postrm disables it.
+set -e
+
+if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+    deb-systemd-invoke stop stim2-render.service >/dev/null || true
+fi
+
+exit 0

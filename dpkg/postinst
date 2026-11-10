@@ -208,9 +208,10 @@ if [ ! -f /etc/systemd/system/stim2.service ] && [ ! -f /etc/systemd/system/stim
     fi
 fi
 
-# stim2-render ships enabled-by-hand in /usr/lib/systemd/system: pick up a
-# new or changed unit, and restart it where it runs so it serves this
-# version's render server (its clips are cached by stim2 version anyway)
+# stim2-render ships disabled in /usr/lib/systemd/system (the stim2-render
+# package, or an admin, enables it): pick up a new or changed unit, and
+# restart it where it runs so it serves this version's render server (its
+# clips are cached by stim2 version anyway)
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
     systemctl try-restart stim2-render >/dev/null 2>&1 || true
