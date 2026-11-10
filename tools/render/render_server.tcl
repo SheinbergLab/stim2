@@ -46,14 +46,17 @@
 #                  dserv; "none" to render regardless)
 #   -cache-max MB  the cache's size: past it, the clips used longest ago go
 #                  (default 2000; 0 for no limit)
-#   -cert FILE     serve https instead of http, with this certificate (PEM,
-#   -key FILE      chain included) and its private key -- both or neither.
-#                  A dserv host's own pair (/usr/local/dserv/ssl/cert.pem,
-#                  key.pem) names that host already.  Needed whenever the
-#                  viewer's page is https: Safari blocks an https page from
-#                  reaching an http server even on localhost, and every
-#                  browser does across machines.  Uses dlsh's tls package
-#                  (dlsh 0.21.0 and later).
+#   -cert FILE     serve https with this certificate (PEM, chain included)
+#   -key FILE      and its private key -- both or neither.  With neither,
+#                  the server finds a pair itself: systemd's credentials
+#                  ($CREDENTIALS_DIRECTORY/cert.pem, key.pem), then dserv's
+#                  own (/usr/local/dserv/ssl/cert.pem, key.pem), as dserv
+#                  does; with no pair it can read, http.  https is needed
+#                  whenever the viewer's page is https: Safari blocks an
+#                  https page from reaching an http server even on
+#                  localhost, and every browser does across machines.
+#                  Uses dlsh's tls package (dlsh 0.21.0 and later).
+#   -http          plain http even where a certificate is found
 #
 # One stim2, one clip at a time: rendering runs in a coroutine that yields
 # every 10 rig frames, so the server keeps answering (clips, status, new
@@ -83,9 +86,12 @@ set opt(sessions) 3
 set opt(dserv) {}
 set opt(cert) ""
 set opt(key) ""
+set opt(http) 0
 set args $argv
 while {[llength $args]} {
-    set a [lindex $args 0]; set v [lindex $args 1]; set args [lrange $args 2 end]
+    set a [lindex $args 0]
+    if {$a eq "-http"} { set opt(http) 1; set args [lrange $args 1 end]; continue }
+    set v [lindex $args 1]; set args [lrange $args 2 end]
     switch -- $a {
         -port       { set opt(port) $v }
         -host       { set opt(host) $v }
@@ -121,7 +127,34 @@ while {[llength $args]} {
 if {($opt(cert) eq "") != ($opt(key) eq "")} {
     puts stderr "-cert and -key go together"; exit 2
 }
-if {$opt(cert) ne ""} {
+if {$opt(http) && $opt(cert) ne ""} {
+    puts stderr "-http and -cert/-key contradict each other"; exit 2
+}
+# With no -cert/-key, use a pair already on this machine, the way dserv
+# finds its own: one systemd handed us (LoadCredential=), else dserv's.
+# A pair that is there but unusable says why before falling back to http,
+# so an https page's viewer failing is not a mystery.
+set cert_notes {}
+if {!$opt(http) && $opt(cert) eq ""} {
+    set places {}
+    if {[info exists ::env(CREDENTIALS_DIRECTORY)]} { lappend places $::env(CREDENTIALS_DIRECTORY) }
+    lappend places /usr/local/dserv/ssl
+    foreach d $places {
+        set c [file join $d cert.pem]; set k [file join $d key.pem]
+        if {![file exists $c] || ![file exists $k]} continue
+        set who [expr {[info exists ::env(USER)] ? $::env(USER) : "this user"}]
+        if {![file readable $c] || ![file readable $k]} {
+            lappend cert_notes "found $c and key.pem, but $who cannot read both: serving http\
+                (give -cert/-key a readable copy; docs/render.md, HTTPS)"
+        } elseif {[catch {package require tls}]} {
+            lappend cert_notes "found $c, but this dlsh has no tls package (0.21.0 or later): serving http"
+        } else {
+            set opt(cert) $c; set opt(key) $k
+            lappend cert_notes "certificate: $c"
+        }
+        break
+    }
+} elseif {$opt(cert) ne ""} {
     foreach f [list $opt(cert) $opt(key)] {
         if {![file readable $f]} { puts stderr "cannot read $f"; exit 2 }
     }
@@ -901,6 +934,7 @@ if {$scheme eq "https"} {
 if {[catch $listen e]} {
     puts stderr "cannot listen on $opt(host):$opt(port): $e"; exit 1
 }
+foreach n $cert_notes { log $n }
 log "listening on $scheme://$opt(host):$opt(port)/  data: [join $opt(data) {, }]  cache: $opt(cache)"
 if {[llength $opt(dserv)]} { log "sessions also from: [join $opt(dserv) {, }]" }
 if {$opt(guard) eq "none"} { log "the guard is off: rendering regardless of any experiment" } \
