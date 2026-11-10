@@ -15,6 +15,13 @@
 # Options go in a drop-in (sudo systemctl edit stim2-render), e.g.
 #     [Service]
 #     Environment=RENDER_OPTS=-width 640 -cache-max 1000
+#
+# For an https dserv page (always, for Safari) serve https with dserv's own
+# certificate; LoadCredential= gives the dynamic user a copy of the key:
+#     [Service]
+#     LoadCredential=cert.pem:/usr/local/dserv/ssl/cert.pem
+#     LoadCredential=key.pem:/usr/local/dserv/ssl/key.pem
+#     Environment=RENDER_OPTS=-cert /run/credentials/stim2-render.service/cert.pem -key /run/credentials/stim2-render.service/key.pem
 
 [Unit]
 Description=stim2 trial clips for the trial viewer
