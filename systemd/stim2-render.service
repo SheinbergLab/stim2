@@ -1,0 +1,47 @@
+# stim2-render: trial clips for dserv's trial viewer (dg_viewer.html), drawn
+# by a headless stim2 of its own (tools/render/render_server.tcl,
+# docs/render.md).  Installed with the package, not enabled: turn it on
+# where viewers should get clips from this machine,
+#
+#     sudo systemctl enable --now stim2-render
+#
+# and dg_viewer finds it at port 8140 of the dserv's host with no setting.
+#
+# It stays out of the rig's way: it renders nothing while this machine's
+# dserv runs an experiment (ess/status "running"; -guard), and below
+# everything else for the CPU and the disk.  The live stim2 runs at FIFO
+# priority, ahead of it regardless.
+#
+# Options go in a drop-in (sudo systemctl edit stim2-render), e.g.
+#     [Service]
+#     Environment=RENDER_OPTS=-width 640 -cache-max 1000
+
+[Unit]
+Description=stim2 trial clips for the trial viewer
+Documentation=file:///usr/local/stim2/tools/render/render_server.tcl
+Wants=network-online.target
+After=network-online.target dserv.service stim2.service
+# the render server is a dlsh script: needs the dlsh-interp package
+ConditionPathExists=/usr/local/bin/dlsh
+
+[Service]
+Type=simple
+DynamicUser=yes
+SupplementaryGroups=video render
+CacheDirectory=stim2-render
+RuntimeDirectory=stim2-render
+Environment=HOME=/var/cache/stim2-render
+Environment=XDG_RUNTIME_DIR=/run/stim2-render
+Environment=RENDER_OPTS=
+ExecStart=/usr/local/bin/dlsh /usr/local/stim2/tools/render/render_server.tcl -host 0.0.0.0 -cache /var/cache/stim2-render $RENDER_OPTS
+Nice=15
+CPUSchedulingPolicy=batch
+IOSchedulingClass=idle
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=stim2-render
+
+[Install]
+WantedBy=multi-user.target

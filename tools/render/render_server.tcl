@@ -41,10 +41,18 @@
 #   -sessions N    sessions kept in memory (default 3)
 #   -dserv URL     a dserv to fetch sessions from, e.g. http://rpi500.local:2565
 #                  (repeatable)
+#   -guard H:P     the dserv text port whose ess/status holds rendering while
+#                  it is "running" (default localhost:2570, this machine's
+#                  dserv; "none" to render regardless)
+#   -cache-max MB  the cache's size: past it, the clips used longest ago go
+#                  (default 2000; 0 for no limit)
 #
 # One stim2, one clip at a time: rendering runs in a coroutine that yields
 # every 10 rig frames, so the server keeps answering (clips, status, new
-# requests) while a trial renders.
+# requests) while a trial renders.  While the rig runs an experiment no
+# clip is rendered: a viewer asking for one gets a 503, a render under way
+# waits, and the queue goes on when the experiment stops.  Cached clips are
+# still served.
 
 source [file join [file dirname [file normalize [info script]]] .. lib replaylib.tcl]
 
@@ -54,7 +62,11 @@ source [file join [file dirname [file normalize [info script]]] .. lib replaylib
 set opt(port) 8140
 set opt(host) 127.0.0.1
 set opt(data) {}
-set opt(cache) [file join $::env(HOME) .cache stim2-render]
+# (a service may run with no HOME)
+set home [expr {[info exists ::env(HOME)] ? $::env(HOME) : ""}]
+set opt(cache) [expr {$home ne "" ? [file join $home .cache stim2-render] : "/var/cache/stim2-render"}]
+set opt(guard) localhost:2570
+set opt(cachemax) 2000
 set opt(width) 960
 set opt(prefetch) 2
 set opt(stim2) ""
@@ -80,12 +92,24 @@ while {[llength $args]} {
             }
             lappend opt(dserv) [string trimright $v /]
         }
+        -guard      {
+            if {$v ne "none" && ![regexp {^[A-Za-z0-9.-]+:\d+$} $v]} {
+                puts stderr "-guard wants host:port or none, not $v"; exit 2
+            }
+            set opt(guard) $v
+        }
+        -cache-max  {
+            if {![string is integer -strict $v] || $v < 0} { puts stderr "-cache-max wants MB, not $v"; exit 2 }
+            set opt(cachemax) $v
+        }
         default     { puts stderr "unknown option $a"; exit 2 }
     }
 }
 if {![llength $opt(data)]} {
     # (Tcl 9 does not expand ~)
-    foreach d [list $::env(HOME)/data/obs $::env(HOME)/data/ess /usr/local/dserv/work/obs] {
+    set dirs [list /usr/local/dserv/work/obs]
+    if {$home ne ""} { set dirs [linsert $dirs 0 $home/data/obs $home/data/ess] }
+    foreach d $dirs {
         set d [file normalize $d]
         if {[file isdirectory $d]} { lappend opt(data) $d }
     }
@@ -348,6 +372,157 @@ proc stim2_for {size geom} {
 }
 
 # ---------------------------------------------------------------------------
+# the guard: no rendering while the rig runs an experiment.  A render shares
+# the machine with the rig's dserv (and, on a Pi with its display, with the
+# rig's stim2): ess/status from -guard's dserv text port, asked at most once
+# a second while there is work, and every 30 s while nothing answers there.
+# ---------------------------------------------------------------------------
+set guard [dict create status "" when 0 asking 0 answers ""]
+
+# one question over the text port: the answer line, or "" when nothing
+# answers within a second.  Call from a coroutine.
+proc guard_ask {} {
+    global opt
+    regexp {^(.*):(\d+)$} $opt(guard) -> host port
+    set co [info coroutine]
+    if {[catch {socket -async $host $port} sock]} { return "" }
+    set timer [after 1000 [list $co timeout]]
+    try {
+        fconfigure $sock -blocking 0 -translation {auto lf} -encoding utf-8
+        fileevent $sock writable [list $co writable]
+        if {[yield] ne "writable" || [fconfigure $sock -error] ne ""} { return "" }
+        fileevent $sock writable {}
+        puts $sock "dservGet ess/status"
+        flush $sock
+        fileevent $sock readable [list $co readable]
+        while {[yield] eq "readable"} {
+            if {[gets $sock line] >= 0} { return $line }
+            if {[eof $sock]} break
+        }
+        return ""
+    } finally {
+        after cancel $timer
+        catch {close $sock}
+    }
+}
+
+# 1 while the rig runs an experiment.  Asks again when the last answer is
+# old and the caller is a coroutine; otherwise goes by the last answer.
+proc rig_busy {} {
+    global opt guard
+    if {$opt(guard) eq "none"} { return 0 }
+    set every [expr {[dict get $guard answers] eq "0" ? 30000 : 1000}]
+    if {[info coroutine] ne "" && ![dict get $guard asking]
+            && [clock milliseconds] - [dict get $guard when] >= $every} {
+        dict set guard asking 1
+        if {[catch {guard_ask} s]} { set s "" }
+        dict set guard asking 0
+        dict set guard when [clock milliseconds]
+        if {[string index $s 0] eq "!"} { set s "" }   ;# !TCL_ERROR: no ess here
+        set answers [expr {$s ne ""}]
+        if {$answers ne [dict get $guard answers]} {
+            log [expr {$answers
+                ? "the guard: no rendering while $opt(guard)'s ess/status is running"
+                : "the guard: $opt(guard) has no ess/status, so it does not hold rendering"}]
+            dict set guard answers $answers
+        }
+        set was [dict get $guard status]
+        dict set guard status $s
+        if {$s eq "running" && $was ne "running"} {
+            log "the rig is running an experiment: no rendering until it stops"
+        } elseif {$s ne "running" && $was eq "running"} {
+            log "the rig's experiment stopped: rendering goes on"
+        }
+    }
+    expr {[dict get $guard status] eq "running"}
+}
+
+# in the worker, before a render and every 10 rig frames of one: wait while
+# the rig runs an experiment.  Viewers waiting on the clip are told (503)
+# rather than kept waiting; the render goes on when the experiment stops.
+proc hold_while_busy {key} {
+    global jobs
+    if {![rig_busy]} return
+    if {[dict exists $jobs $key]} {
+        foreach chan [dict get $jobs $key waiters] { catch { respond_busy $chan } }
+        dict set jobs $key waiters {}
+        dict set jobs $key status held
+    }
+    while {[rig_busy]} {
+        after 1000 [info coroutine]
+        yield
+    }
+    if {[dict exists $jobs $key]} { dict set jobs $key status rendering }
+}
+
+proc busy_message {} {
+    return "the rig is running an experiment: clips are rendered when it stops"
+}
+proc respond_busy {chan} {
+    respond_json $chan 503 [json_obj [list error [replay::_jstr [busy_message]] busy true]]
+}
+
+# ---------------------------------------------------------------------------
+# the cache's size: past -cache-max, whatever was used longest ago goes.  A
+# clip is its .mp4 and .json together, used when last served (respond_trial
+# sets their mtime); a session copied from a dserv goes by its own mtime,
+# and is kept while it is in memory.  Files being written are left alone.
+# ---------------------------------------------------------------------------
+proc cache_files {dir} {
+    set out [glob -nocomplain -directory $dir -types f *]
+    foreach d [glob -nocomplain -directory $dir -types d *] { lappend out {*}[cache_files $d] }
+    return $out
+}
+
+proc trim_cache {} {
+    global opt sessions
+    if {$opt(cachemax) <= 0} return
+    set limit [expr {$opt(cachemax) * 1048576}]
+    set inuse [lmap s [dict values $sessions] {dict get $s path}]
+    set units [dict create]   ;# unit -> {mtime size files}
+    set total 0
+    foreach f [cache_files $opt(cache)] {
+        if {[string match *.part* [file tail $f]] || [catch {file stat $f st}]} continue
+        incr total $st(size)
+        set u [expr {[regexp {\.(mp4|json)$} $f] ? [file rootname $f] : $f}]
+        if {[dict exists $units $u]} {
+            lassign [dict get $units $u] m z fs
+            dict set units $u [list [expr {max($m, $st(mtime))}] [expr {$z + $st(size)}] [lappend fs $f]]
+        } else {
+            dict set units $u [list $st(mtime) $st(size) [list $f]]
+        }
+    }
+    if {$total <= $limit} return
+    # down to 90%, so the next few clips do not each start a trim
+    set goal [expr {$limit * 9 / 10}]
+    set recent [expr {[clock seconds] - 60}]
+    set n 0; set freed 0; set dirs {}
+    foreach {u e} [lsort -stride 2 -index {1 0} -integer [dict get $units]] {
+        if {$total <= $goal} break
+        lassign $e m z fs
+        if {$m > $recent || $u in $inuse} continue
+        # the .json first: a clip without it is not taken as cached
+        foreach f [concat [lsearch -all -inline $fs *.json] [lsearch -all -inline -not $fs *.json]] {
+            catch {file delete $f}
+        }
+        incr total -$z; incr freed $z; incr n
+        dict set dirs [file dirname $u] 1
+    }
+    # directories left empty, then their parents if those are too
+    foreach d [dict keys $dirs] {
+        while {$d ne $opt(cache) && [string first $opt(cache)/ $d] == 0
+                && ![llength [glob -nocomplain -directory $d *]]} {
+            catch {file delete $d}
+            set d [file dirname $d]
+        }
+    }
+    if {$n} {
+        log [format "cache over %d MB: removed %d clips and copies (%.0f MB), %.0f MB left" \
+                 $opt(cachemax) $n [expr {$freed / 1048576.0}] [expr {$total / 1048576.0}]]
+    }
+}
+
+# ---------------------------------------------------------------------------
 # jobs: one per clip, rendered in turn by the worker coroutine.  A request
 # goes to the front of the queue; prefetches go to the back and are dropped
 # when a request for somewhere else comes in.
@@ -407,6 +582,7 @@ proc work {} {
             set s [dict get $sessions $base]
             lassign [clip_paths $s $trial] dir mp4 json url
             if {![file isfile $json]} {
+                hold_while_busy $key
                 dict set jobs $key status rendering
                 file mkdir $dir
                 set tmp [file rootname $mp4].part
@@ -420,6 +596,7 @@ proc work {} {
                     file rename -force $tmp.json $json
                     log [format "rendered %s: %d rig frames in %.2f s (%d ms in all)" $key \
                              [dict get $r drawn] [dict get $r elapsed] [expr {[clock milliseconds] - $t0}]]
+                    trim_cache
                 } e opts]} {
                     set err $e
                     log "FAILED $key: $e"
@@ -449,6 +626,7 @@ set sending 0
 proc progress {key done of} {
     global jobs sending
     if {[dict exists $jobs $key]} { dict set jobs $key progress [expr {double($done) / $of}] }
+    hold_while_busy $key
     set until [expr {[clock milliseconds] + 100}]
     after 0 [info coroutine]
     yield
@@ -468,7 +646,7 @@ proc http_error {code msg} { return -code error -errorcode [list HTTP $code] $ms
 proc headers {code ctype len {extra {}}} {
     set reason [dict get {200 OK 204 {No Content} 206 {Partial Content} 400 {Bad Request} 404 {Not Found}
         405 {Method Not Allowed} 416 {Range Not Satisfiable} 422 {Unprocessable Entity}
-        500 {Internal Server Error}} $code]
+        500 {Internal Server Error} 503 {Service Unavailable}} $code]
     set h "HTTP/1.1 $code $reason\r\n"
     append h "Content-Type: $ctype\r\nContent-Length: $len\r\n"
     append h "Access-Control-Allow-Origin: *\r\n"
@@ -488,6 +666,9 @@ proc respond_json {chan code body} {
 proc respond_trial {chan s trial cached} {
     lassign [clip_paths $s $trial] dir mp4 json url
     set fd [open $json r]; set timing [read $fd]; close $fd
+    # used now: the cache's trim goes by this
+    set now [clock seconds]
+    catch { file mtime $mp4 $now; file mtime $json $now }
     respond_json $chan 200 [json_obj [list clip [replay::_jstr $url] cached [expr {$cached ? "true" : "false"}] \
                                          timing $timing]]
 }
@@ -622,6 +803,10 @@ proc handle {chan req hdr} {
             if {$trial < 1 || $trial > $n} { http_error 400 "trial $trial out of range: the file has $n" }
             if {[cached $s $trial]} {
                 respond_trial $chan $s $trial 1
+            } elseif {[rig_busy]} {
+                # nothing rendered or queued during an experiment
+                respond_busy $chan
+                return
             } else {
                 want $s $trial $chan
             }
@@ -654,7 +839,11 @@ proc handle {chan req hdr} {
                 sessions [replay::_jarr $ss] rendering $cur queue [replay::_jarr $qs] \
                 cache [replay::_jstr $opt(cache)] data [replay::_jarr [lmap d $opt(data) {replay::_jstr $d}]] \
                 dserv [replay::_jarr [lmap d $opt(dserv) {replay::_jstr $d}]] \
-                fetching [replay::_jarr [lmap b [dict keys $::fetching] {replay::_jstr $b}]]]]
+                fetching [replay::_jarr [lmap b [dict keys $::fetching] {replay::_jstr $b}]] \
+                guard [json_obj [list target [replay::_jstr $opt(guard)] \
+                    busy [expr {[rig_busy] ? "true" : "false"}] \
+                    status [replay::_jstr [dict get $::guard status]]]] \
+                cache_max_mb $opt(cachemax)]]
         }
         / {
             respond_json $chan 200 [json_obj [list service [replay::_jstr "stim2 trial renderer"] \
@@ -679,4 +868,7 @@ if {[catch {socket -server accept -myaddr $opt(host) $opt(port)} e]} {
 }
 log "listening on http://$opt(host):$opt(port)/  data: [join $opt(data) {, }]  cache: $opt(cache)"
 if {[llength $opt(dserv)]} { log "sessions also from: [join $opt(dserv) {, }]" }
+if {$opt(guard) eq "none"} { log "the guard is off: rendering regardless of any experiment" } \
+else { coroutine ::guard_first rig_busy }   ;# logs whether it holds rendering
+trim_cache
 vwait forever

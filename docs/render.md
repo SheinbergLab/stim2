@@ -52,6 +52,52 @@ serving datapoints meanwhile. A session stim2 cannot replay (a 422 here:
 recorded before stim2 kept frame records) shows the viewer plugin's own
 drawing, with the stim2 checkbox reading "stim2: no clip".
 
+## On the rig: the stim2-render service
+
+A rig whose dserv and stim2 share a machine (a Pi with its display, say)
+can render its own clips. The stim2 package installs a systemd unit for
+it, not enabled:
+
+    sudo systemctl enable --now stim2-render
+
+It needs the dlsh interpreter (the `dlsh-interp` package, which the stim2
+package recommends; the unit does not start without `/usr/local/bin/dlsh`)
+and `ffmpeg`. It listens on port 8140 of every address, reads
+`/usr/local/dserv/work/obs`, and keeps clips in `/var/cache/stim2-render`.
+dg_viewer finds it with no setting: with `df render_url` empty it asks
+port 8140 of the dserv's host. Options go in a drop-in
+(`sudo systemctl edit stim2-render`):
+
+    [Service]
+    Environment=RENDER_OPTS=-width 640 -cache-max 1000
+
+Its log is `journalctl -u stim2-render`.
+
+**Staying out of the experiment's way.** A render shares the rig's CPU,
+and on a Pi its GPU and memory with the rig's own stim2:
+
+- **The guard.** While the rig's `ess/status` is `running`, nothing is
+  rendered. A viewer asking for a clip not yet made gets a 503 ("the rig is
+  running an experiment") and plays on without it; a render under way stops
+  where it is (between batches of 10 rig frames) and finishes, and the queue
+  goes on, once the experiment stops. Cached clips are still served. The
+  status comes from `-guard`'s dserv text port, by default this machine's
+  (`localhost:2570`), asked at most once a second while there is work. A
+  port with no dserv or no `ess` does not hold rendering (asked again every
+  30 s); `-guard none` turns it off. A stim box with no dserv of its own
+  names the rig's: `-guard 192.168.88.29:2570`.
+- **Priority.** The unit runs it at `Nice=15`, `CPUSchedulingPolicy=batch`
+  and idle disk priority, so dserv and the rest come first; the rig's stim2
+  runs at FIFO priority, ahead of it regardless.
+- **The cache's size.** `-cache-max` (default 2000 MB) bounds the cache: past
+  it, the clips served longest ago go, down to 90%, after each render. A clip
+  used in the last minute stays, and so does the copy of a session in
+  memory.
+
+On a Raspberry Pi 5 (hm0, 2026-11-09) a clip renders in about the trial's
+own time at 960 pixels (a 7 s joystick trial: 7.4 s), so stepping forward
+mostly finds the next clips ready; `-width 640` is quicker.
+
 ## A rig whose dserv is elsewhere
 
 A rig's dserv need not be the render host. With a Pi running dserv and a
@@ -84,8 +130,9 @@ loaded from there. The rig does no more than send the file, once.
   several `-dserv`, they are asked in turn.
 
 Errors are JSON `{error}` with 400 (a bad request), 404 (no such file),
-422 (a file that cannot be replayed, with the reason) or 500 (a render
-that failed). Every answer carries `Access-Control-Allow-Origin: *`, so a
+422 (a file that cannot be replayed, with the reason), 500 (a render
+that failed) or 503 (`busy: true`: the rig is running an experiment, so
+the clip is not rendered now; the guard, above). Every answer carries `Access-Control-Allow-Origin: *`, so a
 page served by dserv can use a server on another port or machine.
 
 ## Options
@@ -96,7 +143,9 @@ page served by dserv can use a server on another port or machine.
 | `-host A` | address to listen on (default `127.0.0.1`; `0.0.0.0` to serve other machines) |
 | `-data DIR` | where sessions are (repeatable; replaces the defaults `~/data/obs`, `~/data/ess`, `/usr/local/dserv/work/obs`, those that exist) |
 | `-dserv URL` | a dserv to fetch sessions from, `http(s)://host:port` (repeatable; asked after the data directories) |
-| `-cache DIR` | where clips go (default `~/.cache/stim2-render`) |
+| `-guard H:P` | the dserv text port whose `ess/status` holds rendering while `running` (default `localhost:2570`; `none` to render regardless) |
+| `-cache DIR` | where clips go (default `~/.cache/stim2-render`; `/var/cache/stim2-render` with no `HOME`) |
+| `-cache-max MB` | the cache's size: past it, the clips served longest ago go (default 2000; 0 for no limit) |
 | `-width W` | clip width (default 960); the height follows the rig's aspect |
 | `-prefetch N` | trials after the one asked for to render next (default 2) |
 | `-sessions N` | sessions kept in memory (default 3, least recently used dropped) |
@@ -122,7 +171,7 @@ page served by dserv can use a server on another port or machine.
   and `.json`. A re-converted file (new mtime or size), another clip size
   or another stim2 gets a new directory; a clip is written under a
   temporary name and renamed when complete, so a half-written one is never
-  served. Nothing is evicted: delete the directory to reclaim it.
+  served. `-cache-max` bounds it (above).
 - **Clips** are H.264 at the rig's refresh, `-crf 14 -tune animation`, a
   keyframe every 12 frames (0.1 s at 120 Hz) so seeking lands quickly,
   `+faststart`. No gaze overlay: the viewer draws the gaze from its own
