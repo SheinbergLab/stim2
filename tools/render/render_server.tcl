@@ -1,5 +1,5 @@
 #!/usr/bin/env dlsh
-# render_server.tcl -- trial clips over HTTP, for a trial viewer.
+# render_server.tcl -- trial clips over HTTP(S), for a trial viewer.
 #
 #     dlsh tools/render/render_server.tcl ?options?
 #
@@ -46,6 +46,14 @@
 #                  dserv; "none" to render regardless)
 #   -cache-max MB  the cache's size: past it, the clips used longest ago go
 #                  (default 2000; 0 for no limit)
+#   -cert FILE     serve https instead of http, with this certificate (PEM,
+#   -key FILE      chain included) and its private key -- both or neither.
+#                  A dserv host's own pair (/usr/local/dserv/ssl/cert.pem,
+#                  key.pem) names that host already.  Needed whenever the
+#                  viewer's page is https: Safari blocks an https page from
+#                  reaching an http server even on localhost, and every
+#                  browser does across machines.  Uses dlsh's tls package
+#                  (dlsh 0.21.0 and later).
 #
 # One stim2, one clip at a time: rendering runs in a coroutine that yields
 # every 10 rig frames, so the server keeps answering (clips, status, new
@@ -73,6 +81,8 @@ set opt(stim2) ""
 set opt(stim2port) 5652
 set opt(sessions) 3
 set opt(dserv) {}
+set opt(cert) ""
+set opt(key) ""
 set args $argv
 while {[llength $args]} {
     set a [lindex $args 0]; set v [lindex $args 1]; set args [lrange $args 2 end]
@@ -102,9 +112,24 @@ while {[llength $args]} {
             if {![string is integer -strict $v] || $v < 0} { puts stderr "-cache-max wants MB, not $v"; exit 2 }
             set opt(cachemax) $v
         }
+        -cert       { set opt(cert) [file normalize $v] }
+        -key        { set opt(key) [file normalize $v] }
         default     { puts stderr "unknown option $a"; exit 2 }
     }
 }
+# https: check the pair now, before a stim2 is started for nothing
+if {($opt(cert) eq "") != ($opt(key) eq "")} {
+    puts stderr "-cert and -key go together"; exit 2
+}
+if {$opt(cert) ne ""} {
+    foreach f [list $opt(cert) $opt(key)] {
+        if {![file readable $f]} { puts stderr "cannot read $f"; exit 2 }
+    }
+    if {[catch {package require tls} e]} {
+        puts stderr "https needs the tls package (dlsh 0.21.0 or later): $e"; exit 2
+    }
+}
+set scheme [expr {$opt(cert) ne "" ? "https" : "http"}]
 if {![llength $opt(data)]} {
     # (Tcl 9 does not expand ~)
     set dirs [list /usr/local/dserv/work/obs]
@@ -863,10 +888,20 @@ if {[catch {stim2_for [list $opt(width) [expr {$opt(width) * 9 / 16 + ($opt(widt
     puts stderr "could not start a stim2: $e"; exit 1
 }
 log "stim2 [dict get $stim2 version] (pid [dict get $stim2 pid]) on port $opt(stim2port)"
-if {[catch {socket -server accept -myaddr $opt(host) $opt(port)} e]} {
+# With -cert/-key every connection is TLS: tls::socket wraps the accepted
+# channel, and the handshake runs on its first reads, inside the same
+# non-blocking read_request a plain connection gets (a client refusing the
+# certificate just shows up there as a failed read and is closed).
+if {$scheme eq "https"} {
+    set listen [list tls::socket -server accept -certfile $opt(cert) -keyfile $opt(key) \
+                    -myaddr $opt(host) $opt(port)]
+} else {
+    set listen [list socket -server accept -myaddr $opt(host) $opt(port)]
+}
+if {[catch $listen e]} {
     puts stderr "cannot listen on $opt(host):$opt(port): $e"; exit 1
 }
-log "listening on http://$opt(host):$opt(port)/  data: [join $opt(data) {, }]  cache: $opt(cache)"
+log "listening on $scheme://$opt(host):$opt(port)/  data: [join $opt(data) {, }]  cache: $opt(cache)"
 if {[llength $opt(dserv)]} { log "sessions also from: [join $opt(dserv) {, }]" }
 if {$opt(guard) eq "none"} { log "the guard is off: rendering regardless of any experiment" } \
 else { coroutine ::guard_first rig_busy }   ;# logs whether it holds rendering

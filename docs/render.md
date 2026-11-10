@@ -8,6 +8,8 @@ clip, with its own traces and gaze drawn in step with it.
 
     dlsh tools/render/render_server.tcl                 # http://127.0.0.1:8140/
     dlsh tools/render/render_server.tcl -host 0.0.0.0 -data /usr/local/dserv/work/obs
+    dlsh tools/render/render_server.tcl -cert /usr/local/dserv/ssl/cert.pem \
+                                        -key /usr/local/dserv/ssl/key.pem   # https://...
 
 Each clip is `replay::render_trial` (`docs/replay.md`, "As a library"):
 the rig's own script, fed the trial's commands and bound datapoints frame
@@ -98,6 +100,42 @@ On a Raspberry Pi 5 (hm0, 2026-11-09) a clip renders in about the trial's
 own time at 960 pixels (a 7 s joystick trial: 7.4 s), so stepping forward
 mostly finds the next clips ready; `-width 640` is quicker.
 
+## HTTPS: Safari, and viewers on other machines
+
+A dserv page served over https may only use an https render server:
+
+- **Safari** blocks an https page from reaching any http server, even one
+  on `localhost`.
+- **Chrome** allows `http://localhost` from an https page (the viewer then
+  fetches each clip into memory first), but not an http server on another
+  machine.
+
+With `-cert FILE -key FILE` the server speaks https instead of http, on the
+same port, with the same requests and answers. It uses dlsh's `tls` package,
+so it needs dlsh 0.21.0 or later. The certificate must be one the browser
+trusts and must name the host in the URL the viewer uses:
+
+- **On a dserv host** (the stim2-render service, or by hand), use dserv's
+  own pair, `/usr/local/dserv/ssl/cert.pem` and `key.pem`. The page came
+  from that host's dserv, so its certificate already names the host, and
+  any browser that trusts the dserv page trusts the clips.
+- **A render host that is not the dserv host** needs a certificate of its
+  own from the same lab CA, naming the address viewers reach it by. Give
+  that https URL to the rig: `df render_url https://<render host>:8140`.
+
+dg_viewer on an https page with no `render_url` tries
+`https://<page host>:8140` first, then `http://`, so an https render server
+on the dserv host needs no setting.
+
+For the stim2-render service, `LoadCredential=` hands the unit's dynamic
+user a copy of dserv's key, which is readable only by root
+(`sudo systemctl edit stim2-render`):
+
+    [Service]
+    LoadCredential=cert.pem:/usr/local/dserv/ssl/cert.pem
+    LoadCredential=key.pem:/usr/local/dserv/ssl/key.pem
+    Environment=RENDER_OPTS=-cert /run/credentials/stim2-render.service/cert.pem -key /run/credentials/stim2-render.service/key.pem
+
 ## A rig whose dserv is elsewhere
 
 A rig's dserv need not be the render host. With a Pi running dserv and a
@@ -144,6 +182,7 @@ page served by dserv can use a server on another port or machine.
 | `-data DIR` | where sessions are (repeatable; replaces the defaults `~/data/obs`, `~/data/ess`, `/usr/local/dserv/work/obs`, those that exist) |
 | `-dserv URL` | a dserv to fetch sessions from, `http(s)://host:port` (repeatable; asked after the data directories) |
 | `-guard H:P` | the dserv text port whose `ess/status` holds rendering while `running` (default `localhost:2570`; `none` to render regardless) |
+| `-cert FILE`, `-key FILE` | serve https with this certificate (PEM, chain included) and key, both or neither (dlsh 0.21.0 or later; see HTTPS above) |
 | `-cache DIR` | where clips go (default `~/.cache/stim2-render`; `/var/cache/stim2-render` with no `HOME`) |
 | `-cache-max MB` | the cache's size: past it, the clips served longest ago go (default 2000; 0 for no limit) |
 | `-width W` | clip width (default 960); the height follows the rig's aspect |
