@@ -173,6 +173,14 @@ if {![llength $opt(data)]} {
     }
 }
 file mkdir $opt(cache)
+# the cache's real path, symlinks resolved.  /clips/ checks a request's
+# normalized path against it, and `file normalize` resolves every component
+# but the last: with the cache itself a symlink (systemd's CacheDirectory=
+# with DynamicUser makes /var/cache/stim2-render one, to
+# /var/cache/private/stim2-render) a clip's path resolved and the cache's
+# did not, and every clip was a 404.  (A name inside it, then its dirname:
+# normalizing "$cache/." drops the dot and leaves the cache last again.)
+set opt(cache) [file dirname [file normalize [file join $opt(cache) x]]]
 
 # the clip format; a change here starts a fresh cache
 set clip_version 2
