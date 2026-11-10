@@ -17,11 +17,12 @@
 #     Environment=RENDER_OPTS=-width 640 -cache-max 1000
 #
 # For an https dserv page (always, for Safari) serve https with dserv's own
-# certificate; LoadCredential= gives the dynamic user a copy of the key:
+# certificate. The dynamic user can't read dserv's root-only key, so hand
+# the unit a copy; the server finds it in $CREDENTIALS_DIRECTORY by itself:
 #     [Service]
 #     LoadCredential=cert.pem:/usr/local/dserv/ssl/cert.pem
 #     LoadCredential=key.pem:/usr/local/dserv/ssl/key.pem
-#     Environment=RENDER_OPTS=-cert /run/credentials/stim2-render.service/cert.pem -key /run/credentials/stim2-render.service/key.pem
+# Without these it logs why it serves http.
 
 [Unit]
 Description=stim2 trial clips for the trial viewer
