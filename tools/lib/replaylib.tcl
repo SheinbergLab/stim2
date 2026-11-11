@@ -974,7 +974,7 @@ proc replay::_gaze_at {t} {
 }
 
 proc replay::render {P sock args} {
-    array set o {-crf 14 -keyint "" -progress "" -verbose 0 -log replay::say}
+    array set o {-crf 14 -keyint "" -progress "" -verbose 0 -log replay::say -gaze-style ""}
     foreach {k v} $args {
         if {![info exists o($k)]} { fail 2 "replay::render: unknown option $k" }
         set o($k) $v
@@ -1010,7 +1010,7 @@ proc replay::render {P sock args} {
     # the gaze overlay: a disc at the newest sample, a fading trail behind
     set gaze_trail_ms 150.0; set gaze_hold_ms 100.0
     set eye_k 0; set gaze_last ""
-    if {$n_eye} { framelock::send $sock [framelock::gaze_style] }
+    if {$n_eye} { framelock::send $sock [framelock::gaze_style {*}$o(-gaze-style)] }
     set repaints 0
     set sent 0; set errors 0
     set kinds [dict create]
@@ -1107,15 +1107,28 @@ proc replay::render {P sock args} {
 #   -fps F  -crf N  -keyint N (default 12, for scrubbing)  -eye MODE
 #   (default off: a viewer draws the gaze itself)  -json PATH  -progress CMD
 #   -verbose  -log
+#   -gaze {T X Y}  the gaze to draw, in place of -eye's reading of the
+#                  file: T seconds from the period's first eye record (a
+#                  trials DG's em_seconds; from BEGINOBS when the period has
+#                  none), X Y degrees, three lists of one length.  What a
+#                  viewer shows is then what the movie shows.
+#   -gaze-style {SIZE {R G B A}}  the gaze disc (framelock::gaze_style)
+#   -labels {NAME OPTS ...}  overlay items over the whole clip, each
+#                  `overlay set NAME {*}OPTS` (a caption: -text -pos -size
+#                  -anchor -color -bg), deleted after
 # ---------------------------------------------------------------------------
 proc replay::render_trial {S sock trial out args} {
-    array set o {-fps "" -crf 14 -keyint 12 -eye off -json "" -progress "" -verbose 0 -log replay::say}
+    array set o {-fps "" -crf 14 -keyint 12 -eye off -json "" -progress "" -verbose 0 -log replay::say
+                 -gaze "" -gaze-style "" -labels ""}
     foreach {k v} $args {
         if {![info exists o($k)]} { fail 2 "replay::render_trial: unknown option $k" }
         set o($k) $v
     }
     if {![is_movie $out]} { fail 2 "replay::render_trial: $out is not a movie file (.mp4/.mov/.mkv)" }
-    set P [plan $S -trials [list $trial $trial] -render $out -fps $o(-fps) -eye $o(-eye)]
+    set eye [expr {$o(-gaze) ne "" ? "off" : $o(-eye)}]
+    set P [plan $S -trials [list $trial $trial] -render $out -fps $o(-fps) -eye $eye]
+    if {$o(-gaze) ne ""} { set P [gaze_tracks $S $P $trial {*}$o(-gaze)] }
+    if {[llength $o(-labels)] % 2} { fail 2 "replay::render_trial: -labels wants NAME OPTS pairs" }
     # a stepped stim2 left by an earlier render: out of step mode, so the
     # next stepMode 1 may start its clock anywhere
     catch { framelock::send $sock {stepMode 0} }
@@ -1123,14 +1136,60 @@ proc replay::render_trial {S sock trial out args} {
     framelock::setup $sock [setup_dict $S "replay: [file tail [set ${S}::path]] (trial $trial)"] \
         [expr {$o(-verbose) ? $o(-log) : $quiet}]
     if {$trial > 1} { framelock::send $sock reset }
-    set r [render $P $sock -crf $o(-crf) -keyint $o(-keyint) -progress $o(-progress) \
-               -verbose $o(-verbose) -log $o(-log)]
+    foreach {name opts} $o(-labels) {
+        set r [framelock::send $sock [list overlay set $name {*}$opts]]
+        if {[framelock::is_error $r]} { fail 1 "label $name: $r" }
+    }
+    try {
+        set r [render $P $sock -crf $o(-crf) -keyint $o(-keyint) -progress $o(-progress) \
+                   -verbose $o(-verbose) -log $o(-log) -gaze-style $o(-gaze-style)]
+    } finally {
+        foreach {name opts} $o(-labels) { catch { framelock::send $sock [list overlay delete $name] } }
+    }
     set jpath [expr {$o(-json) ne "" ? $o(-json) : "[file rootname $out].json"}]
     set fd [open $jpath w]
     puts $fd [timing $S $P $r $trial]
     close $fd
     dict set r json $jpath
     return $r
+}
+
+# ---------------------------------------------------------------------------
+# em_zero: trial's first eyetracking/raw record inside its observation
+# period, on the dserv clock (us): where a trials DG's em_seconds is 0
+# (em::normalize_timestamps).  "" when the period has none.
+# ---------------------------------------------------------------------------
+proc replay::em_zero {S trial} {
+    set k [expr {$trial - 1}]
+    set ob [lindex [set ${S}::obs_begin] $k]; set oe [lindex [set ${S}::obs_end] $k]
+    set eye_recs [set ${S}::eye_recs]
+    set j [expr {[lsearch -bisect -integer -index 0 -sorted $eye_recs $ob] + 1}]
+    if {$j > 0 && [lindex $eye_recs [expr {$j - 1}] 0] == $ob} { incr j -1 }
+    if {$j < [llength $eye_recs] && [lindex $eye_recs $j 0] <= $oe} { return [lindex $eye_recs $j 0] }
+    return ""
+}
+
+# gaze_tracks: plan P with its gaze replaced by T X Y (render_trial -gaze):
+# T seconds from em_zero (else BEGINOBS), put on the rig clock the plan's
+# frames use, as plan does its own samples
+proc replay::gaze_tracks {S P trial T X Y} {
+    set n [llength $T]
+    if {[llength $X] != $n || [llength $Y] != $n} { fail 2 "-gaze: T, X and Y differ in length" }
+    set z [em_zero $S $trial]
+    if {$z eq ""} { set z [lindex [set ${S}::obs_begin] [expr {$trial - 1}]] }
+    set z_ms [expr {($z + [dict get $P tick_off]) / 1000.0}]
+    set et {}; set ex {}; set ey {}
+    foreach t $T x $X y $Y {
+        if {![string is double -strict $t] || ![string is double -strict $x] || ![string is double -strict $y]} continue
+        lappend et [expr {$z_ms + 1000.0 * $t}]; lappend ex $x; lappend ey $y
+    }
+    set order [lsort -indices -real $et]
+    dict set P eye_t [lmap i $order {lindex $et $i}]
+    dict set P eye_x [lmap i $order {lindex $ex $i}]
+    dict set P eye_y [lmap i $order {lindex $ey $i}]
+    dict set P n_eye [llength $et]
+    dict set P eye_mode supplied
+    return $P
 }
 
 # ---------------------------------------------------------------------------
@@ -1199,15 +1258,10 @@ proc replay::timing {S P r trial} {
         if {[info exists geom($key)] && [string is double -strict $geom($key)]} { lappend scr $key $geom($key) }
     }
     if {[info exists geom(bg)]} { lappend scr bg [_jarr $geom(bg)] }
-    # the period's first eye record (eye_recs is sorted by time)
+    # the period's first eye record
     set em_zero null
-    set ob [lindex $obs_begin $k]; set oe [lindex $obs_end $k]
-    set eye_recs [set ${S}::eye_recs]
-    set j [expr {[lsearch -bisect -integer -index 0 -sorted $eye_recs $ob] + 1}]
-    if {$j > 0 && [lindex $eye_recs [expr {$j - 1}] 0] == $ob} { incr j -1 }
-    if {$j < [llength $eye_recs] && [lindex $eye_recs $j 0] <= $oe} {
-        set em_zero [_jnum [apply $clip [lindex $eye_recs $j 0] $tick_off $F0]]
-    }
+    set z [em_zero $S $trial]
+    if {$z ne ""} { set em_zero [_jnum [apply $clip $z $tick_off $F0]] }
     _jobj [list \
         version 1 \
         file [_jstr [file tail [set ${S}::path]]] \

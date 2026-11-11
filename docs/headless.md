@@ -108,6 +108,9 @@ sink still open at exit is closed, so ffmpeg finishes the file.
 ## Overlay
 
     overlay set gaze -points {x y ...} ?-size deg? ?-color {r g b ?a?}? ?-show 0|1?
+                     ?-mode discs|line? ?-fade 0|1?
+    overlay set NAME -text STR ?-pos {x y}? ?-anchor c|n|s|e|w|ne|nw|se|sw?
+                     ?-size deg? ?-color {r g b ?a?}? ?-bg {r g b ?a?}? ?-font FILE?
     overlay delete NAME | clear | names | get NAME
     frameRepaint
 
@@ -125,6 +128,28 @@ moving.
 
 It works headless and in a window. `replay.tcl -render` uses it for the
 gaze, and a live mirror can use it the same way.
+
+`-mode line` draws an item's points as one polyline `-size` degrees wide
+instead of discs. Each pixel is drawn once, so a translucent line does not
+darken where it crosses itself or doubles back. `-fade 1` takes its alpha
+from full at the first point to 0 at the last: a trail, newest sample
+first. The gaze trail (`gaze_trail`, set by `framelock::gaze_style`) is a
+faded line; a stim2 of 0.29.1 or before has no `-mode`, and gaze_style
+falls back to discs there. New items are discs without fade.
+
+An item can also carry a text label: `-text` (UTF-8, `\n` breaks lines),
+`-size` degrees a line, in `-color`, with its `-anchor` part at `-pos`
+(degrees; default `c` at `0 0`). The anchor also justifies the lines
+(`w` left, `e` right, otherwise centred). `-bg` with alpha above 0 puts a
+box behind the text. The font is NotoSans-Regular.ttf from stim2's font
+directory (`$STIM2_FONT_PATH`, the app bundle's `Resources/fonts`,
+`/usr/local/stim2/fonts`), or `-font` a file there or a full path. Glyphs
+are rasterized at the pixel size they are shown, so text is sharp in a
+movie as on the screen. Latin-1, Greek, dashes, quotes and a few math
+signs are covered as far as the font has them; NotoSans has no arrows or
+`<=`/`>=`, which show as its empty box. `-text {}` removes a label. Reel
+captions (`docs/render.md`, Exports) are labels; so is anything a
+script wants over its scene that its own `resetObjList` must not clear.
 
 ## In a container
 

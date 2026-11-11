@@ -18,6 +18,11 @@
 #                                     (default: the next -prefetch trials)
 #   GET /clips/...                    the movies and JSON, with byte ranges
 #   GET /status                       stim2, sessions, queue
+#   POST /export                      a reel (JSON body: trials, captions,
+#                                     the viewer's gaze, title cards; see
+#                                     tools/lib/reellib.tcl) rendered into
+#                                     one movie; {clip, cached, ...} when
+#                                     it is ready
 #
 # NAME is a session's base name, with or without .obs.dgz, .trials.dgz,
 # .ess: a viewer holding a trials DG passes its filename column.  It is
@@ -66,6 +71,24 @@
 # still served.
 
 source [file join [file dirname [file normalize [info script]]] .. lib replaylib.tcl]
+source [file join [file dirname [file normalize [info script]]] .. lib reellib.tcl]
+# JSON bodies (POST /export): yajl's parser, else tcllib's
+if {![catch {package require yajltcl}]} {
+    proc json_parse {text} { yajl::json2dict $text }
+} elseif {![catch {package require json}]} {
+    proc json_parse {text} { json::json2dict $text }
+} else {
+    proc json_parse {text} { http_error 500 "this dlsh has no JSON parser (yajltcl or tcllib json)" }
+}
+# the export cache key: md5 when tcllib has it, else two checksums
+if {![catch {package require md5}]} {
+    proc digest {s} { string tolower [md5::md5 -hex [encoding convertto utf-8 $s]] }
+} else {
+    proc digest {s} {
+        set b [encoding convertto utf-8 $s]
+        format %08x%08x%x [zlib crc32 $b] [zlib adler32 $b] [string length $b]
+    }
+}
 
 # ---------------------------------------------------------------------------
 # options
@@ -191,6 +214,7 @@ proc log {msg} { puts "[clock format [clock seconds] -format %H:%M:%S] $msg"; fl
 # sessions: name -> the file, loaded once, kept while recently used
 # ---------------------------------------------------------------------------
 set sessions [dict create]   ;# base -> dict S path mtime size used
+set pinned [dict create]     ;# base -> 1 while an export renders from it
 
 # the file for NAME: base.obs.dgz in a data dir, else base.ess, else a
 # dserv's copy (remote, which may wait on a download: call from a coroutine)
@@ -339,7 +363,7 @@ proc remote {base} {
 }
 
 proc session {name} {
-    global sessions opt current
+    global sessions opt current pinned
     lassign [resolve $name] base path
     set mtime [file mtime $path]; set size [file size $path]
     if {[dict exists $sessions $base]} {
@@ -355,7 +379,7 @@ proc session {name} {
     while {[dict size $sessions] >= $opt(sessions)} {
         set old ""; set t ""
         dict for {b s} $sessions {
-            if {[string match $b/* $current]} continue
+            if {[string match $b/* $current] || [dict exists $pinned $b]} continue
             if {$t eq "" || [dict get $s used] < $t} { set old $b; set t [dict get $s used] }
         }
         if {$old eq ""} break
@@ -548,7 +572,7 @@ proc trim_cache {} {
     set units [dict create]   ;# unit -> {mtime size files}
     set total 0
     foreach f [cache_files $opt(cache)] {
-        if {[string match *.part* [file tail $f]] || [catch {file stat $f st}]} continue
+        if {[string match *.part* $f] || [catch {file stat $f st}]} continue
         incr total $st(size)
         set u [expr {[regexp {\.(mp4|json)$} $f] ? [file rootname $f] : $f}]
         if {[dict exists $units $u]} {
@@ -639,6 +663,19 @@ proc work {} {
         set key [lindex $queue 0]; set queue [lrange $queue 1 end]
         set current $key
         set job [dict get $jobs $key]
+        if {[dict exists $job wire]} {
+            # a reel (POST /export)
+            set err [export_run $key]
+            set waiters [dict get $jobs $key waiters]
+            set id [dict get $jobs $key id]
+            dict unset jobs $key
+            foreach chan $waiters {
+                if {$err ne ""} {
+                    catch { respond_json $chan [lindex $err 0] [json_obj [list error [replay::_jstr [lindex $err 1]]]] }
+                } else { catch { respond_export $chan $id 0 } }
+            }
+            continue
+        }
         set base [dict get $job base]; set trial [dict get $job trial]
         set t0 [clock milliseconds]
         set err ""
@@ -683,6 +720,117 @@ proc work {} {
     }
 }
 coroutine worker work
+
+# ---------------------------------------------------------------------------
+# exports: a reel (reellib.tcl) rendered into one movie, cached by what
+# went into it (the request, the sessions' files, the stim2, the size)
+# ---------------------------------------------------------------------------
+proc export_paths {id} {
+    global opt
+    list [file join $opt(cache) _exports $id.mp4] /clips/_exports/$id.mp4
+}
+
+# the session dict holding replay session S
+proc s_of_S {S} {
+    foreach s [dict values $::sessions] { if {[dict get $s S] eq $S} { return $s } }
+    error "session $S is no longer loaded"
+}
+
+# reellib's -sock: the stim2 at S's size
+proc sock_for_S {S} {
+    set s [s_of_S $S]
+    stim2_for [clip_size $s] [replay::get $S geom]
+}
+
+# reellib's loader: the session, kept loaded (pinned) while the reel renders
+proc export_load {pin name} {
+    set s [session $name]
+    if {$pin} { dict set ::pinned [dict get $s base] 1 }
+    dict get $s S
+}
+
+# a checked reel, a 400 for what is wrong with it
+proc export_spec {wire pin} {
+    if {[catch {reel::from_wire $wire [list export_load $pin]} spec opts]} {
+        set ec [dict get $opts -errorcode]
+        if {[lindex $ec 0] eq "REEL"} { http_error 400 $spec }
+        return -options $opts $spec
+    }
+    return $spec
+}
+
+proc export_id {body spec} {
+    global stim2 opt clip_version
+    set files {}
+    foreach it [dict get $spec items] {
+        if {[dict get $it type] eq "trial"} {
+            set s [s_of_S [dict get $it S]]
+            lappend files [dict get $s base] [dict get $s mtime] [dict get $s size]
+        }
+    }
+    digest [list $body $files [dict get $stim2 version] $opt(width) $clip_version]
+}
+
+# in the worker: "" when the movie is there, else {http-code message}
+proc export_run {key} {
+    global jobs pinned
+    set id [dict get $jobs $key id]
+    lassign [export_paths $id] out url
+    if {[file isfile $out]} { return "" }
+    hold_while_busy $key
+    dict set jobs $key status rendering
+    set t0 [clock milliseconds]
+    set part [file rootname $out].part
+    try {
+        set spec [export_spec [dict get $jobs $key wire] 1]
+        file mkdir [file dirname $out]
+        set r [reel::render $spec $part.mp4 -sock sock_for_S -workdir $part.d -run run_async \
+                   -progress [list progress $key] -log log]
+        file rename -force $part.mp4 $out
+        log [format "exported %s: %d items, %s, in %d ms" $id [dict get $r segments] \
+                 [expr {[dict get $r copied] ? "joined by copy" : "encoded once"}] [expr {[clock milliseconds] - $t0}]]
+        trim_cache
+        return ""
+    } on error {e opts} {
+        set ec [dict get $opts -errorcode]
+        log "FAILED export $id: $e"
+        set code [expr {[lindex $ec 0] eq "HTTP" ? [lindex $ec 1] : [lindex $ec 0] eq "REEL" ? 400 : 500}]
+        # a stim2 that failed outside the replay's own checks may have gone
+        if {[lindex $ec 0] ni {REPLAY REEL HTTP}} { stim2_stop }
+        return [list $code $e]
+    } finally {
+        set pinned [dict create]
+        catch { file delete -force $part.mp4 $part.d }
+    }
+}
+
+proc respond_export {chan id cached} {
+    lassign [export_paths $id] out url
+    catch { file mtime $out [clock seconds] }
+    respond_json $chan 200 [json_obj [list clip [replay::_jstr $url] cached [expr {$cached ? "true" : "false"}] \
+                                         bytes [file size $out]]]
+}
+
+# a request's body: Content-Length bytes, UTF-8.  Call from its coroutine.
+proc read_body {chan len} {
+    set co [info coroutine]
+    fconfigure $chan -translation binary
+    set data ""
+    set timer [after 30000 [list $co timeout]]
+    try {
+        while {[string length $data] < $len} {
+            append data [read $chan [expr {$len - [string length $data]}]]
+            if {[string length $data] >= $len} break
+            if {[eof $chan]} { http_error 400 "the request's body was cut short" }
+            fileevent $chan readable [list $co readable]
+            if {[yield] eq "timeout"} { http_error 400 "the request's body did not come" }
+        }
+    } finally {
+        after cancel $timer
+        catch { fileevent $chan readable {} }
+    }
+    encoding convertfrom utf-8 $data
+}
 
 # called from inside the render: let the event loop run, then go on.  A
 # clip being sent goes first (a viewer is waiting on it, while the render is
@@ -828,13 +976,14 @@ proc handle {chan req hdr} {
     lassign $req method target
     if {$method eq "OPTIONS"} {
         fconfigure $chan -translation binary -blocking 1
-        puts -nonewline $chan [headers 204 text/plain 0 {Access-Control-Allow-Methods {GET, HEAD, OPTIONS} Access-Control-Allow-Headers Range}]
+        puts -nonewline $chan [headers 204 text/plain 0 {Access-Control-Allow-Methods {GET, HEAD, POST, OPTIONS} Access-Control-Allow-Headers {Range, Content-Type}}]
         close $chan; return
     }
-    if {$method ni {GET HEAD}} { http_error 405 "$method not supported" }
     set q ""
     regexp {^([^?]*)\??(.*)$} $target -> path q
     set q [query $q]
+    if {$method eq "POST" && $path eq "/export"} { return [handle_export $chan $hdr] }
+    if {$method ni {GET HEAD}} { http_error 405 "$method $path not supported" }
     switch -glob -- $path {
         /clips/* {
             set rel [string range $path 7 end]
@@ -913,10 +1062,34 @@ proc handle {chan req hdr} {
         }
         / {
             respond_json $chan 200 [json_obj [list service [replay::_jstr "stim2 trial renderer"] \
-                endpoints [replay::_jarr [lmap e {/session?file=NAME /trial?file=NAME&trial=N /trial?file=NAME&obsid=K /status /clips/...} {replay::_jstr $e}]]]]
+                endpoints [replay::_jarr [lmap e {/session?file=NAME /trial?file=NAME&trial=N /trial?file=NAME&obsid=K /status /clips/... {POST /export}} {replay::_jstr $e}]]]]
         }
         default { http_error 404 "no such endpoint $path" }
     }
+}
+
+# POST /export: check the reel now (a 400 for what is wrong, loading its
+# sessions), answer from the cache, else queue it ahead of the prefetches
+# and answer when it is rendered
+proc handle_export {chan hdr} {
+    global jobs queue worker_idle
+    set len [expr {[dict exists $hdr content-length] ? [dict get $hdr content-length] : ""}]
+    if {![string is integer -strict $len] || $len <= 0} { http_error 400 "POST /export wants a JSON body (Content-Length)" }
+    if {$len > 32 * 1048576} { http_error 400 "the body is over 32 MB" }
+    set body [read_body $chan $len]
+    if {[catch {json_parse $body} wire]} { http_error 400 "the body is not JSON: $wire" }
+    set spec [export_spec $wire 0]
+    set id [export_id $body $spec]
+    lassign [export_paths $id] out url
+    if {[file isfile $out]} { respond_export $chan $id 1; return }
+    if {[rig_busy]} { respond_busy $chan; return }
+    set key export/$id
+    if {![dict exists $jobs $key]} {
+        dict set jobs $key [dict create wire $wire id $id status queued waiters {} progress 0 error ""]
+        set queue [linsert $queue 0 $key]
+    }
+    dict with jobs $key { lappend waiters $chan }
+    if {$worker_idle} { set worker_idle 0; after 0 worker }
 }
 
 # ---------------------------------------------------------------------------

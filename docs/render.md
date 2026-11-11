@@ -23,6 +23,7 @@ memory; any trial can follow any other.
 | `GET /trial?file=NAME&trial=N` | trial N (1-based), or `&obsid=K` (0-based, a trials DG's `obsid`). Renders it unless cached, then answers `{clip, cached, timing}`; the request waits for the render. `&then=K,K` names the obsids to render next (the rows a viewer steps to: not every obs period is a trial); without it, the next `-prefetch` trials |
 | `GET /clips/...` | the clip (`clip` above) and its JSON, with byte ranges (`Range`, `206`), which browsers need to seek |
 | `GET /status` | the stim2, the sessions in memory, the clip rendering and its progress, the queue |
+| `POST /export` | a reel: trials with their gaze and captions, and title cards, rendered into one movie (below). Answers `{clip, cached, bytes}` when it is ready; `clip` is under `/clips/_exports/` |
 
 `NAME` is a session's base name, with or without `.obs.dgz`,
 `.trials.dgz` or `.ess`, so a viewer holding a trials DG passes its
@@ -52,6 +53,52 @@ experiment runs). dserv also serves
 serving datapoints meanwhile. A session stim2 cannot replay (a 422 here:
 recorded before stim2 kept frame records) shows the viewer plugin's own
 drawing, with the stim2 checkbox reading "stim2: no clip".
+
+## Exports: reels for talks and papers
+
+`POST /export` takes a reel as JSON and answers with one H.264 movie.
+stim2 draws all of it: each trial frame-locked as for a clip, with the
+gaze and a caption on its overlay layer (`docs/headless.md`, Overlay),
+and title cards as text over the rig's background. Every segment is
+rendered at the same size, frame rate and x264 setting, so ffmpeg joins
+them without encoding again (concat demuxer, `-c copy`); segments that
+differ (trials from rigs with different screens) are scaled, padded and
+encoded once.
+
+    { "fps": 60, "crf": 14,
+      "items": [
+        {"type": "card", "text": "Day 1", "dur": 2, "size": 0.07},
+        {"type": "trial", "file": "NAME", "obsid": 12,
+         "caption": "Trial 13", "caption_at": "nw",
+         "gaze": {"t": [0, 0.002, ...], "x": [...], "y": [...]}},
+        {"type": "card", "text": "Day 9", "dur": 1.5},
+        {"type": "trial", "file": "NAME2", "trial": 41}
+      ] }
+
+- **trial**: `file` and `obsid` (0-based) or `trial` (1-based), as for
+  `/trial`. `caption` (up to 500 characters) goes at `caption_at` (`nw`,
+  `n`, `ne`, `sw`, `s`, `se`), `caption_size` of the screen's height a
+  line (default 0.045), over a translucent box. `gaze` is the gaze to
+  draw: `t` seconds from the trial's first eye record (a trials DG's
+  `em_seconds` minus its first value, as dg_viewer draws it), `x` `y`
+  degrees; without it no gaze is drawn. `gaze_style` `{size, color}`
+  sets the disc.
+- **card**: `text`, `dur` seconds (default 2), `size` of the height a
+  line (default 0.07), `color`, `bg` (default the rig's background). A
+  card draws on the stim2 of the nearest trial, so a reel needs one.
+- Checked field by field before anything renders: a 400 says what is
+  wrong. Text reaches stim2 only as data (list elements), never as Tcl.
+- Rendered by the same worker as clips, ahead of prefetches, and held
+  while the rig runs an experiment (503). `/status` shows it as
+  `export/ID` with its progress.
+- Cached by what went into it: the request, each session file, the stim2
+  version and `-width`. The same request again answers at once.
+
+The reel itself is `tools/lib/reellib.tcl`, usable without the server:
+`reel::render SPEC OUT -sock CMD` with a Tcl dict spec, and
+`reel::from_wire` for the JSON form. dg_viewer's **mp4** button (beside
+stim2/gaze) exports the selected trial with the gaze it shows (blinks
+left out when masked) and an optional caption.
 
 ## On the rig: the stim2-render service
 

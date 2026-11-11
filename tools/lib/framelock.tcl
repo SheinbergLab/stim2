@@ -347,17 +347,22 @@ proc framelock::has_nopresent {sock} {
 # ---------------------------------------------------------------------------
 # the gaze on stim2's overlay layer: a disc at the newest sample, a fading
 # trail behind (docs/headless.md, "Overlay").  size is the disc's diameter
-# in degrees and color its {r g b ?a?}; the trail's discs are 0.36 of the
-# size at 0.4 of the alpha.  Set once: the repaints (gaze_cmd) change only
-# the points and -show, so `overlay set gaze -size/-color` from stim2's
-# own console or panel holds until the next setup.
+# in degrees and color its {r g b ?a?}; the trail is a line 0.25 of the
+# size wide, fading from 0.7 of the alpha at the disc to nothing.  A
+# stim2 without line items (0.29.1 and before) gets the trail as discs, 0.36 of
+# the size at 0.4 of the alpha, as before.  Set once: the repaints
+# (gaze_cmd) change only the points and -show, so `overlay set gaze
+# -size/-color` from stim2's own console or panel holds until the next
+# setup.
 # ---------------------------------------------------------------------------
 proc framelock::gaze_style {{size 0.7} {color {1 0.55 0.1 0.9}}} {
     lassign $color r g b a
     if {$a eq ""} { set a 1 }
-    join [list \
-        [list overlay set gaze_trail -size [format %.3f [expr {$size * 0.36}]] \
-             -color [list $r $g $b [format %.3f [expr {$a * 0.4}]]] -show 0] \
+    set line [list overlay set gaze_trail -mode line -fade 1 -size [format %.3f [expr {$size * 0.25}]] \
+                  -color [list $r $g $b [format %.3f [expr {$a * 0.7}]]] -show 0]
+    set discs [list overlay set gaze_trail -size [format %.3f [expr {$size * 0.36}]] \
+                   -color [list $r $g $b [format %.3f [expr {$a * 0.4}]]] -show 0]
+    join [list "if {\[catch {$line}\]} {$discs}" \
         [list overlay set gaze -size $size -color [list $r $g $b $a] -show 0]] "\n"
 }
 # xy the newest sample {x y}, trail {x y x y ...} newest first; "" hides

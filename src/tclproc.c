@@ -1273,24 +1273,38 @@ static int headlessStatsCmd(ClientData clientData, Tcl_Interp *interp,
 
 /*
  * overlay set name ?-points {x y ...}? ?-size deg? ?-color {r g b ?a?}? ?-show 0|1?
+ *                   ?-mode discs|line? ?-fade 0|1?
+ *                   ?-text str? ?-pos {x y}? ?-anchor c|n|s|e|w|ne|nw|se|sw?
+ *                   ?-bg {r g b ?a?}? ?-font file?
  * overlay delete name | clear | names | get name
- *   The annotation layer (overlay.h): named sets of discs in degrees, drawn
- *   over the scene after its post scripts, before frameGrab, the frame sink
- *   and the display.  Independent of the object and group lists, so a
- *   script's resetObjList/glistInit leaves it alone.  New items: no points,
- *   0.5 deg, opaque white, shown.  -points {} clears an item's points.
+ *   The annotation layer (overlay.h): named sets of discs in degrees, each
+ *   with an optional text label, drawn over the scene after its post
+ *   scripts, before frameGrab, the frame sink and the display.  Independent
+ *   of the object and group lists, so a script's resetObjList/glistInit
+ *   leaves it alone.  New items: no points, 0.5 deg, opaque white, shown,
+ *   no text.  -mode line draws the points as a polyline -size degrees
+ *   wide, each pixel once; -fade 1 fades it from the first point to the
+ *   last (a trail, newest first).
+ *   -points {} clears an item's points, -text {} its label.  A
+ *   label is -size degrees a line, in -color, its -anchor part at -pos
+ *   (deg, default 0 0, anchor c), over a -bg box when that has alpha > 0.
  *   Takes effect on the next frame (or frameRepaint).  get returns
- *       points <n> size <deg> color {r g b a} show 0|1
+ *       points <n> size <deg> color {r g b a} show 0|1 mode discs|line fade 0|1
+ *       text <str> pos {x y} anchor <a> bg {r g b a} font <file>
  */
 static int overlayCmd(ClientData clientData, Tcl_Interp *interp,
 		      int argc, char *argv[])
 {
   const char *usage = "usage: overlay set name ?-points {x y ...}? ?-size deg?"
-    " ?-color {r g b ?a?}? ?-show 0|1? | delete name | clear | names | get name";
+    " ?-color {r g b ?a?}? ?-show 0|1? ?-mode discs|line? ?-fade 0|1? ?-text str? ?-pos {x y}?"
+    " ?-anchor c|n|s|e|w|ne|nw|se|sw? ?-bg {r g b ?a?}? ?-font file?"
+    " | delete name | clear | names | get name";
   if (argc < 2) { Tcl_SetResult(interp, (char *) usage, TCL_STATIC); return TCL_ERROR; }
   if (!strcmp(argv[1], "set") && argc >= 3 && argc % 2 == 1) {
     float *pts = NULL, size = -1.0f, rgba[4], *rgbap = NULL;
-    int n = -1, show = -1, i;
+    float pos[2], *posp = NULL, bg[4], *bgp = NULL;
+    const char *text = NULL, *anchor = NULL, *font = NULL;
+    int n = -1, show = -1, i, line = -1, fade = -1;
     for (i = 3; i < argc; i += 2) {
       const char *opt = argv[i], *val = argv[i + 1];
       if (!strcmp(opt, "-points")) {
@@ -1338,9 +1352,68 @@ static int overlayCmd(ClientData clientData, Tcl_Interp *interp,
       else if (!strcmp(opt, "-show")) {
 	if (Tcl_GetBoolean(interp, val, &show) != TCL_OK) goto fail;
       }
+      else if (!strcmp(opt, "-mode")) {
+	if (!strcmp(val, "discs")) line = 0;
+	else if (!strcmp(val, "line")) line = 1;
+	else {
+	  Tcl_AppendResult(interp, "overlay: bad -mode \"", val, "\": discs or line", NULL);
+	  goto fail;
+	}
+      }
+      else if (!strcmp(opt, "-fade")) {
+	if (Tcl_GetBoolean(interp, val, &fade) != TCL_OK) goto fail;
+      }
+      else if (!strcmp(opt, "-text")) text = val;
+      else if (!strcmp(opt, "-font")) font = val;
+      else if (!strcmp(opt, "-anchor")) {
+	static const char *anchors[] = { "c", "n", "s", "e", "w", "ne", "nw", "se", "sw", NULL };
+	int a;
+	for (a = 0; anchors[a] && strcmp(anchors[a], val); a++) ;
+	if (!anchors[a]) {
+	  Tcl_AppendResult(interp, "overlay: bad -anchor \"", val,
+			   "\": c, n, s, e, w, ne, nw, se or sw", NULL);
+	  goto fail;
+	}
+	anchor = anchors[a];
+      }
+      else if (!strcmp(opt, "-pos")) {
+	Tcl_Size m;
+	const char **el;
+	double x, y;
+	if (Tcl_SplitList(interp, val, &m, &el) != TCL_OK) goto fail;
+	if (m != 2 || Tcl_GetDouble(interp, el[0], &x) != TCL_OK
+	    || Tcl_GetDouble(interp, el[1], &y) != TCL_OK) {
+	  Tcl_Free((char *) el);
+	  Tcl_SetResult(interp, "overlay: -pos needs {x y}", TCL_STATIC);
+	  goto fail;
+	}
+	Tcl_Free((char *) el);
+	pos[0] = (float) x; pos[1] = (float) y;
+	posp = pos;
+      }
+      else if (!strcmp(opt, "-bg")) {
+	Tcl_Size m, j;
+	const char **el;
+	if (Tcl_SplitList(interp, val, &m, &el) != TCL_OK) goto fail;
+	if (m != 3 && m != 4) {
+	  Tcl_Free((char *) el);
+	  Tcl_SetResult(interp, "overlay: -bg needs {r g b ?a?}", TCL_STATIC);
+	  goto fail;
+	}
+	bg[3] = 1.0f;
+	for (j = 0; j < m; j++) {
+	  double d;
+	  if (Tcl_GetDouble(interp, el[j], &d) != TCL_OK) { Tcl_Free((char *) el); goto fail; }
+	  bg[j] = (float) d;
+	}
+	Tcl_Free((char *) el);
+	bgp = bg;
+      }
       else { Tcl_SetResult(interp, (char *) usage, TCL_STATIC); goto fail; }
     }
     overlaySet(argv[2], pts, n, size, rgbap, show);
+    if (line >= 0 || fade >= 0) overlaySetStyle(argv[2], line, fade);
+    if (text || posp || anchor || bgp || font) overlaySetText(argv[2], text, posp, anchor, bgp, font);
     ckfree((char *) pts);
     return TCL_OK;
   fail:
@@ -1375,6 +1448,28 @@ static int overlayCmd(ClientData clientData, Tcl_Interp *interp,
     Tcl_DictObjPut(interp, d, Tcl_NewStringObj("size", -1), Tcl_NewDoubleObj(size));
     Tcl_DictObjPut(interp, d, Tcl_NewStringObj("color", -1), c);
     Tcl_DictObjPut(interp, d, Tcl_NewStringObj("show", -1), Tcl_NewIntObj(show));
+    {
+      int line, fade;
+      overlayGetStyle(argv[2], &line, &fade);
+      Tcl_DictObjPut(interp, d, Tcl_NewStringObj("mode", -1), Tcl_NewStringObj(line ? "line" : "discs", -1));
+      Tcl_DictObjPut(interp, d, Tcl_NewStringObj("fade", -1), Tcl_NewIntObj(fade));
+    }
+    {
+      const char *text, *anchor, *font;
+      float pos[2], bg[4];
+      Tcl_Obj *p, *b;
+      overlayGetText(argv[2], &text, pos, &anchor, bg, &font);
+      p = Tcl_NewListObj(0, NULL);
+      Tcl_ListObjAppendElement(interp, p, Tcl_NewDoubleObj(pos[0]));
+      Tcl_ListObjAppendElement(interp, p, Tcl_NewDoubleObj(pos[1]));
+      b = Tcl_NewListObj(0, NULL);
+      for (i = 0; i < 4; i++) Tcl_ListObjAppendElement(interp, b, Tcl_NewDoubleObj(bg[i]));
+      Tcl_DictObjPut(interp, d, Tcl_NewStringObj("text", -1), Tcl_NewStringObj(text, -1));
+      Tcl_DictObjPut(interp, d, Tcl_NewStringObj("pos", -1), p);
+      Tcl_DictObjPut(interp, d, Tcl_NewStringObj("anchor", -1), Tcl_NewStringObj(anchor, -1));
+      Tcl_DictObjPut(interp, d, Tcl_NewStringObj("bg", -1), b);
+      Tcl_DictObjPut(interp, d, Tcl_NewStringObj("font", -1), Tcl_NewStringObj(font, -1));
+    }
     Tcl_SetObjResult(interp, d);
     return TCL_OK;
   }

@@ -209,6 +209,87 @@ ck "frame 1: background at (10, -5) deg" [expr {[px_at $W $odata 0 $hx $hy] eq {
 ck "repaint: disc moved to (10, -5) deg" [expr {[px_at $W $odata $fsz $hx $hy] eq {0 0 255 255}}]
 ck "repaint: (-10, 5) deg is background again (scene restored)" [expr {[px_at $W $odata $fsz $gx $gy] eq {20 40 60 255}}]
 
+# --- overlay text: a label anchored at a point, over an optional box ---------
+# pixels in [x0,x1) x [y0,y1) of frame `off` matching {r g b} within 60
+proc count_px { w bytes off x0 y0 x1 y1 rgb } {
+    set n 0
+    for {set y $y0} {$y < $y1} {incr y} {
+        for {set x $x0} {$x < $x1} {incr x} {
+            binary scan $bytes @[expr {$off + ($y * $w + $x) * 4}]cu3 p
+            set d 0
+            foreach a $p b $rgb { set d [expr {max($d, abs($a - $b))}] }
+            if {$d <= 60} { incr n }
+        }
+    }
+    return $n
+}
+ck "overlay: bad -anchor refused" [catch { overlay set bad -text x -anchor middle }]
+ck "overlay: bad -pos refused" [catch { overlay set bad -text x -pos {1} }]
+ck "overlay: bad -bg refused" [catch { overlay set bad -text x -bg {1 0} }]
+catch { overlay delete bad }
+set hx [screen_set HalfScreenDegreeX]; set hy [screen_set HalfScreenDegreeY]
+set lsize [expr {0.25 * $hy}]            ;# a line an eighth of the height
+overlay set lbl -text "HI\nthere" -size $lsize -color {1 1 0} -anchor nw \
+    -pos [list [expr {-$hx + 0.5}] [expr {$hy - 0.5}]]
+set g [overlay get lbl]
+ck "overlay get: text, anchor, pos" [expr {[dict get $g text] eq "HI\nthere" && [dict get $g anchor] eq "nw"
+    && [near [lindex [dict get $g pos] 0] [expr {-$hx + 0.5}] 1e-4]}]
+set fd [file tempfile tpath headless_text.rgba]; close $fd
+frameSink open -manual $tpath
+stepFrame; frameSink write 1
+overlay set lbl -bg {1 0 0 1}
+frameRepaint; frameSink write 1
+overlay set lbl -text {}
+frameRepaint; frameSink write 1
+frameSink close
+set fd [open $tpath rb]; set tdata [read $fd]; close $fd
+file delete $tpath
+set hw [expr {$W / 2}]; set hh [expr {$H / 2}]
+set ytl [count_px $W $tdata 0 0 0 $hw $hh {255 255 0}]
+ck "label: yellow text in the top-left quarter ($ytl px)" [expr {$ytl > 20}]
+ck "label: none in the bottom-right quarter" [expr {[count_px $W $tdata 0 $hw $hh $W $H {255 255 0}] == 0}]
+set red [count_px $W $tdata $fsz 0 0 $hw $hh {255 0 0}]
+ck "label -bg: a red box behind it ($red px)" [expr {$red > 4 * $ytl}]
+ck "label -bg: the text stays over the box" [expr {[count_px $W $tdata $fsz 0 0 $hw $hh {255 255 0}] > 20}]
+ck "-text {}: the label is gone" [expr {[count_px $W $tdata [expr {2 * $fsz}] 0 0 $hw $hh {255 255 0}] == 0
+    && [count_px $W $tdata [expr {2 * $fsz}] 0 0 $hw $hh {255 0 0}] == 0}]
+overlay clear
+
+# --- overlay lines: a polyline, each pixel once; a faded trail ---------------
+ck "overlay: bad -mode refused" [catch { overlay set bad -mode dots }]
+catch { overlay delete bad }
+# (-10,0) -> (10,0) -> (0,6) -> (0,-6): the last segment crosses the first at 0,0
+overlay set cross -mode line -size 1 -color {0 1 0 0.5} -points {-10 0 10 0 0 6 0 -6}
+# newest first: full at (-12,-8), nothing by (12,-8)
+overlay set trail -mode line -fade 1 -size 1 -color {1 1 1 1} -points {-12 -8 12 -8}
+set g [overlay get trail]
+ck "overlay get: mode line, fade 1" [expr {[dict get $g mode] eq "line" && [dict get $g fade] == 1}]
+ck "overlay get: a new item is discs" [expr {[dict get [overlay get cross] mode] eq "line"
+    && ![catch {overlay set dots -points {0 0}}] && [dict get [overlay get dots] mode] eq "discs"}]
+overlay delete dots
+set fd [file tempfile lpath headless_line.rgba]; close $fd
+frameSink open -manual $lpath
+stepFrame; frameSink write 1
+frameSink close
+set fd [open $lpath rb]; set ldata [read $fd]; close $fd
+file delete $lpath
+lassign [deg2px 0 0] cx cy
+lassign [deg2px -5 0] ax ay
+set at_cross [px_at $W $ldata 0 $cx $cy]
+set on_line [px_at $W $ldata 0 $ax $ay]
+ck "line: drawn ($on_line at (-5, 0) deg; background is 20 40 60)" [expr {[lindex $on_line 1] > 100}]
+set same 1
+foreach a $at_cross b $on_line { if {abs($a - $b) > 3} { set same 0 } }
+ck "line: no darker where it crosses itself ($at_cross vs $on_line)" $same
+lassign [deg2px -11 -8] f0x f0y
+lassign [deg2px 0 -8] f1x f1y
+lassign [deg2px 11 -8] f2x f2y
+set r0 [lindex [px_at $W $ldata 0 $f0x $f0y] 0]
+set r1 [lindex [px_at $W $ldata 0 $f1x $f1y] 0]
+set r2 [lindex [px_at $W $ldata 0 $f2x $f2y] 0]
+ck "line -fade: bright at its first point, dim at its last ($r0 > $r1 > $r2)" [expr {$r0 > $r1 + 40 && $r1 > $r2 + 40}]
+overlay clear
+
 # --- back to real time ------------------------------------------------------
 set st [stepMode 0]
 ck "stepMode 0: disabled" [expr {![dict get $st enabled]}]

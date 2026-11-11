@@ -3283,12 +3283,18 @@ lag [dict get $d lag_from]->present p50 [dict get $d lag_p50] ms, p95 [dict get 
         ImGui::SetNextItemWidth(110);
         ch |= ImGui::SliderFloat("alpha", &a, 0.0f, 1.0f, "%.2f");
         if (ch) {
+          /* the trail as framelock::gaze_style draws it: a line 0.25 of
+             the disc wide at 0.7 of its alpha, or (a driver's older
+             style) discs 0.36 of the size at 0.4 */
+          int line = 0;
+          if (Tcl_Eval(interp, "dict get [overlay get gaze_trail] mode") == TCL_OK)
+            line = !strcmp(Tcl_GetStringResult(interp), "line");
           char cmd[320];
           snprintf(cmd, sizeof(cmd),
                    "overlay set gaze -size %.3f -color {%.3f %.3f %.3f %.3f};"
-                   " overlay set gaze_trail -size %.3f -color {%.3f %.3f %.3f %.3f};"
+                   " catch {overlay set gaze_trail -size %.3f -color {%.3f %.3f %.3f %.3f}};"
                    " catch {frameRepaint}",
-                   sz, r, g, b, a, sz * 0.36f, r, g, b, a * 0.4f);
+                   sz, r, g, b, a, sz * (line ? 0.25f : 0.36f), r, g, b, a * (line ? 0.7f : 0.4f));
           Tcl_Eval(interp, cmd);
         }
       }
