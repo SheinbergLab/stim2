@@ -1,6 +1,8 @@
 # The mirror's stim2, fullscreen on this box's monitor (X11, like the
 # packaged stim2.service on amd64, but on ports 5610-5613 and at the
 # monitor's refresh). Conflicts with stim2.service: one X server on vt1.
+# This is the amd64 flavor; arm64 boxes, which have no X server, install
+# stim2-mirror-display-cage.service under this same name.
 [Unit]
 Description=stim2 mirror display (X11)
 Conflicts=getty@tty1.service stim2.service

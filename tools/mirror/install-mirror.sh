@@ -1,18 +1,20 @@
 #!/bin/sh
-# install-mirror.sh -- make a Linux box (amd64, X11, Debian trixie) a live
-# mirror of a rig's display: run as root, from a stim2 checkout or a copy
-# of its tools/ directory.
+# install-mirror.sh -- make a Linux box (amd64 with X11, or arm64 with
+# cage; Debian trixie) a live mirror of a rig's display: run as root, from
+# a stim2 checkout or a copy of its tools/ directory.
 #
 #     sudo sh tools/mirror/install-mirror.sh RIG_DSERV_HOST
 #
-# Needs stim2 0.28.4 or newer installed from its .deb (the stim user, the
-# Xwrapper setting and linux.cfg come from its postinst). Installs:
+# Needs stim2 installed from its .deb: 0.28.4 or newer on amd64, and on
+# arm64 one whose postinst creates the stim user there too (the stim user,
+# the Xwrapper setting and linux.cfg come from its postinst). Installs:
 #   - dlsh-interp (the dlsh interpreter and dlsh.zip) from the dlsh release,
 #     when /usr/local/bin/dlsh is missing or older than DLSH_VERSION
 #   - tools/lib, tools/mirror, tools/replay to /usr/local/stim2/tools
-#   - stim2-mirror-display.service (stim2 fullscreen, ports 5610-5613) and
-#     stim2-mirror.service (the driver), enabled; stim2.service disabled,
-#     since both want the X server on vt1
+#   - stim2-mirror-display.service (stim2 fullscreen, ports 5610-5613:
+#     under xinit on amd64, under cage on arm64) and stim2-mirror.service
+#     (the driver), enabled; stim2.service disabled, since both want the
+#     display
 #   - /etc/default/stim2-mirror, with MIRROR_DSERV set (kept if it exists)
 # and puts the stim user (and SUDO_USER) in the video and render groups.
 set -e
@@ -25,6 +27,20 @@ TOOLS=$(cd "$HERE/.." && pwd)
 if [ "$(id -u)" != 0 ]; then echo "run as root (sudo)"; exit 1; fi
 if [ ! -x /usr/local/stim2/stim2 ]; then echo "stim2 is not installed (/usr/local/stim2/stim2)"; exit 1; fi
 if ! getent passwd stim >/dev/null; then echo "no stim user: reinstall the stim2 .deb"; exit 1; fi
+
+# the display's flavor: what the packaged stim2.service runs on this arch
+case "$(dpkg --print-architecture)" in
+    amd64) DISPLAY_UNIT=stim2-mirror-display.service ;;
+    arm64)
+        # cage (wlroots) segfaults on a vendor Mali blob (e.g. NXP i.MX95),
+        # where stim2.service is the Weston kiosk instead; no mirror unit
+        # for that yet
+        if [ -e /dev/mali0 ] || [ -e /usr/lib/libmali.so.0 ]; then
+            echo "this board runs stim2 under Weston (vendor Mali GL); the mirror has no Weston unit yet"; exit 1
+        fi
+        DISPLAY_UNIT=stim2-mirror-display-cage.service ;;
+    *) echo "no mirror display unit for $(dpkg --print-architecture)"; exit 1 ;;
+esac
 
 # dlsh interpreter
 if [ ! -x /usr/local/bin/dlsh ] || ! dpkg -s dlsh-interp >/dev/null 2>&1 \
@@ -56,10 +72,11 @@ if [ "$TOOLS" != /usr/local/stim2/tools ]; then
         cp -r "$TOOLS/$d" "/usr/local/stim2/tools/$d"
     done
 fi
-chmod 755 /usr/local/stim2/tools/mirror/start-stim2-mirror.sh
+chmod 755 /usr/local/stim2/tools/mirror/start-stim2-mirror*.sh
 
-# units and settings
-cp "$HERE/systemd/stim2-mirror-display.service" "$HERE/systemd/stim2-mirror.service" /etc/systemd/system/
+# units and settings: either display flavor installs under the one name
+cp "$HERE/systemd/$DISPLAY_UNIT" /etc/systemd/system/stim2-mirror-display.service
+cp "$HERE/systemd/stim2-mirror.service" /etc/systemd/system/
 if [ ! -f /etc/default/stim2-mirror ]; then
     cp "$HERE/systemd/stim2-mirror.default" /etc/default/stim2-mirror
 fi

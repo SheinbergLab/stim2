@@ -80,28 +80,29 @@ fi
 # dservctl reads its own token from ~/.dservctl / DSERV_AGENT_TOKEN, so clear
 # those too when disabling auth to avoid a stale mismatch.
 
-# Ensure the 'stim' system user exists on X11-based systems. Runs on every
-# configure (idempotent) so upgrades from hand-crafted installs pick it up too,
-# which is what lets a later dpkg-reconfigure install the new User=stim unit
-# without failing on a missing account.
-if [ "$STIM2_SVC" = "stim2-x11.service" ]; then
-    if ! getent passwd stim >/dev/null; then
-        adduser --system --group --home /var/lib/stim \
-            --shell /usr/sbin/nologin --gecos "stim2 stimulus presentation" stim
-        echo "Created system user 'stim'"
-    fi
-
-    # Add stim to groups it needs to drive the display, input devices, and audio
-    for grp in tty video input audio render; do
-        if getent group "$grp" >/dev/null; then
-            adduser stim "$grp" >/dev/null 2>&1 || true
-        fi
-    done
-
-    # Ensure HOME exists with the right ownership (xinit writes .Xauthority here)
-    mkdir -p /var/lib/stim
-    chown stim:stim /var/lib/stim
+# Ensure the 'stim' system user exists. Runs on every configure (idempotent)
+# so upgrades from hand-crafted installs pick it up too, which is what lets a
+# later dpkg-reconfigure install the new User=stim unit without failing on a
+# missing account. The X11 stim2.service runs as stim; on arm64, where
+# stim2.service runs cage as root, the account is for the live mirror's
+# driver (tools/mirror/systemd/stim2-mirror.service, User=stim on every
+# platform).
+if ! getent passwd stim >/dev/null; then
+    adduser --system --group --home /var/lib/stim \
+        --shell /usr/sbin/nologin --gecos "stim2 stimulus presentation" stim
+    echo "Created system user 'stim'"
 fi
+
+# Add stim to groups it needs to drive the display, input devices, and audio
+for grp in tty video input audio render; do
+    if getent group "$grp" >/dev/null; then
+        adduser stim "$grp" >/dev/null 2>&1 || true
+    fi
+done
+
+# Ensure HOME exists with the right ownership (xinit writes .Xauthority here)
+mkdir -p /var/lib/stim
+chown stim:stim /var/lib/stim
 
 # Configure Xwrapper so the non-console 'stim' user can start the X server.
 # Trixie ships allowed_users=console, and Xorg's setuid wrapper then refuses

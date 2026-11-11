@@ -1,0 +1,32 @@
+# The mirror's stim2, fullscreen on this box's monitor under cage (Wayland),
+# for arm64 boxes, where the packaged stim2.service runs under cage too and
+# the package has no X server. Ports 5610-5613. Installs as
+# stim2-mirror-display.service, the same name as the X11 flavor, so the
+# driver, the bootstrap and the agent see one unit on every platform.
+# Conflicts with stim2.service: both want the display.
+#
+# Runs as root, as the cage stim2.service does: cage takes the seat
+# directly, with no login session or seatd to hand it to another user.
+# The driver (stim2-mirror.service) still runs as stim.
+[Unit]
+Description=stim2 mirror display (cage)
+Conflicts=getty@tty1.service stim2.service
+After=getty@tty1.service systemd-user-sessions.service
+After=chrony.service chronyd.service
+
+[Service]
+Type=simple
+RuntimeDirectory=stim2-mirror
+Environment=XDG_RUNTIME_DIR=/run/stim2-mirror
+# No chronyc waitsync, as in the X11 flavor: the mirror draws the same
+# whatever the clock says.
+ExecStart=/usr/bin/cage -- /usr/local/stim2/tools/mirror/start-stim2-mirror-cage.sh
+Restart=always
+RestartSec=5
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=50
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

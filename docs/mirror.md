@@ -283,6 +283,29 @@ This does the following:
     `stim2.service` it does not wait for chrony.
   - `stim2-mirror.service`: the driver, as `stim`, restarted if it exits.
 
+### On arm64 (cage)
+
+An arm64 box (a Raspberry Pi, say) has no X server: its `stim2.service`
+runs stim2 under cage. The mirror there does the same.
+`install-mirror.sh` picks the flavor from `dpkg --print-architecture` and
+installs `tools/mirror/systemd/stim2-mirror-display-cage.service` under
+the same name, `stim2-mirror-display.service`, so the driver, the dserv
+bootstrap and the agent see one unit everywhere.
+
+- **cage, as root.** cage takes the seat itself, with no login session
+  to hand it to `stim`, as in the cage `stim2.service`. The driver still
+  runs as `stim`, which the `.deb`'s postinst now creates on arm64 too.
+- **The rate.** cage shows the monitor's preferred mode and stim2 `-F`
+  reads the rate from it. `MIRROR_REFRESH` asks for another rate at the
+  same size through `wlr-randr` (`apt install wlr-randr`). Without it the
+  preferred mode stays and the display unit's journal says so.
+- **Mali boards.** Boards on a vendor Mali blob (NXP i.MX95) run
+  `stim2.service` under Weston, because cage segfaults there. The mirror
+  has no Weston unit yet, and `install-mirror.sh` refuses them.
+
+The dserv bootstrap's mirror profile does all of this too:
+`curl -sSL "https://dserv.net/setup?profile=mirror&mirror=RIG" | bash`.
+
 Watch it:
 
     journalctl -fu stim2-mirror
