@@ -60,6 +60,8 @@
 #                      degrees, as the virtual source logs them, otherwise
 #                      they are calibrated as ADC counts), analog, video,
 #                      degrees, or off
+#       -touch         with -render, draw the touchscreen presses (ESS TOUCH
+#                      events) as rings
 #       -geometry HX,HY[,HZ]  the rig's half-screen degrees (and refresh) for
 #                      a file without ess/screen_* records; overrides them
 #                      when the file has them
@@ -125,6 +127,7 @@ set opt(render)  ""
 set opt(fps)     ""
 set opt(gap_given) 0
 set opt(eye)     auto
+set opt(touch)   0
 set opt(blend)   1
 set opt(geometry) ""
 set opt(bg)      ""
@@ -138,7 +141,7 @@ set opt(stim2)   ""
 
 if {[llength $argv] < 1} {
     puts stderr "usage: dlsh replay.tcl FILE.ess ?-host H? ?-port P? ?-live? ?-trial N | -trials A-B?\
- ?-speed X? ?-gap S? ?-stream NAME ...? ?-dry? ?-verbose? ?-render OUT? ?-each? ?-fps F? ?-noblend? ?-crf N? ?-eye MODE? ?-geometry HX,HY[,HZ]? ?-bg R,G,B?\
+ ?-speed X? ?-gap S? ?-stream NAME ...? ?-dry? ?-verbose? ?-render OUT? ?-each? ?-fps F? ?-noblend? ?-crf N? ?-eye MODE? ?-touch? ?-geometry HX,HY[,HZ]? ?-bg R,G,B?\
  ?-launch ?-keep? ?-size WxH? ?-stim2 PATH??"
     exit 2
 }
@@ -173,6 +176,7 @@ while {[llength $args]} {
         -crf     { set opt(crf)   [lindex $args 0]; set args [lrange $args 1 end] }
         -eye     { set opt(eye)   [lindex $args 0]; set args [lrange $args 1 end]
                    if {$opt(eye) ni {auto analog video degrees off}} { puts stderr "-eye wants auto|analog|video|degrees|off"; exit 2 } }
+        -touch   { set opt(touch) 1 }
         -stream  { lappend opt(streams) [lindex $args 0]; set args [lrange $args 1 end] }
         -dry     { set opt(dry) 1 }
         -verbose { set opt(verbose) 1 }
@@ -219,7 +223,7 @@ run {
     set S [replay::load $path -streams $opt(streams) -geometry $opt(geometry) -bg $opt(bg)]
     set P [replay::plan $S -trials $opt(trial) -render $opt(render) -each $opt(each) \
                -fps $opt(fps) -blend $opt(blend) -gap [expr {$opt(gap_given) ? $opt(gap) : ""}] \
-               -eye $opt(eye)]
+               -eye $opt(eye) -touch $opt(touch)]
     if {$opt(render) ne "" && $opt(dumpplan) ne ""} { replay::dumpplan $P $opt(dumpplan) }
 }
 foreach v {script script_path libs stimdg stimdg_b64 bind_names obs_note counts hashed eye_recs} {
@@ -262,6 +266,7 @@ if {$opt(render) ne ""} {
     } elseif {[llength $eye_recs] && $opt(eye) eq "off"} {
         puts "  gaze    off (-eye off)"
     }
+    if {$opt(touch)} { puts "  touch   $n_touch presses" }
     if {$fps > 60} {
         puts "  NOTE: QuickTime Player plays movies above 60 fps in slow motion after the\
  first seconds (browsers and mrv2 play them right); -fps 60 makes a copy for it"

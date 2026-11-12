@@ -22,6 +22,8 @@
 #               ?caption_size FRAC (of the screen's height; default 0.045)?
 #               ?gaze {T X Y}? (render_trial -gaze; none drawn without it)
 #               ?gaze_style {SIZE {R G B A}}?
+#               ?touch 0|1? (the file's touchscreen presses, as rings)
+#               ?touch_style {SIZE {R G B A}}?
 #   type card   text TEXT  ?dur SECONDS (default 2)?
 #               ?size FRAC (of the height, a line; default 0.07)?
 #               ?color {R G B ?A?}? (default white)  ?bg {R G B}? (default
@@ -112,6 +114,8 @@ proc reel::render {spec out args} {
                 if {$prog ne ""} { lappend opts -progress $prog }
                 if {[_get $it gaze ""] ne ""} { lappend opts -gaze [dict get $it gaze] }
                 if {[_get $it gaze_style ""] ne ""} { lappend opts -gaze-style [dict get $it gaze_style] }
+                if {[_get $it touch 0]} { lappend opts -touch 1 }
+                if {[_get $it touch_style ""] ne ""} { lappend opts -touch-style [dict get $it touch_style] }
                 set cap [_get $it caption ""]
                 if {$cap ne ""} {
                     lappend opts -labels [list __reel_caption [caption_opts $S $cap \
@@ -261,7 +265,9 @@ proc reel::join_segments {segs out fps crf run work} {
 #       {"type": "trial", "file": "NAME", "obsid": 12,      (or "trial": 13)
 #        "caption": "Trial 13", "caption_at": "nw", "caption_size": 0.045,
 #        "gaze": {"t": [s...], "x": [deg...], "y": [deg...]},
-#        "gaze_style": {"size": 0.7, "color": [1,0.55,0.1,0.9]}} ] }
+#        "gaze_style": {"size": 0.7, "color": [1,0.55,0.1,0.9]},
+#        "touch": true,
+#        "touch_style": {"size": 1.6, "color": [1,0.3,0.9,0.95]}} ] }
 # ---------------------------------------------------------------------------
 proc reel::bad {msg} { return -code error -errorcode [list REEL $msg] $msg }
 
@@ -337,6 +343,15 @@ proc reel::from_wire {d load} {
                 if {$gs ne "" && $gs ne "null"} {
                     dict set t gaze_style [list [_num [_get $gs size 0.7] "item $i gaze_style size" 0.05 10] \
                         [_rgba [_get $gs color {1 0.55 0.1 0.9}] "item $i gaze_style color"]]
+                }
+                set tc [_get $it touch false]
+                if {$tc eq "null"} { set tc false }
+                if {![string is boolean -strict $tc]} { bad "item $i touch must be true or false" }
+                if {$tc} { dict set t touch 1 }
+                set ts [_get $it touch_style ""]
+                if {$ts ne "" && $ts ne "null"} {
+                    dict set t touch_style [list [_num [_get $ts size 1.6] "item $i touch_style size" 0.1 20] \
+                        [_rgba [_get $ts color {1 0.3 0.9 0.95}] "item $i touch_style color"]]
                 }
                 lappend out $t
             }

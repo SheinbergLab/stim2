@@ -37,7 +37,7 @@ namespace eval replay {
     # what load fills in a session's namespace (geom is an array)
     variable state_vars {path script script_path script_meta libs bind_names stimdg
         stimdg_b64 obs_begin obs_end events frames eye_recs em_settings counts
-        hashed stream_set records obs_note obs_frames_narrow geom}
+        hashed stream_set records obs_note obs_frames_narrow geom touches}
 }
 
 proc replay::say {msg} { puts "  $msg" }
@@ -94,6 +94,7 @@ proc replay::load {file args} {
     set frames {}          ;# stim/frame: {dserv_ts frame swapcount flip_us ticks_us missed cmds ds eval_us}
     set eye_recs {}        ;# eyetracking/raw: {dserv_ts {h v h v ...}}, 10 samples a record
     set em_settings {}     ;# em/settings: {dserv_ts settings} each time it changed
+    set touches {}         ;# ESS TOUCH events: {dserv_ts subtype px py}, subtype 0 press 1 release 2 move
     set counts [dict create]
     set hashed 0
     set stream_set [dict create]
@@ -125,6 +126,7 @@ proc replay::load {file args} {
     set records {}
     set events [lsort -integer -index 0 $events]
     set eye_recs [lsort -integer -index 0 $eye_recs]
+    set touches [lsort -integer -index 0 $touches]
 
     set err ""
     if {$script eq ""} { set err "no stim/script with a body in $path -- nothing to source" } \
@@ -140,6 +142,7 @@ proc replay::load {file args} {
 proc replay::_read_ess {S fname} {
     _vars $S
     set h [dslog::open $path r]
+    set evt_begin {}; set evt_end {}
     # first pass: header-ish records (any order in the file; keep the last)
     # and the bound-stream names, which decide what the second pass keeps
     while {1} {
@@ -191,6 +194,23 @@ proc replay::_read_ess {S fname} {
             }
             logger:beginobs { lappend obs_begin [dict get $d timestamp] }
             logger:endobs   { lappend obs_end   [dict get $d timestamp] }
+            eventlog/events {
+                # an ESS event: type word EVT(9) | type<<8 | subtype<<16 |
+                # puttype<<24.  TOUCH (48) carries the screen pixel x y
+                # carries the screen pixel x y; BEGINOBS (19) and ENDOBS (20)
+                # mark the periods in a file without logger:beginobs records
+                set ty [dict get $d type]
+                if {($ty & 0xff) == 9} {
+                    set et [expr {($ty >> 8) & 0xff}]
+                    if {$et == 48 && [binary scan [dict get $d data] f2 xy] == 1} {
+                        lappend touches [list [dict get $d timestamp] [expr {($ty >> 16) & 0xff}] {*}$xy]
+                    } elseif {$et == 19} {
+                        lappend evt_begin [dict get $d timestamp]
+                    } elseif {$et == 20} {
+                        lappend evt_end [dict get $d timestamp]
+                    }
+                }
+            }
             stim/cmd {
                 # with the ACK1 stamps, when the command was sent with them:
                 # swap is SwapCount when stim2 applied it (after the swap, for
@@ -210,6 +230,9 @@ proc replay::_read_ess {S fname} {
         }
     }
     dslog::close $h
+    if {![llength $obs_begin] && [llength $evt_begin]} {
+        set obs_begin $evt_begin; set obs_end $evt_end
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -368,6 +391,17 @@ proc replay::_read_obs_dg {S fname g} {
         set k [lsearch -exact $ety 20]
         lappend obs_begin [expr {wide($t0)}]
         lappend obs_end [expr {wide($t0 + ($k >= 0 ? [lindex $et $k] : [lindex $et end]) * 1000.0)}]
+        # TOUCH events (48): {subtype} {px py}, ms from BEGINOBS
+        set kt [lsearch -all -exact $ety 48]
+        if {[llength $kt]} {
+            set est [dl_tcllist $g:e_subtypes:$i]; set ep [dl_tcllist $g:e_params:$i]
+            foreach k $kt {
+                lassign [lindex $ep $k] px py
+                if {[string is double -strict $px] && [string is double -strict $py]} {
+                    lappend touches [list [expr {wide($t0 + [lindex $et $k] * 1000.0)}] [lindex $est $k] $px $py]
+                }
+            }
+        }
         foreach n $names {
             if {![string match <ds>* $n]} continue
             set dp [string range $n 4 end]
@@ -486,6 +520,8 @@ proc replay::_read_obs_dg {S fname g} {
 #   -gap S          with -render, compress idle stretches longer than S s
 #                   (default "": none)
 #   -eye MODE       with -render: auto analog video degrees off (default auto)
+#   -touch 0|1      with -render: draw the touchscreen presses (ESS TOUCH
+#                   events) as rings (default 0)
 #
 # Always in the dict: trials (as given), span_note, events (those of the
 # window), ncmd, ndp, ntrials, t_first, t_last (of the whole file), w0 w1
@@ -496,12 +532,13 @@ proc replay::_read_obs_dg {S fname g} {
 # counts and the gaze (eye_t eye_x eye_y and its counts).
 # ---------------------------------------------------------------------------
 proc replay::plan {S args} {
-    array set o {-trials "" -render "" -each 0 -fps "" -blend 1 -gap "" -eye auto}
+    array set o {-trials "" -render "" -each 0 -fps "" -blend 1 -gap "" -eye auto -touch 0}
     foreach {k v} $args {
         if {![info exists o($k)]} { fail 2 "replay::plan: unknown option $k" }
         set o($k) $v
     }
     if {$o(-eye) ni {auto analog video degrees off}} { fail 2 "-eye wants auto|analog|video|degrees|off" }
+    if {![string is boolean -strict $o(-touch)]} { fail 2 "-touch wants 0|1" }
     if {$o(-each) && ![is_movie $o(-render)]} {
         fail 2 "-each wants -render OUT with OUT a movie file (.mp4/.mov/.mkv): one is written per trial"
     }
@@ -734,13 +771,73 @@ proc replay::plan {S args} {
     }
     set n_eye [llength $eye_t]
 
+    # -touch: the touchscreen presses, as markers on the rig clock
+    set touch [expr {$o(-touch) ? [touch_marks $S $tick_off $w0 $w1] : {}}]
+    set n_touch [llength $touch]
+
     lappend keys frames fev writes pos ftrial movie_each movie_frames nf sc_first sc_last nmissing \
         tick_off cmd_before cmd_after skipped ndps dp_after dp_placed dp_foreign fps blend \
         render_fps period movie_out eye_t eye_x eye_y n_eye eye_zero eye_deg_n eye_cal_n \
-        eye_mode cal_changes
+        eye_mode cal_changes touch n_touch
     foreach v $keys { dict set R $v [set $v] }
     dict set R gap_given [expr {$o(-gap) ne ""}]
     return $R
+}
+
+# ---------------------------------------------------------------------------
+# touch_marks: session S's touchscreen presses in (w0, w1] (dserv us; ""
+# the whole file), each {t x y t_up x_up y_up}: the press at t (ms on the
+# rig clock: dserv + tick_off) at x y degrees, and its release, "" "" ""
+# when none was logged (ESS logs only inside observation periods).  Pixels
+# become degrees as ESS's touch_pixels_to_deg does, from the session's
+# ess/screen_w/h/halfx/halfy; without those there are no marks.  ESS logs
+# presses and releases, not the drag between them (MOVE is reserved).
+# ---------------------------------------------------------------------------
+proc replay::touch_marks {S tick_off {w0 ""} {w1 ""}} {
+    array set geom [array get ${S}::geom]
+    foreach k {w h halfx halfy} {
+        if {![info exists geom($k)] || ![string is double -strict $geom($k)] || $geom($k) <= 0} { return {} }
+    }
+    set cx [expr {int($geom(w)) / 2}]; set cy [expr {int($geom(h)) / 2}]
+    set sx [expr {$geom(w) / (2.0 * $geom(halfx))}]
+    set sy [expr {$geom(h) / (2.0 * $geom(halfy))}]
+    set marks {}; set down ""
+    foreach e [set ${S}::touches] {
+        lassign $e ts sub px py
+        if {$w0 ne "" && ($ts <= $w0 || $ts > $w1)} continue
+        set t [expr {($ts + $tick_off) / 1000.0}]
+        set x [expr {($px - $cx) / $sx}]; set y [expr {($cy - $py) / $sy}]
+        if {$sub == 0} {
+            if {$down ne ""} { lappend marks $down }
+            set down [list $t $x $y "" "" ""]
+        } elseif {$sub == 1 && $down ne ""} {
+            lappend marks [lreplace $down 3 5 $t $x $y]
+            set down ""
+        }
+    }
+    if {$down ne ""} { lappend marks $down }
+    return $marks
+}
+
+# the touch rings for movie time t (rig ms): each press from its time, held
+# until its release (touch_hold_ms when none was logged), then a ring at
+# the release point fading over touch_fade_ms; the newest touch_slots
+proc replay::_touch_at {t} {
+    upvar 1 touch touch touch_r touch_r touch_rgb touch_rgb touch_a touch_a \
+        touch_hold_ms hold touch_fade_ms fade
+    set vis {}
+    foreach m $touch {
+        lassign $m on x y up xu yu
+        if {$on > $t} break
+        if {$up eq ""} { set up [expr {$on + $hold}]; set xu $x; set yu $y }
+        if {$t < $up} {
+            lappend vis [list $x $y 1.0]
+        } elseif {$t < $up + $fade} {
+            lappend vis [list $xu $yu [expr {1.0 - ($t - $up) / $fade}]]
+        }
+    }
+    framelock::touch_cmd [lrange $vis end-[expr {$::framelock::touch_slots - 1}] end] \
+        $touch_r $touch_rgb $touch_a
 }
 
 # the biquadratic eye fit, as dserv's em applies it
@@ -972,9 +1069,21 @@ proc replay::_gaze_at {t} {
     }
     framelock::gaze_cmd [list [lindex $eye_x $j] [lindex $eye_y $j]] $pts
 }
+# the whole overlay (gaze, touches) for movie time t, from render's frame
+proc replay::_overlay_at {t} {
+    upvar 1 eye_t eye_t eye_x eye_x eye_y eye_y eye_k eye_k n_eye n_eye \
+        gaze_trail_ms gaze_trail_ms gaze_hold_ms gaze_hold_ms \
+        touch touch n_touch n_touch touch_r touch_r touch_rgb touch_rgb touch_a touch_a \
+        touch_hold_ms touch_hold_ms touch_fade_ms touch_fade_ms
+    set cmds {}
+    if {$n_eye} { lappend cmds [_gaze_at $t] }
+    if {$n_touch} { lappend cmds [_touch_at $t] }
+    join $cmds "\n"
+}
 
 proc replay::render {P sock args} {
-    array set o {-crf 14 -keyint "" -progress "" -verbose 0 -log replay::say -gaze-style ""}
+    array set o {-crf 14 -keyint "" -progress "" -verbose 0 -log replay::say -gaze-style ""
+                 -touch-style ""}
     foreach {k v} $args {
         if {![info exists o($k)]} { fail 2 "replay::render: unknown option $k" }
         set o($k) $v
@@ -985,6 +1094,8 @@ proc replay::render {P sock args} {
                n_eye eye_t eye_x eye_y skipped} {
         set $v [dict get $P $v]
     }
+    set touch [expr {[dict exists $P touch] ? [dict get $P touch] : {}}]
+    set n_touch [llength $touch]
     if {[framelock::send $sock {info commands stepFrame}] ne "stepFrame"} {
         fail 1 "this stim2 has no stepFrame (step mode): -render needs the headless/step build"
     }
@@ -1011,6 +1122,19 @@ proc replay::render {P sock args} {
     set gaze_trail_ms 150.0; set gaze_hold_ms 100.0
     set eye_k 0; set gaze_last ""
     if {$n_eye} { framelock::send $sock [framelock::gaze_style {*}$o(-gaze-style)] }
+    # the touches: a ring per press while it is down, fading after
+    set touch_hold_ms 250.0; set touch_fade_ms 400.0
+    if {$n_touch} {
+        lassign $o(-touch-style) tsize tcolor
+        if {$tsize eq ""} { set tsize 1.6 }
+        if {$tcolor eq ""} { set tcolor {1 0.3 0.9 0.95} }
+        lassign $tcolor tr tg tb touch_a
+        if {$touch_a eq ""} { set touch_a 1 }
+        set touch_rgb [list $tr $tg $tb]
+        set touch_r [expr {$tsize / 2.0}]
+        framelock::send $sock [framelock::touch_style $tsize $tcolor]
+    }
+    set ov [expr {$n_eye || $n_touch}]
     set repaints 0
     set sent 0; set errors 0
     set kinds [dict create]
@@ -1035,18 +1159,18 @@ proc replay::render {P sock args} {
         # Pi on Wi-Fi: ~20 ms a round trip) requests, not drawing, set the
         # pace.
         set pre {}; set post {}
-        if {$n_eye} {
-            # the gaze at this frame's first movie tick, drawn with the frame
-            set g [_gaze_at $flip]
+        if {$ov} {
+            # the overlay at this frame's first movie tick, drawn with the frame
+            set g [_overlay_at $flip]
             if {$g ne $gaze_last} { append pre "$g\n"; set gaze_last $g }
         }
-        if {!$n_eye || $nw <= 1} {
+        if {!$ov || $nw <= 1} {
             append post "frameSink write $nw\n"
         } else {
             append post "frameSink write 1\n"
             set same 0
             for {set k 1} {$k < $nw} {incr k} {
-                set g [_gaze_at [expr {$flip + $k * $period}]]
+                set g [_overlay_at [expr {$flip + $k * $period}]]
                 if {$g eq $gaze_last} { incr same; continue }
                 if {$same} { append post "frameSink write $same\n"; set same 0 }
                 append post "$g\nframeRepaint\nframeSink write 1\n"
@@ -1083,12 +1207,15 @@ proc replay::render {P sock args} {
     if {$each && $cur_trial ne ""} { lappend movies [list $cur_trial $cur_out $st] }
     framelock::send $sock {stepMode 0}
     if {$n_eye} { framelock::send $sock {overlay delete gaze; overlay delete gaze_trail} }
+    if {$n_touch} {
+        for {set k 0} {$k < $::framelock::touch_slots} {incr k} { framelock::send $sock "overlay delete touch$k" }
+    }
     set bad 0
     if {$each} {
         foreach m $movies { if {[dict get [lindex $m 2] status] != 0} { incr bad } }
     } elseif {[dict get $st status] != 0} { incr bad }
     dict create drawn $i kinds $kinds sent $sent errors $errors skipped $skipped \
-        elapsed $elapsed repaints $repaints n_eye $n_eye movies $movies status $st bad $bad \
+        elapsed $elapsed repaints $repaints n_eye $n_eye n_touch $n_touch movies $movies status $st bad $bad \
         width $win_w height $win_h
 }
 
@@ -1116,17 +1243,19 @@ proc replay::render {P sock args} {
 #   -labels {NAME OPTS ...}  overlay items over the whole clip, each
 #                  `overlay set NAME {*}OPTS` (a caption: -text -pos -size
 #                  -anchor -color -bg), deleted after
+#   -touch 0|1     draw the trial's touchscreen presses (default 0)
+#   -touch-style {SIZE {R G B A}}  the rings: diameter, colour
 # ---------------------------------------------------------------------------
 proc replay::render_trial {S sock trial out args} {
     array set o {-fps "" -crf 14 -keyint 12 -eye off -json "" -progress "" -verbose 0 -log replay::say
-                 -gaze "" -gaze-style "" -labels ""}
+                 -gaze "" -gaze-style "" -labels "" -touch 0 -touch-style ""}
     foreach {k v} $args {
         if {![info exists o($k)]} { fail 2 "replay::render_trial: unknown option $k" }
         set o($k) $v
     }
     if {![is_movie $out]} { fail 2 "replay::render_trial: $out is not a movie file (.mp4/.mov/.mkv)" }
     set eye [expr {$o(-gaze) ne "" ? "off" : $o(-eye)}]
-    set P [plan $S -trials [list $trial $trial] -render $out -fps $o(-fps) -eye $eye]
+    set P [plan $S -trials [list $trial $trial] -render $out -fps $o(-fps) -eye $eye -touch $o(-touch)]
     if {$o(-gaze) ne ""} { set P [gaze_tracks $S $P $trial {*}$o(-gaze)] }
     if {[llength $o(-labels)] % 2} { fail 2 "replay::render_trial: -labels wants NAME OPTS pairs" }
     # a stepped stim2 left by an earlier render: out of step mode, so the
@@ -1142,7 +1271,8 @@ proc replay::render_trial {S sock trial out args} {
     }
     try {
         set r [render $P $sock -crf $o(-crf) -keyint $o(-keyint) -progress $o(-progress) \
-                   -verbose $o(-verbose) -log $o(-log) -gaze-style $o(-gaze-style)]
+                   -verbose $o(-verbose) -log $o(-log) -gaze-style $o(-gaze-style) \
+                   -touch-style $o(-touch-style)]
     } finally {
         foreach {name opts} $o(-labels) { catch { framelock::send $sock [list overlay delete $name] } }
     }
@@ -1211,6 +1341,10 @@ proc replay::gaze_tracks {S P trial T X Y} {
 #                              without one): where em::'s em_seconds is 0,
 #                              since it counts from the trial's first eye
 #                              sample, a few ms after BEGINOBS
+#   touches                    each touchscreen press in the trial (drawn in
+#                              the clip only with -touch): [t, x, y, t_up,
+#                              x_up, y_up], degrees, the release null when
+#                              none was logged
 # Datapoint times are dserv's receipt on the rig clock, through the median
 # stim - dserv clock offset of the trial's frames (tick_off_us).
 # ---------------------------------------------------------------------------
@@ -1262,6 +1396,17 @@ proc replay::timing {S P r trial} {
     set em_zero null
     set z [em_zero $S $trial]
     if {$z ne ""} { set em_zero [_jnum [apply $clip $z $tick_off $F0]] }
+    # the trial's touches, drawn in the clip or not: {t x y t_up x_up y_up},
+    # null for a release not logged
+    set touches {}
+    foreach m [touch_marks $S $tick_off [dict get $P w0] [dict get $P w1]] {
+        lassign $m t x y tu xu yu
+        set row [list [_jnum [expr {$t - $F0}]] [_jnum $x] [_jnum $y]]
+        if {$tu eq ""} { lappend row null null null } else {
+            lappend row [_jnum [expr {$tu - $F0}]] [_jnum $xu] [_jnum $yu]
+        }
+        lappend touches [_jarr $row]
+    }
     _jobj [list \
         version 1 \
         file [_jstr [file tail [set ${S}::path]]] \
@@ -1274,6 +1419,7 @@ proc replay::timing {S P r trial} {
         obs_begin_ms [_jnum [apply $clip [lindex $obs_begin $k] $tick_off $F0]] \
         obs_end_ms [_jnum [apply $clip [lindex $obs_end $k] $tick_off $F0]] \
         em_zero_ms $em_zero \
+        touches [_jarr $touches] \
         rig_frames [_jobj [list movie_ms [_jarr $movie_ms] flip_ms [_jarr $flip_ms] swap [_jarr $swap]]] \
         cmds [_jarr $cmds]]
 }
