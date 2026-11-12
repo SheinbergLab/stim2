@@ -192,12 +192,12 @@ planned and rendered after any other, on one stim2.
 | proc | |
 |---|---|
 | `load FILE ?opts?` | read a `.ess` or obs DG into a session (a namespace); errors if it has no script, stimdg or events |
-| `plan S ?-trials {A B}? ?-render OUT? ?-each? ?-fps? ?-blend? ?-gap? ?-eye?` | what to play, as a dict; with `-render`, the frame-locked plan. The session is not changed |
+| `plan S ?-trials {A B}? ?-render OUT? ?-each? ?-fps? ?-blend? ?-gap? ?-eye? ?-touch? ?-lead?` | what to play, as a dict; with `-render`, the frame-locked plan. The session is not changed. `-lead 1` starts the movie at the first trial's BEGINOBS (below; not with `-each`) |
 | `dumpplan P FILE` | the `-dumpplan` text |
 | `launch`, `connect`, `check_stimess`, `setup_dict` | a stim2 to draw on, and `framelock::setup`'s input |
 | `play P SOCK` | paced by time |
 | `render P SOCK ?-crf? ?-keyint?` | frame-locked into the plan's output |
-| `render_trial S SOCK N OUT` | one trial from a fresh setup, into a movie file and its timing JSON |
+| `render_trial S SOCK N OUT` | one trial from a fresh setup, into a movie file and its timing JSON; from BEGINOBS unless `-lead 0` |
 
 Errors carry `-errorcode {REPLAY n}`, `n` being the command line's exit
 code. `render_trial` sets the stim2 up again each time (`stepMode 0`,
@@ -208,25 +208,53 @@ and `-eye off` (the viewer draws the gaze). As with `-trial N`, a script
 that carries state from trial to trial inside stim2 starts each trial from
 the script as loaded; `-each` is the straight-through, exact form.
 
+### The clip starts at BEGINOBS
+
+stim2 swaps only when something changes, so a trial's first new rig frame
+often comes well after BEGINOBS: 250 to 300 ms in a search or planko
+session, and seconds when a fixation period waits on the eye. The rig was
+still showing what the last trial left, which a fresh setup does not
+have. `render_trial` (plan `-lead 1`) starts the clip at BEGINOBS anyway,
+with that stretch as a lead: one frame stepped with the scene list hidden
+(`glistSetVisible 0`, restored after), so the rig's background
+(`ess/screen_bg`, which setup sets), held to the first frame. The gaze
+and touches are drawn over it as over any held frame, so a fixation
+shows. It is the same thing dg_viewer paints before an older clip's
+first frame. A frame from before BEGINOBS (between the previous ENDOBS
+and it) is still stepped, so the trial's state builds up as on the rig,
+but not written: the clip shows it from BEGINOBS on. `-lead 0` gives the
+clip that starts at the first frame (timing version 1's).
+
+The lead is cheap: one stepped frame and a held write, with a repaint
+only where the gaze or a touch moves. Viewer clips get it too, not only
+exports. The viewer's timeline starts at BEGINOBS (`em_seconds` 0 is
+`em_zero_ms`, a few ms in), so it never showed the frames before it, and
+with the lead the video is the clock from the first moment of the trial
+instead of taking over from the wall clock at the first frame. A trial's
+viewer clip and its export are then the same picture, the export with
+the overlays drawn in.
+
+### The timing JSON
+
 The timing JSON puts the clip on the trial's timeline. Times are ms from
-the clip's first frame:
+the clip's first movie frame: BEGINOBS when `start` is `beginobs`, the
+first rig frame when it is `frame`:
 
 | key | |
 |---|---|
+| `version` | 2 (1: no `start`, `lead_ms`, `first_frame_ms`; always from the first frame) |
+| `start` | `beginobs` (the default) or `frame` (`-lead 0`) |
+| `lead_ms`, `first_frame_ms` | the background lead, and where the first rig frame starts showing (0 when one came before BEGINOBS) |
 | `trial`, `obsid`, `ntrials` | 1-based trial (observation period), the same 0-based, the file's count |
 | `fps`, `movie_frames`, `width`, `height` | the clip |
 | `screen` | the rig's `halfx`, `halfy` (degrees), `w`, `h`, `hz`, `bg` |
-| `obs_begin_ms`, `obs_end_ms` | BEGINOBS and ENDOBS. Data timed from BEGINOBS (event times) is at `t + obs_begin_ms` |
+| `obs_begin_ms`, `obs_end_ms` | BEGINOBS and ENDOBS. Data timed from BEGINOBS (event times) is at `t + obs_begin_ms`, which is 0 from BEGINOBS |
 | `em_zero_ms` | the period's first eye record (`null` without one). A trials DG's `em_seconds` counts from there (`em::normalize_timestamps`), not from BEGINOBS: it is at `t + em_zero_ms`, typically 2 to 5 ms after BEGINOBS |
 | `touches` | the trial's touch strokes, drawn in the clip or not: `[t, x, y, t_up, x_up, y_up, path]` (ms, degrees), the release `null` when none was logged, `path` the drag as a flat `[t, x, y, ...]` or `null` for a tap |
-| `window_start_ms` | the previous period's end, where the trial's window opens |
-| `rig_frames` | per rig frame: `movie_ms` (where it starts in the clip), `flip_ms` (its flip; they differ by the rounding to movie ticks) and `swap` |
+| `window_start_ms` | the previous period's end, where the trial's window opens (before the clip) |
+| `rig_frames` | per rig frame: `movie_ms` (where it starts in the clip; negative for a frame from before BEGINOBS, stepped but not in the clip), `flip_ms` (its flip; they differ by the rounding to movie ticks) and `swap` |
 | `cmds` | each command, with the index of the rig frame that first showed it |
 | `tick_off_us` | the stim clock minus the dserv clock, by which datapoint times were placed |
-
-The clip starts at the window's first rig frame. stim2 swaps only when
-something changes, so that can be after BEGINOBS (`obs_begin_ms` < 0):
-the rig was still showing an earlier frame.
 
 Measured 2026-11-08 on the dev Mac (M3), headless, a planko obs DG
 (133 trials) loaded once in 0.8 s: a 7 s trial (809 rig frames) renders

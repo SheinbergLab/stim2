@@ -5,7 +5,8 @@
 #     reel::render $spec out.mp4 -sock $proc
 #
 # A reel is a list of items, each rendered by stim2 into a movie segment of
-# its own -- a trial frame-locked from its session (replay::render_trial),
+# its own -- a trial frame-locked from its session (replay::render_trial,
+# from its BEGINOBS: the rig's background until its first new frame),
 # with the gaze and a caption drawn on stim2's overlay layer; a card, text
 # over the rig's background -- all at one size, frame rate and x264
 # setting, then joined.  Segments that match (the usual case: one rig) are

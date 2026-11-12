@@ -32,10 +32,17 @@ data directories, then on each `-dserv` (below). Names with anything but letters
 `-` are refused, and `/clips/` serves only `.mp4` and `.json` files inside
 the cache.
 
+A clip starts at the trial's BEGINOBS (clip format 5, timing version 2;
+`docs/replay.md`, "The clip starts at BEGINOBS"). Up to the trial's first
+new rig frame it shows the rig's background, which is what the rig showed
+there as far as the session can tell. Exports draw the gaze and touches
+over that lead, so a fixation period is in the movie.
+
 `timing` is the clip's timing JSON (`docs/replay.md`): BEGINOBS and ENDOBS
 on the clip's timeline, each rig frame's place and flip, the commands, the
 rig's screen in degrees and pixels. Data timed from BEGINOBS is at
-`t + obs_begin_ms` in the clip; a trials DG's `em_seconds`, which counts
+`t + obs_begin_ms` in the clip (0 now; a viewer should still add it, as
+an older server's clips start at the first frame); a trials DG's `em_seconds`, which counts
 from the period's first eye record, is at `t + em_zero_ms`. `touches`
 lists the trial's touch strokes, read from the session's ESS TOUCH
 events (type 48): `[t, x, y, t_up, x_up, y_up, path]`, clip ms and
@@ -111,9 +118,29 @@ encoded once.
 
 The reel itself is `tools/lib/reellib.tcl`, usable without the server:
 `reel::render SPEC OUT -sock CMD` with a Tcl dict spec, and
-`reel::from_wire` for the JSON form. dg_viewer's **mp4** button (beside
-stim2/gaze/touch) exports the selected trial with the gaze it shows
-(blinks left out when masked), its touches, and an optional caption.
+`reel::from_wire` for the JSON form.
+
+dg_viewer's **mp4** button (beside stim2/gaze/touch) opens its export
+dialog, which sends one `POST /export`:
+
+- **trials**: this trial (the default), all rows, a range of rows, rows
+  where a condition holds over the trials DG's columns (`outcome == 1 and
+  rt < 2000`: `column op value` joined by `and`, ops `== != < <= > >=`),
+  or rows picked from a list. At most 50 items, a title card included.
+- **title card**: its text and seconds, first in the movie.
+- **caption**: a template filled in per trial. `{column}` is the row's
+  value in that column (numbers to at most 3 decimals), `{trial}` is
+  obsid + 1, `{row}` is the row, `{n}` and `{N}` are the trial's place in
+  the movie and the count. A name that is not a column stays as written,
+  and the dialog previews the first trial's caption.
+- **gaze**: each row's `em_h_deg`/`em_v_deg` against `em_seconds`, as the
+  viewer draws it (blinks left out when masked). It is read from the DG
+  for every row, not only the one on screen.
+- **touch**: the session's touches, read by the server.
+
+Progress comes from `/status` (the export's fraction, and which item it
+is on). The movie downloads as
+`NAME_trialT.mp4` for one trial, `NAME_trialsA-B_nN.mp4` for several.
 
 ## On the rig: the stim2-render service
 
@@ -321,10 +348,10 @@ trials, 10.7 MB):
 
 ## Not yet
 
-- **The display before the first rig frame.** stim2 swaps only when
-  something changes, so a trial's first rig frame can come after
-  BEGINOBS (`obs_begin_ms` < 0): the rig was still showing an earlier
-  frame, which a fresh setup does not have.
+- **The display before the first rig frame.** A clip's lead is the rig's
+  background. The rig was really still showing the previous trial's last
+  frame, which a fresh setup does not have (rendering trials straight
+  through, `-each`, would).
 - **Running inside stim2.** The server drives stim2 only through
   `framelock::send`, which has an in-process path (`stimSend`); the plan
   is a general driver thread in stim2 (from `src/mirror.cpp`) and stim2's

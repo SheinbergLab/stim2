@@ -522,28 +522,44 @@ proc replay::_read_obs_dg {S fname g} {
 #   -eye MODE       with -render: auto analog video degrees off (default auto)
 #   -touch 0|1      with -render: draw the touchscreen presses (ESS TOUCH
 #                   events) as rings (default 0)
+#   -lead 0|1       with -render (not -each): the movie starts at the first
+#                   trial's BEGINOBS, not at its first rig frame (default
+#                   0).  stim2 draws only when something changes, so the
+#                   first new frame often comes well after BEGINOBS (a
+#                   fixation period with gaze can be seconds): that stretch
+#                   is a lead of the rig's background, with the gaze and
+#                   touches over it.  Frames from before BEGINOBS (between
+#                   the previous ENDOBS and it) are still drawn, so the
+#                   trial's state builds up as on the rig, but not written
+#
+# What the movie starts at is t0 (rig ms) in the plan: BEGINOBS with
+# -lead, else the first frame's flip.  lead is the movie ticks before the
+# first frame (0 without -lead, or when a frame came before BEGINOBS), and
+# pos a frame's first tick from t0 (negative for one before it).
 #
 # Always in the dict: trials (as given), span_note, events (those of the
 # window), ncmd, ndp, ntrials, t_first, t_last (of the whole file), w0 w1
 # (the window on the dserv clock, "" for the whole file).  With -render:
 # the frame-locked plan -- frames, fev (each frame's inputs), writes (movie
-# ticks per frame), pos (each frame's first tick), ftrial, movie_each,
+# ticks per frame), pos (each frame's first tick), t0, lead, ftrial, movie_each,
 # movie_frames, fps, blend, render_fps, period, tick_off, the placement
 # counts and the gaze (eye_t eye_x eye_y and its counts).
 # ---------------------------------------------------------------------------
 proc replay::plan {S args} {
-    array set o {-trials "" -render "" -each 0 -fps "" -blend 1 -gap "" -eye auto -touch 0}
+    array set o {-trials "" -render "" -each 0 -fps "" -blend 1 -gap "" -eye auto -touch 0 -lead 0}
     foreach {k v} $args {
         if {![info exists o($k)]} { fail 2 "replay::plan: unknown option $k" }
         set o($k) $v
     }
     if {$o(-eye) ni {auto analog video degrees off}} { fail 2 "-eye wants auto|analog|video|degrees|off" }
     if {![string is boolean -strict $o(-touch)]} { fail 2 "-touch wants 0|1" }
+    if {![string is boolean -strict $o(-lead)]} { fail 2 "-lead wants 0|1" }
     if {$o(-each) && ![is_movie $o(-render)]} {
         fail 2 "-each wants -render OUT with OUT a movie file (.mp4/.mov/.mkv): one is written per trial"
     }
+    if {$o(-each) && $o(-lead)} { fail 2 "-lead goes with one movie, not -each" }
     # the session's data, as local copies: planning leaves the session as is
-    foreach v {path events frames eye_recs em_settings obs_end obs_frames_narrow} {
+    foreach v {path events frames eye_recs em_settings obs_begin obs_end obs_frames_narrow} {
         set $v [set ${S}::$v]
     }
     array set geom [array get ${S}::geom]
@@ -670,15 +686,29 @@ proc replay::plan {S args} {
     set period [expr {1000.0 / $render_fps}]
     set gap_ms [expr {$o(-gap) ne "" ? $o(-gap) * 1000.0 : 1e300}]
     set F0 [expr {[lindex $frames 0 4] / 1000.0}]
+    # the movie's start, t0: the first frame's flip, or with -lead the
+    # window's first BEGINOBS on the rig clock
+    set t0 $F0; set start frame
+    if {$o(-lead)} {
+        set ta [expr {$o(-trials) ne "" ? [lindex $o(-trials) 0] : 1}]
+        set ob [lindex $obs_begin [expr {$ta - 1}]]
+        if {$ob ne ""} { set t0 [expr {($ob + $tick_off) / 1000.0}]; set start beginobs }
+    }
     set shift 0.0; set pos {}; set prevF $F0
     foreach f $frames {
         set F [expr {[lindex $f 4] / 1000.0}]
         if {$F - $prevF > $gap_ms} { set shift [expr {$shift + $F - $prevF - $gap_ms}] }
         set prevF $F
-        lappend pos [expr {round(($F - $F0 - $shift) / $period)}]
+        lappend pos [expr {round(($F - $t0 - $shift) / $period)}]
     }
+    # ticks before the first frame: the lead.  A frame before t0 is drawn
+    # (its inputs build the scene) but written only from t0 on, so frames
+    # wholly before it get no ticks
+    set lead [expr {max(0, [lindex $pos 0])}]
     set writes {}
-    for {set i 0} {$i < $nf - 1} {incr i} { lappend writes [expr {[lindex $pos [expr {$i + 1}]] - [lindex $pos $i]}] }
+    for {set i 0} {$i < $nf - 1} {incr i} {
+        lappend writes [expr {max(0, [lindex $pos [expr {$i + 1}]] - max(0, [lindex $pos $i]))}]
+    }
     lappend writes 1
     # -each: a trial's last frame holds for one movie frame; the rig's idle
     # time up to the next trial's first frame belongs to the next movie
@@ -691,7 +721,7 @@ proc replay::plan {S args} {
         }
         foreach w $writes t $ftrial { dict incr movie_each $t $w }
     }
-    set movie_frames [expr {[tcl::mathop::+ {*}$writes] / $blend}]
+    set movie_frames [expr {($lead + [tcl::mathop::+ {*}$writes]) / $blend}]
 
     # the gaze: every eyetracking/raw sample in degrees on the rig clock.
     # A record holds the samples dserv buffered (80 bytes: 10 h,v pairs)
@@ -775,7 +805,7 @@ proc replay::plan {S args} {
     set touch [expr {$o(-touch) ? [touch_marks $S $tick_off $w0 $w1] : {}}]
     set n_touch [llength $touch]
 
-    lappend keys frames fev writes pos ftrial movie_each movie_frames nf sc_first sc_last nmissing \
+    lappend keys frames fev writes pos t0 lead start ftrial movie_each movie_frames nf sc_first sc_last nmissing \
         tick_off cmd_before cmd_after skipped ndps dp_after dp_placed dp_foreign fps blend \
         render_fps period movie_out eye_t eye_x eye_y n_eye eye_zero eye_deg_n eye_cal_n \
         eye_mode cal_changes touch n_touch
@@ -1137,10 +1167,12 @@ proc replay::render {P sock args} {
     }
     set log $o(-log)
     if {[dict get $P render] eq ""} { fail 2 "replay::render: the plan was made without -render" }
-    foreach v {render each fps blend render_fps movie_out period nf frames fev writes ftrial
+    foreach v {render each fps blend render_fps movie_out period nf frames fev writes pos ftrial
                n_eye eye_t eye_x eye_y skipped} {
         set $v [dict get $P $v]
     }
+    set lead [expr {[dict exists $P lead] ? [dict get $P lead] : 0}]
+    set t0 [expr {[dict exists $P t0] ? [dict get $P t0] : [lindex $frames 0 4] / 1000.0}]
     set touch [expr {[dict exists $P touch] ? [dict get $P touch] : {}}]
     set n_touch [llength $touch]
     if {[framelock::send $sock {info commands stepFrame}] ne "stepFrame"} {
@@ -1186,6 +1218,43 @@ proc replay::render {P sock args} {
     set sent 0; set errors 0
     set kinds [dict create]
     set wall0 [clock microseconds]
+    if {$lead > 0 && !$each} {
+        # The lead (-lead): from BEGINOBS to the trial's first new frame the
+        # rig still showed what the last trial left, which this render does
+        # not have, so the rig's background (setup set it) with the gaze and
+        # touches over it.  One frame stepped with the scene list hidden, at
+        # the clock the render starts from (so it moves no input's time),
+        # then held: repainted where the overlay moves, written in chunks
+        # so a server's -progress gets its turns during a long fixation.
+        set s "set ::framelock_lead_vis \[glistSetVisible\]\n"
+        append s "if {\$::framelock_lead_vis} {glistSetVisible 0}\n"
+        if {$ov} { set g [_overlay_at $t0]; append s "$g\n"; set gaze_last $g }
+        append s "stepFrame $t_start $t_start\nframeSink write 1\n"
+        set k 1
+        while 1 {
+            set same 0
+            for {set n 0} {$k < $lead && $n < 120} {incr k; incr n} {
+                set g [expr {$ov ? [_overlay_at [expr {$t0 + $k * $period}]] : $gaze_last}]
+                if {$g eq $gaze_last} { incr same; continue }
+                if {$same} { append s "frameSink write $same\n"; set same 0 }
+                append s "$g\nframeRepaint\nframeSink write 1\n"
+                set gaze_last $g
+                incr repaints
+            }
+            if {$same} { append s "frameSink write $same\n" }
+            if {$k >= $lead} { append s "if {\$::framelock_lead_vis} {glistSetVisible 1}\n" }
+            set r [framelock::send $sock $s]
+            if {[framelock::is_error $r]} {
+                catch { framelock::send $sock {if {$::framelock_lead_vis} {glistSetVisible 1}} }
+                catch { framelock::send $sock {frameSink close} }
+                catch { framelock::send $sock {stepMode 0} }
+                fail 1 "the lead before the first frame: $r"
+            }
+            if {$k >= $lead} break
+            if {$o(-progress) ne ""} { {*}$o(-progress) 0 $nf }
+            set s ""
+        }
+    }
     for {set i 0} {$i < $nf} {incr i} {
         if {$each && [lindex $ftrial $i] ne $cur_trial} {
             # the next trial's movie: close this one, open its own
@@ -1206,18 +1275,23 @@ proc replay::render {P sock args} {
         # Pi on Wi-Fi: ~20 ms a round trip) requests, not drawing, set the
         # pace.
         set pre {}; set post {}
-        if {$ov} {
+        # its first movie tick: the flip, or the movie's start for a frame
+        # from before it (-lead: shown since before BEGINOBS)
+        set tick0 [expr {[lindex $pos $i] < 0 ? $t0 : $flip}]
+        if {$ov && $nw > 0} {
             # the overlay at this frame's first movie tick, drawn with the frame
-            set g [_overlay_at $flip]
+            set g [_overlay_at $tick0]
             if {$g ne $gaze_last} { append pre "$g\n"; set gaze_last $g }
         }
-        if {!$ov || $nw <= 1} {
+        if {$nw == 0} {
+            # before the movie's start: drawn, not written
+        } elseif {!$ov || $nw <= 1} {
             append post "frameSink write $nw\n"
         } else {
             append post "frameSink write 1\n"
             set same 0
             for {set k 1} {$k < $nw} {incr k} {
-                set g [_overlay_at [expr {$flip + $k * $period}]]
+                set g [_overlay_at [expr {$tick0 + $k * $period}]]
                 if {$g eq $gaze_last} { incr same; continue }
                 if {$same} { append post "frameSink write $same\n"; set same 0 }
                 append post "$g\nframeRepaint\nframeSink write 1\n"
@@ -1292,17 +1366,22 @@ proc replay::render {P sock args} {
 #                  -anchor -color -bg), deleted after
 #   -touch 0|1     draw the trial's touchscreen presses (default 0)
 #   -touch-style {SIZE {R G B A}}  the rings: diameter, colour
+#   -lead 0|1      start the clip at BEGINOBS, the stretch before the
+#                  trial's first new rig frame as the rig's background with
+#                  the gaze and touches over it (plan -lead; default 1).  0:
+#                  the clip starts at the first frame, as before
 # ---------------------------------------------------------------------------
 proc replay::render_trial {S sock trial out args} {
     array set o {-fps "" -crf 14 -keyint 12 -eye off -json "" -progress "" -verbose 0 -log replay::say
-                 -gaze "" -gaze-style "" -labels "" -touch 0 -touch-style ""}
+                 -gaze "" -gaze-style "" -labels "" -touch 0 -touch-style "" -lead 1}
     foreach {k v} $args {
         if {![info exists o($k)]} { fail 2 "replay::render_trial: unknown option $k" }
         set o($k) $v
     }
     if {![is_movie $out]} { fail 2 "replay::render_trial: $out is not a movie file (.mp4/.mov/.mkv)" }
     set eye [expr {$o(-gaze) ne "" ? "off" : $o(-eye)}]
-    set P [plan $S -trials [list $trial $trial] -render $out -fps $o(-fps) -eye $eye -touch $o(-touch)]
+    set P [plan $S -trials [list $trial $trial] -render $out -fps $o(-fps) -eye $eye -touch $o(-touch) \
+               -lead $o(-lead)]
     if {$o(-gaze) ne ""} { set P [gaze_tracks $S $P $trial {*}$o(-gaze)] }
     if {[llength $o(-labels)] % 2} { fail 2 "replay::render_trial: -labels wants NAME OPTS pairs" }
     # a stepped stim2 left by an earlier render: out of step mode, so the
@@ -1372,16 +1451,27 @@ proc replay::gaze_tracks {S P trial T X Y} {
 # ---------------------------------------------------------------------------
 # timing: a single-trial clip's timing as JSON, for a viewer to put the
 # clip on the trial's own timeline.  All times are ms on the clip's
-# timeline (0 = its first frame):
+# timeline (0 = its first movie frame: BEGINOBS when start is "beginobs",
+# the trial's first rig frame when it is "frame"):
+#   version                    2 (1 had no start, lead_ms, first_frame_ms,
+#                              and was always "frame")
+#   start                      "beginobs" (plan -lead; render_trial's
+#                              default) or "frame"
+#   lead_ms, first_frame_ms    the background lead before the first rig
+#                              frame, and where that frame starts showing
+#                              (0 when one came before BEGINOBS)
 #   obs_begin_ms, obs_end_ms   the observation period (BEGINOBS, ENDOBS):
 #                              data timed from BEGINOBS (em_seconds, the
 #                              trial's event times) is at t + obs_begin_ms
+#                              (0 with start "beginobs")
 #   window_start_ms            the trial window's start (the previous
-#                              period's end; before the first frame)
+#                              period's end; before the clip)
 #   rig_frames                 per rig frame drawn: movie_ms (where it starts
-#                              in the clip), flip_ms (the rig's flip on the
-#                              same timeline: they differ by the rounding to
-#                              movie ticks) and swap (its swapcount)
+#                              in the clip; negative for a frame from before
+#                              BEGINOBS, drawn but not in the clip), flip_ms
+#                              (the rig's flip on the same timeline: they
+#                              differ by the rounding to movie ticks) and
+#                              swap (its swapcount)
 #   cmds                       each command, with the rig frame (index into
 #                              rig_frames) that first showed it
 #   em_zero_ms                 the period's first eyetracking/raw record (null
@@ -1416,7 +1506,9 @@ proc replay::timing {S P r trial} {
     set frames [dict get $P frames]
     set tick_off [dict get $P tick_off]
     set period [dict get $P period]
-    set F0 [expr {[lindex $frames 0 4] / 1000.0}]
+    # the clip's 0: BEGINOBS with -lead, else the first frame's flip
+    set F0 [expr {[dict exists $P t0] ? [dict get $P t0] : [lindex $frames 0 4] / 1000.0}]
+    set lead [expr {[dict exists $P lead] ? [dict get $P lead] : 0}]
     # dserv time (us) -> clip ms
     set clip {{us tick_off F0} { expr {($us + $tick_off) / 1000.0 - $F0} }}
     set k [expr {$trial - 1}]
@@ -1461,8 +1553,12 @@ proc replay::timing {S P r trial} {
         }
         lappend touches [_jarr $row]
     }
+    set p0 [lindex [dict get $P pos] 0]
     _jobj [list \
-        version 1 \
+        version 2 \
+        start [_jstr [expr {[dict exists $P start] ? [dict get $P start] : "frame"}]] \
+        lead_ms [_jnum [expr {$lead * $period}]] \
+        first_frame_ms [_jnum [expr {max(0, $p0) * $period}]] \
         file [_jstr [file tail [set ${S}::path]]] \
         trial $trial obsid $k ntrials [llength $obs_end] \
         fps [dict get $P fps] movie_frames [dict get $P movie_frames] \
