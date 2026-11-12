@@ -206,8 +206,8 @@ file mkdir $opt(cache)
 set opt(cache) [file dirname [file normalize [file join $opt(cache) x]]]
 
 # the clip format; a change here starts a fresh cache (3: the timing JSON
-# lists the trial's touches)
-set clip_version 3
+# lists the trial's touches; 4: with each stroke's path)
+set clip_version 4
 
 proc log {msg} { puts "[clock format [clock seconds] -format %H:%M:%S] $msg"; flush stdout }
 

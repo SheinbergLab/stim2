@@ -37,9 +37,12 @@ on the clip's timeline, each rig frame's place and flip, the commands, the
 rig's screen in degrees and pixels. Data timed from BEGINOBS is at
 `t + obs_begin_ms` in the clip; a trials DG's `em_seconds`, which counts
 from the period's first eye record, is at `t + em_zero_ms`. `touches`
-lists the trial's touchscreen presses, read from the session's ESS TOUCH
-events (type 48): `[t, x, y, t_up, x_up, y_up]`, clip ms and degrees,
-the release `null` when none was logged. Clips do not draw them; the
+lists the trial's touch strokes, read from the session's ESS TOUCH
+events (type 48): `[t, x, y, t_up, x_up, y_up, path]`, clip ms and
+degrees, the release `null` when none was logged. `path` is the stroke's
+drag as a flat `[t, x, y, ...]` (the press first, then each TOUCH MOVE),
+or `null` for a tap. A stroke whose finger was already down when the
+period began starts at its first MOVE. Clips do not draw them; the
 viewer does, and an export can.
 
 dserv's `www/dg_viewer.html` is the viewer: with a server answering
@@ -88,10 +91,13 @@ encoded once.
   degrees; without it no gaze is drawn. `gaze_style` `{size, color}`
   sets the disc. `touch: true` draws the session's touchscreen presses:
   a ring (`touch_style` `{size, color}`, default 1.6 degrees across,
-  magenta) from each press until its release, 250 ms when no release was
-  logged, then at the release point, fading over 400 ms. ESS logs presses
-  and releases only, inside observation periods; a drag between them is
-  not recorded, so the ring jumps from the press to the release.
+  magenta) that follows the finger from each press until its release,
+  250 ms past the last sample when no release was logged, with the last
+  500 ms of a drag fading behind it as a trail; after the release it
+  stays at the release point, fading over 400 ms. ESS logs touches inside
+  observation periods only. Sessions recorded before TOUCH MOVE was
+  logged (dserv, 2026-11) have presses and releases only, so their ring
+  jumps from the press to the release.
 - **card**: `text`, `dur` seconds (default 2), `size` of the height a
   line (default 0.07), `color`, `bg` (default the rig's background). A
   card draws on the stim2 of the nearest trial, so a reel needs one.

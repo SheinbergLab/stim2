@@ -785,13 +785,18 @@ proc replay::plan {S args} {
 }
 
 # ---------------------------------------------------------------------------
-# touch_marks: session S's touchscreen presses in (w0, w1] (dserv us; ""
-# the whole file), each {t x y t_up x_up y_up}: the press at t (ms on the
-# rig clock: dserv + tick_off) at x y degrees, and its release, "" "" ""
-# when none was logged (ESS logs only inside observation periods).  Pixels
-# become degrees as ESS's touch_pixels_to_deg does, from the session's
-# ess/screen_w/h/halfx/halfy; without those there are no marks.  ESS logs
-# presses and releases, not the drag between them (MOVE is reserved).
+# touch_marks: session S's touches in (w0, w1] (dserv us; "" the whole
+# file) as strokes, each {t x y t_up x_up y_up path}: down at t (ms on the
+# rig clock: dserv + tick_off) at x y degrees, up at t_up at x_up y_up
+# ("" "" "" when no release was logged: ESS logs only inside observation
+# periods), and path {t x y t x y ...} the finger's way from the first
+# sample through every TOUCH MOVE to the release, "" when the stroke had
+# no moves (a tap, or a file from before ESS logged drags: the finger's
+# way between press and release is then unknown).  A MOVE with no PRESS
+# open starts a stroke: the finger was down since before the period (ESS
+# logs one at BEGINOBS then).  Pixels become degrees as ESS's
+# touch_pixels_to_deg does, from the session's ess/screen_w/h/halfx/halfy;
+# without those there are no strokes.
 # ---------------------------------------------------------------------------
 proc replay::touch_marks {S tick_off {w0 ""} {w1 ""}} {
     array set geom [array get ${S}::geom]
@@ -802,39 +807,81 @@ proc replay::touch_marks {S tick_off {w0 ""} {w1 ""}} {
     set sx [expr {$geom(w) / (2.0 * $geom(halfx))}]
     set sy [expr {$geom(h) / (2.0 * $geom(halfy))}]
     set marks {}; set down ""
+    # a stroke: {t x y path moves}; closed into a mark
+    set close {{down up} {
+        lassign $down t x y path moves
+        if {$up eq ""} { set up {"" "" ""} }
+        list $t $x $y {*}$up [expr {$moves ? $path : ""}]
+    }}
     foreach e [set ${S}::touches] {
         lassign $e ts sub px py
         if {$w0 ne "" && ($ts <= $w0 || $ts > $w1)} continue
         set t [expr {($ts + $tick_off) / 1000.0}]
         set x [expr {($px - $cx) / $sx}]; set y [expr {($cy - $py) / $sy}]
-        if {$sub == 0} {
-            if {$down ne ""} { lappend marks $down }
-            set down [list $t $x $y "" "" ""]
-        } elseif {$sub == 1 && $down ne ""} {
-            lappend marks [lreplace $down 3 5 $t $x $y]
-            set down ""
+        switch -- $sub {
+            0 {
+                if {$down ne ""} { lappend marks [apply $close $down ""] }
+                set down [list $t $x $y [list $t $x $y] 0]
+            }
+            2 {
+                if {$down eq ""} {
+                    set down [list $t $x $y [list $t $x $y] 0]
+                } else {
+                    lset down 3 [concat [lindex $down 3] $t $x $y]
+                    lset down 4 [expr {[lindex $down 4] + 1}]
+                }
+            }
+            1 {
+                if {$down eq ""} continue
+                lset down 3 [concat [lindex $down 3] $t $x $y]
+                lappend marks [apply $close $down [list $t $x $y]]
+                set down ""
+            }
         }
     }
-    if {$down ne ""} { lappend marks $down }
+    if {$down ne ""} { lappend marks [apply $close $down ""] }
     return $marks
 }
 
-# the touch rings for movie time t (rig ms): each press from its time, held
-# until its release (touch_hold_ms when none was logged), then a ring at
-# the release point fading over touch_fade_ms; the newest touch_slots
+# the touches for movie time t (rig ms), the newest touch_slots strokes:
+# a ring where the finger is (the stroke's last sample by t), with a trail
+# of its path over the last touch_trail_ms, from touch-down until the
+# release (touch_hold_ms past the last sample when none was logged), then
+# at the release point fading over touch_fade_ms, its trail with it.  A
+# stroke without a path (a tap) is a ring at the press, then at the
+# release.
 proc replay::_touch_at {t} {
     upvar 1 touch touch touch_r touch_r touch_rgb touch_rgb touch_a touch_a \
-        touch_hold_ms hold touch_fade_ms fade
+        touch_hold_ms hold touch_fade_ms fade touch_trail_ms trail
     set vis {}
     foreach m $touch {
-        lassign $m on x y up xu yu
+        lassign $m on x y up xu yu path
         if {$on > $t} break
-        if {$up eq ""} { set up [expr {$on + $hold}]; set xu $x; set yu $y }
-        if {$t < $up} {
-            lappend vis [list $x $y 1.0]
-        } elseif {$t < $up + $fade} {
-            lappend vis [list $xu $yu [expr {1.0 - ($t - $up) / $fade}]]
+        if {$up eq ""} {
+            set last [expr {$path eq "" ? $on : [lindex $path end-2]}]
+            set up [expr {$last + $hold}]
+            if {$path ne ""} { set x [lindex $path end-1]; set y [lindex $path end] }
+            set xu $x; set yu $y
         }
+        if {$t >= $up + $fade} continue
+        set f [expr {$t < $up ? 1.0 : 1.0 - ($t - $up) / $fade}]
+        set tt [expr {min($t, $up)}]
+        # the finger at tt: the last path sample by then, newest first
+        # behind it the trail
+        set px $x; set py $y; set tr {}
+        if {$path ne ""} {
+            set n [expr {[llength $path] / 3}]
+            for {set i [expr {$n - 1}]} {$i >= 0} {incr i -1} {
+                set ts [lindex $path [expr {3 * $i}]]
+                if {$ts > $tt} continue
+                if {$tt - $ts > $trail} break
+                lappend tr [lindex $path [expr {3 * $i + 1}]] [lindex $path [expr {3 * $i + 2}]]
+            }
+            if {[llength $tr]} { lassign $tr px py }
+        } elseif {$t >= $up} {
+            set px $xu; set py $yu
+        }
+        lappend vis [list $px $py $f $tr]
     }
     framelock::touch_cmd [lrange $vis end-[expr {$::framelock::touch_slots - 1}] end] \
         $touch_r $touch_rgb $touch_a
@@ -1074,7 +1121,7 @@ proc replay::_overlay_at {t} {
     upvar 1 eye_t eye_t eye_x eye_x eye_y eye_y eye_k eye_k n_eye n_eye \
         gaze_trail_ms gaze_trail_ms gaze_hold_ms gaze_hold_ms \
         touch touch n_touch n_touch touch_r touch_r touch_rgb touch_rgb touch_a touch_a \
-        touch_hold_ms touch_hold_ms touch_fade_ms touch_fade_ms
+        touch_hold_ms touch_hold_ms touch_fade_ms touch_fade_ms touch_trail_ms touch_trail_ms
     set cmds {}
     if {$n_eye} { lappend cmds [_gaze_at $t] }
     if {$n_touch} { lappend cmds [_touch_at $t] }
@@ -1123,7 +1170,7 @@ proc replay::render {P sock args} {
     set eye_k 0; set gaze_last ""
     if {$n_eye} { framelock::send $sock [framelock::gaze_style {*}$o(-gaze-style)] }
     # the touches: a ring per press while it is down, fading after
-    set touch_hold_ms 250.0; set touch_fade_ms 400.0
+    set touch_hold_ms 250.0; set touch_fade_ms 400.0; set touch_trail_ms 500.0
     if {$n_touch} {
         lassign $o(-touch-style) tsize tcolor
         if {$tsize eq ""} { set tsize 1.6 }
@@ -1208,7 +1255,7 @@ proc replay::render {P sock args} {
     framelock::send $sock {stepMode 0}
     if {$n_eye} { framelock::send $sock {overlay delete gaze; overlay delete gaze_trail} }
     if {$n_touch} {
-        for {set k 0} {$k < $::framelock::touch_slots} {incr k} { framelock::send $sock "overlay delete touch$k" }
+        for {set k 0} {$k < $::framelock::touch_slots} {incr k} { framelock::send $sock "overlay delete touch$k; overlay delete touchtrail$k" }
     }
     set bad 0
     if {$each} {
@@ -1341,10 +1388,12 @@ proc replay::gaze_tracks {S P trial T X Y} {
 #                              without one): where em::'s em_seconds is 0,
 #                              since it counts from the trial's first eye
 #                              sample, a few ms after BEGINOBS
-#   touches                    each touchscreen press in the trial (drawn in
-#                              the clip only with -touch): [t, x, y, t_up,
-#                              x_up, y_up], degrees, the release null when
-#                              none was logged
+#   touches                    each touch stroke in the trial (drawn in the
+#                              clip only with -touch): [t, x, y, t_up, x_up,
+#                              y_up, path], degrees, the release null when
+#                              none was logged, path [t, x, y, ...] the
+#                              finger's way through its TOUCH MOVEs (null
+#                              for a tap or a file without them)
 # Datapoint times are dserv's receipt on the rig clock, through the median
 # stim - dserv clock offset of the trial's frames (tick_off_us).
 # ---------------------------------------------------------------------------
@@ -1400,10 +1449,15 @@ proc replay::timing {S P r trial} {
     # null for a release not logged
     set touches {}
     foreach m [touch_marks $S $tick_off [dict get $P w0] [dict get $P w1]] {
-        lassign $m t x y tu xu yu
+        lassign $m t x y tu xu yu path
         set row [list [_jnum [expr {$t - $F0}]] [_jnum $x] [_jnum $y]]
         if {$tu eq ""} { lappend row null null null } else {
             lappend row [_jnum [expr {$tu - $F0}]] [_jnum $xu] [_jnum $yu]
+        }
+        if {$path eq ""} { lappend row null } else {
+            set p {}
+            foreach {pt px py} $path { lappend p [_jnum [expr {$pt - $F0}]] [_jnum $px] [_jnum $py] }
+            lappend row [_jarr $p]
         }
         lappend touches [_jarr $row]
     }

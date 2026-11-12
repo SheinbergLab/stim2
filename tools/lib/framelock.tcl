@@ -366,31 +366,39 @@ proc framelock::gaze_style {{size 0.7} {color {1 0.55 0.1 0.9}}} {
         [list overlay set gaze -size $size -color [list $r $g $b $a] -show 0]] "\n"
 }
 # the touch markers: touch_slots rings, SIZE degrees across, a line
-# 0.12 of that wide (on a stim2 of 0.29.1 or before, without overlay
-# lines, a ring of dots)
+# 0.12 of that wide, each with a trail (touchtrailK: the finger's recent
+# path, a faded line two thirds that wide).  On a stim2 of 0.29.1 or before,
+# without overlay lines, rings and trails are dots.
 namespace eval framelock { variable touch_slots 4 }
 proc framelock::touch_style {{size 1.6} {color {1 0.3 0.9 0.95}}} {
     variable touch_slots
     lassign $color r g b a
     if {$a eq ""} { set a 1 }
     set w [format %.3f [expr {$size * 0.12}]]
+    set tw [format %.3f [expr {$size * 0.08}]]
     set c [list $r $g $b $a]
     set cmds {}
     for {set k 0} {$k < $touch_slots} {incr k} {
-        set line [list overlay set touch$k -mode line -size $w -color $c -show 0]
-        set dots [list overlay set touch$k -size $w -color $c -show 0]
-        lappend cmds "if {\[catch {$line}\]} {$dots}"
+        foreach {name width fade} [list touchtrail$k $tw 1 touch$k $w 0] {
+            set line [list overlay set $name -mode line -fade $fade -size $width -color $c -show 0]
+            set dots [list overlay set $name -size $width -color $c -show 0]
+            lappend cmds "if {\[catch {$line}\]} {$dots}"
+        }
     }
     join $cmds "\n"
 }
-# marks {{x y alpha} ...} (at most touch_slots): a ring of radius r at each;
-# the rest hidden.  rgb the rings' colour, alpha scaling its own.
+# marks {{x y alpha ?trail?} ...} (at most touch_slots): a ring of radius r
+# at each, its trail {x y x y ...} (newest first) behind it; the rest
+# hidden.  rgb the colour, alpha scaling each mark's own.
 proc framelock::touch_cmd {marks r rgb a} {
     variable touch_slots
     set cmds {}
     for {set k 0} {$k < $touch_slots} {incr k} {
-        if {$k >= [llength $marks]} { lappend cmds "overlay set touch$k -show 0"; continue }
-        lassign [lindex $marks $k] x y f
+        if {$k >= [llength $marks]} {
+            lappend cmds "overlay set touch$k -show 0; overlay set touchtrail$k -show 0"
+            continue
+        }
+        lassign [lindex $marks $k] x y f trail
         set pts {}
         # closed: the first two points again, so the line joins round
         for {set i 0} {$i < 26} {incr i} {
@@ -398,6 +406,12 @@ proc framelock::touch_cmd {marks r rgb a} {
             lappend pts [format %.3f [expr {$x + $r * cos($th)}]] [format %.3f [expr {$y + $r * sin($th)}]]
         }
         lappend cmds "overlay set touch$k -show 1 -color {$rgb [format %.3f [expr {$a * $f}]]} -points {$pts}"
+        if {[llength $trail] >= 4} {
+            lappend cmds "overlay set touchtrail$k -show 1 -color {$rgb [format %.3f [expr {0.7 * $a * $f}]]}\
+ -points {[lmap v $trail {format %.3f $v}]}"
+        } else {
+            lappend cmds "overlay set touchtrail$k -show 0"
+        }
     }
     join $cmds "; "
 }
