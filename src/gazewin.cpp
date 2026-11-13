@@ -96,7 +96,11 @@ bool pass_lost = true;
 /* ---- GL ---------------------------------------------------------------- */
 
 GLuint prog = 0, vao = 0, fbo = 0, tex = 0;
+GLuint dprog = 0, pfbo = 0;       /* the pyramid: downsample program, level target */
 int tex_w = 0, tex_h = 0;
+int tex_levels = 0;               /* allocated mip levels, 0 included */
+bool levels_ok = false;           /* levels 1.. hold the saved scene, as now set */
+std::string ds_body;              /* a shader file's "-- Downsample"; "" = built in */
 bool tex_mips = false;            /* the min filter wants mipmaps */
 bool scene_valid = false;
 std::string shader_path;          /* "" = built in */
@@ -111,6 +115,7 @@ struct Loc {
     age_ms = -1, time = -1, radius = -1, edge = -1, mode = -1,
     maskcolor = -1, blur = -1, falloff = -1, lostmode = -1;
 } L;
+struct DLoc { GLint src = -1, dstsize = -1; } D;
 
 #ifdef STIM2_USE_GLES
 const char *HEAD = "#version 300 es\nprecision highp float;\nprecision highp int;\n";
@@ -132,20 +137,18 @@ const char *VS_BODY =
    halves the contrast toward the mask colour, alpha 0 with blur > 0 only
    blurs.
 
-   falloff > 0 grades the blur: the box is falloff * (distance into the
+   falloff > 0 grades the blur: it is about falloff * (distance into the
    treated region) degrees wide, so it starts at nothing at the window's
-   edge and widens linearly with eccentricity (as acuity falls), as a mip
+   edge and widens linearly with eccentricity (as acuity falls), as a
    level log2(width in pixels), capped at `blur`.  While gaze is lost there
    is no eccentricity and the whole screen gets `blur`.
 
-   The mips are 2x2 box averages; read with the hardware's bilinear filter
-   their texels show as diamonds and blocks, and shift as the level changes
-   with gaze.  So a level is read with a cubic B-spline instead (four
-   bilinear reads, Sigg & Hadwiger's trick), two levels mixed for a
-   fractional one: smooth, near-Gaussian.  The B-spline spreads a level
-   wider than bilinear does (sd 0.65 vs 0.5 texels, box included), so the
-   level is lowered by log2(1.29) = 0.37 to keep a setting's spread as it
-   was. */
+   The levels are a Gaussian pyramid (DS_BODY below).  A level is read
+   with a cubic B-spline (four bilinear reads, Sigg & Hadwiger's trick),
+   two levels mixed for a fractional one.  A setting's spread is sd
+   0.5 * 2^lod pixels (what the first build's bilinear reads of box mips
+   gave).  Level k read this way spreads sd 0.87 * 2^k, so the level is
+   lowered by log2(0.87/0.5) = 0.79. */
 const char *FS_BODY =
   "uniform sampler2D scene;\n"
   "uniform vec2 resolution;\n"
@@ -201,7 +204,7 @@ const char *FS_BODY =
   "  vec4 t = s;\n"
   "  if (blur > 0.0) {\n"
   "    float top = floor(log2(max(resolution.x, resolution.y)));\n"
-  "    float l = min(max(lod * w - 0.37, 0.0), top);\n"
+  "    float l = min(max(lod * w - 0.79, 0.0), top);\n"
   "    float l0 = floor(l);\n"
   "    vec2 uv = gl_FragCoord.xy / resolution;\n"
   "    t = bspline(l0, uv);\n"
@@ -209,6 +212,29 @@ const char *FS_BODY =
   "  }\n"
   "  t.rgb = mix(t.rgb, maskcolor.rgb, maskcolor.a);\n"
   "  frag = vec4(mix(s.rgb, t.rgb, w), s.a);\n"
+  "}\n";
+
+/* One level of the Gaussian pyramid from the one below it (the only level
+   `src` exposes while this runs): a 6x6 binomial, [1 5 10 10 5 1]/32 each
+   way, then every other pixel.  Each pair of taps is one bilinear read, so
+   9 reads per output texel.  The 2x2 box that glGenerateMipmap uses passes
+   71% of the contrast at the new level's Nyquist frequency, so fine detail
+   (a thin plank) aliases into blobs that depend on where it falls on the
+   grid; this passes 18%.  Variance 1.25 texels^2 per level. */
+const char *DS_BODY =
+  "uniform sampler2D src;\n"
+  "uniform vec2 dstsize;\n"
+  "out vec4 frag;\n"
+  "void main() {\n"
+  "  vec2 ts = 1.0 / vec2(textureSize(src, 0));\n"
+  "  vec2 uv = gl_FragCoord.xy / dstsize;\n"
+  "  const float o = 5.0 / 3.0;\n"
+  "  vec3 wt = vec3(0.1875, 0.625, 0.1875);\n"
+  "  vec4 c = vec4(0.0);\n"
+  "  for (int j = 0; j < 3; j++)\n"
+  "    for (int i = 0; i < 3; i++)\n"
+  "      c += wt[i] * wt[j] * textureLod(src, uv + vec2(float(i - 1), float(j - 1)) * o * ts, 0.0);\n"
+  "  frag = c;\n"
   "}\n";
 
 GLuint compile(GLenum type, const std::string &src, std::string &err)
@@ -237,13 +263,12 @@ std::string with_head(const std::string &body)
   return std::string(HEAD) + body;
 }
 
-/* Build a program; on success it replaces the current one. */
-bool build(const std::string &vs_body, const std::string &fs_body, std::string &err)
+GLuint link(const std::string &vs_body, const std::string &fs_body, std::string &err)
 {
   GLuint vs = compile(GL_VERTEX_SHADER, with_head(vs_body), err);
-  if (!vs) return false;
+  if (!vs) return 0;
   GLuint fs = compile(GL_FRAGMENT_SHADER, with_head(fs_body), err);
-  if (!fs) { glDeleteShader(vs); return false; }
+  if (!fs) { glDeleteShader(vs); return 0; }
   GLuint p = glCreateProgram();
   glAttachShader(p, vs);
   glAttachShader(p, fs);
@@ -257,8 +282,49 @@ bool build(const std::string &vs_body, const std::string &fs_body, std::string &
     glGetProgramInfoLog(p, sizeof(log), nullptr, log);
     err = std::string("link: ") + log;
     glDeleteProgram(p);
-    return false;
+    return 0;
   }
+  return p;
+}
+
+/* The pyramid's downsample program, `body` or the built-in one. */
+GLuint link_downsample(const std::string &body, std::string &err)
+{
+  GLuint p = link(VS_BODY, body.empty() ? DS_BODY : body, err);
+  if (!p) err = "downsample: " + err;
+  return p;
+}
+
+/* The downsample program for `body`, replacing the one in use; on an
+   error that one stays. */
+void adopt_downsample(GLuint p, const std::string &body)
+{
+  if (dprog) glDeleteProgram(dprog);
+  dprog = p;
+  ds_body = body;
+  levels_ok = false;
+  D.src = glGetUniformLocation(dprog, "src");
+  D.dstsize = glGetUniformLocation(dprog, "dstsize");
+}
+
+bool set_downsample(const std::string &body, std::string &err)
+{
+  GLuint p = link_downsample(body, err);
+  if (!p) return false;
+  adopt_downsample(p, body);
+  return true;
+}
+
+bool ensure_downsample(std::string &err)
+{
+  return dprog || set_downsample(ds_body, err);
+}
+
+/* Build a program; on success it replaces the current one. */
+bool build(const std::string &vs_body, const std::string &fs_body, std::string &err)
+{
+  GLuint p = link(vs_body, fs_body, err);
+  if (!p) return false;
   if (prog) glDeleteProgram(prog);
   prog = p;
   L.scene = glGetUniformLocation(prog, "scene");
@@ -280,17 +346,18 @@ bool build(const std::string &vs_body, const std::string &fs_body, std::string &
 }
 
 /* A shader file: "-- Vertex", "-- Fragment" and "-- Uniforms" sections (the
-   layout of stim2's shaders/ directory); a file with no section markers is
-   all fragment.  Uniform lines are "name v1 ?v2 v3 v4?", values optionally
-   in double quotes. */
-bool load_file(const std::string &path, std::string &vs, std::string &fs,
+   layout of stim2's shaders/ directory), and "-- Downsample", the
+   pyramid's filter; a file with no section markers is all fragment.
+   Uniform lines are "name v1 ?v2 v3 v4?", values optionally in double
+   quotes. */
+bool load_file(const std::string &path, std::string &vs, std::string &fs, std::string &ds,
                std::map<std::string, std::vector<float>> &unis, std::string &err)
 {
   std::ifstream in(path);
   if (!in) { err = "cannot read " + path; return false; }
   std::string line, section = "Fragment";
   bool any_marker = false;
-  std::string v, f;
+  std::string v, f, dsrc;
   while (std::getline(in, line)) {
     if (line.compare(0, 2, "--") == 0) {
       std::string name = line.substr(2);
@@ -302,6 +369,7 @@ bool load_file(const std::string &path, std::string &vs, std::string &fs,
     }
     if (section == "Vertex") v += line + "\n";
     else if (section == "Fragment") f += line + "\n";
+    else if (section == "Downsample") dsrc += line + "\n";
     else if (section == "Uniforms") {
       for (char &c : line) if (c == '"') c = ' ';
       std::istringstream ls(line);
@@ -320,6 +388,7 @@ bool load_file(const std::string &path, std::string &vs, std::string &fs,
   }
   vs = v.find_first_not_of(" \t\r\n") == std::string::npos ? VS_BODY : v;
   fs = f;
+  ds = dsrc.find_first_not_of(" \t\r\n") == std::string::npos ? "" : dsrc;
   return true;
 }
 
@@ -327,10 +396,10 @@ bool ensure_program(std::string &err)
 {
   if (prog) return true;
   if (shader_path.empty()) return build(VS_BODY, FS_BODY, err);
-  std::string vs, fs;
+  std::string vs, fs, ds;
   std::map<std::string, std::vector<float>> unis;
-  if (!load_file(shader_path, vs, fs, unis, err)) return false;
-  if (!build(vs, fs, err)) return false;
+  if (!load_file(shader_path, vs, fs, ds, unis, err)) return false;
+  if (!set_downsample(ds, err) || !build(vs, fs, err)) return false;
   for (auto &u : unis) if (!uniforms.count(u.first)) uniforms[u.first] = u.second;
   return true;
 }
@@ -350,7 +419,15 @@ bool ensure_target(int w, int h, std::string &err)
   if (!tex) glGenTextures(1, &tex);
   if (!fbo) glGenFramebuffers(1, &fbo);
   glBindTexture(GL_TEXTURE_2D, tex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+  /* every level down to 1x1, for make_levels to fill */
+  tex_levels = 0;
+  levels_ok = false;
+  for (int lw = w, lh = h; ; lw = std::max(1, lw / 2), lh = std::max(1, lh / 2)) {
+    glTexImage2D(GL_TEXTURE_2D, tex_levels++, GL_RGBA8, lw, lh, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    if (lw == 1 && lh == 1) break;
+  }
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, tex_levels - 1);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
                   want_mips ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -384,28 +461,88 @@ bool is_lost(double now_s)
 
 /* ---- the pass ---------------------------------------------------------- */
 
+/* The GL state a pass changes, put back as it was when this goes out of
+   scope (the framebuffer bindings are the caller's).  Texture unit 0 is
+   left active, with its binding saved. */
+struct GLSave {
+  GLint prog, vao, vp[4], tex, active;
+  GLboolean blend, depth, scissor, cull, stencil;
+  GLSave() {
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prog);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
+    glGetIntegerv(GL_VIEWPORT, vp);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &active);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex);
+    blend = glIsEnabled(GL_BLEND);
+    depth = glIsEnabled(GL_DEPTH_TEST);
+    scissor = glIsEnabled(GL_SCISSOR_TEST);
+    cull = glIsEnabled(GL_CULL_FACE);
+    stencil = glIsEnabled(GL_STENCIL_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_STENCIL_TEST);
+  }
+  ~GLSave() {
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glActiveTexture(active);
+    glBindVertexArray(vao);
+    glUseProgram(prog);
+    if (blend) glEnable(GL_BLEND);
+    if (depth) glEnable(GL_DEPTH_TEST);
+    if (scissor) glEnable(GL_SCISSOR_TEST);
+    if (cull) glEnable(GL_CULL_FACE);
+    if (stencil) glEnable(GL_STENCIL_TEST);
+    glViewport(vp[0], vp[1], vp[2], vp[3]);
+  }
+};
+
+/* Fill the blur's levels from level 0: each drawn from the one below with
+   the downsample program.  While it runs, BASE_LEVEL = MAX_LEVEL = k-1,
+   so the texture it samples never includes level k, the one it writes. */
+void make_levels(int w, int h)
+{
+  GLSave save;
+  glBindTexture(GL_TEXTURE_2D, tex);
+  std::string err;
+  if (!vao || !ensure_downsample(err)) {
+    /* only if the built-in filter does not build on this driver (a file's
+       is checked when it loads): the driver's box mips, not garbage */
+    static bool told = false;
+    if (!told) { log_message("error", "gazewin: %s; box mips instead", err.c_str()); told = true; }
+    glGenerateMipmap(GL_TEXTURE_2D);
+    return;
+  }
+  if (!pfbo) glGenFramebuffers(1, &pfbo);
+  GLint o_draw;
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &o_draw);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, pfbo);
+  glUseProgram(dprog);
+  glBindVertexArray(vao);
+  if (D.src >= 0) glUniform1i(D.src, 0);
+  int lw = w, lh = h;
+  for (int k = 1; k < tex_levels; k++) {
+    lw = std::max(1, lw / 2);
+    lh = std::max(1, lh / 2);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, k - 1);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, k - 1);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, k);
+    glViewport(0, 0, lw, lh);
+    if (D.dstsize >= 0) glUniform2f(D.dstsize, (float) lw, (float) lh);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+  }
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, tex_levels - 1);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, o_draw);
+}
+
 void draw_pass(int w, int h, float halfx, float halfy, GLuint drawfb, double now_s)
 {
-  GLint o_prog, o_vao, o_vp[4], o_tex, o_active;
-  glGetIntegerv(GL_CURRENT_PROGRAM, &o_prog);
-  glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &o_vao);
-  glGetIntegerv(GL_VIEWPORT, o_vp);
-  glGetIntegerv(GL_ACTIVE_TEXTURE, &o_active);
-  glActiveTexture(GL_TEXTURE0);
-  glGetIntegerv(GL_TEXTURE_BINDING_2D, &o_tex);
-  GLboolean o_blend = glIsEnabled(GL_BLEND);
-  GLboolean o_depth = glIsEnabled(GL_DEPTH_TEST);
-  GLboolean o_scissor = glIsEnabled(GL_SCISSOR_TEST);
-  GLboolean o_cull = glIsEnabled(GL_CULL_FACE);
-  GLboolean o_stencil = glIsEnabled(GL_STENCIL_TEST);
-
+  GLSave save;
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawfb);
   glViewport(0, 0, w, h);
-  glDisable(GL_BLEND);
-  glDisable(GL_DEPTH_TEST);
-  glDisable(GL_SCISSOR_TEST);
-  glDisable(GL_CULL_FACE);
-  glDisable(GL_STENCIL_TEST);
 
   bool lost = is_lost(now_s);
   const Sample &g = gaze;
@@ -448,17 +585,6 @@ void draw_pass(int w, int h, float halfx, float halfy, GLuint drawfb, double now
 
   glBindVertexArray(vao);
   glDrawArrays(GL_TRIANGLES, 0, 3);
-
-  glBindTexture(GL_TEXTURE_2D, o_tex);
-  glActiveTexture(o_active);
-  glBindVertexArray(o_vao);
-  glUseProgram(o_prog);
-  if (o_blend) glEnable(GL_BLEND);
-  if (o_depth) glEnable(GL_DEPTH_TEST);
-  if (o_scissor) glEnable(GL_SCISSOR_TEST);
-  if (o_cull) glEnable(GL_CULL_FACE);
-  if (o_stencil) glEnable(GL_STENCIL_TEST);
-  glViewport(o_vp[0], o_vp[1], o_vp[2], o_vp[3]);
 
   /* what this pass showed: the repaint test and the latency record */
   drawn_seq = gaze.seq;
@@ -607,13 +733,8 @@ int gazewinStage(int w, int h, float halfx, float halfy,
   glReadBuffer(drawnbuf);
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
   glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-  if (tex_mips) {
-    GLint o_tex;
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &o_tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, o_tex);
-  }
+  if (tex_mips) make_levels(w, h);
+  levels_ok = tex_mips;
   scene_valid = true;
   draw_pass(w, h, halfx, halfy, drawfb, now_s);
   glBindFramebuffer(GL_FRAMEBUFFER, drawfb);
@@ -628,13 +749,11 @@ int gazewinComposite(int w, int h, float halfx, float halfy,
   if (!on || !prog || !scene_valid || w != tex_w || h != tex_h) return 0;
   std::string err;
   if (!ensure_target(w, h, err)) return 0;   /* a -blur change: the filter */
-  if (tex_mips) {
-    /* -blur turned on since the scene was saved: its mips were never made */
-    GLint o_tex;
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &o_tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, o_tex);
+  if (tex_mips && !levels_ok) {
+    /* -blur turned on, or the filter changed, since the scene
+       was saved */
+    make_levels(w, h);
+    levels_ok = true;
   }
   draw_pass(w, h, halfx, halfy, drawfb, now_s);
   glBindFramebuffer(GL_FRAMEBUFFER, drawfb);
@@ -681,6 +800,9 @@ double tclNow(void) { return glfwGetTime(); }
 void reset_gl_program(void)
 {
   if (prog) { glDeleteProgram(prog); prog = 0; }
+  if (dprog) { glDeleteProgram(dprog); dprog = 0; }
+  ds_body.clear();
+  levels_ok = false;
 }
 
 Tcl_Obj *settings_dict(void)
@@ -995,7 +1117,7 @@ int gazewinCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
     std::string path = Tcl_GetString(objv[2]);
     std::string err;
     if (path == "default" || path.empty()) {
-      if (!build(VS_BODY, FS_BODY, err)) {
+      if (!build(VS_BODY, FS_BODY, err) || !set_downsample("", err)) {
         Tcl_SetObjResult(interp, Tcl_ObjPrintf("gazewin: shader: %s", err.c_str()));
         return TCL_ERROR;
       }
@@ -1003,13 +1125,17 @@ int gazewinCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
       uniforms.clear();
     }
     else {
-      std::string vs, fs;
+      std::string vs, fs, ds;
       std::map<std::string, std::vector<float>> unis;
-      if (!load_file(path, vs, fs, unis, err) || !build(vs, fs, err)) {
-        /* the program in use stays */
+      GLuint dp = 0;
+      bool ok = load_file(path, vs, fs, ds, unis, err) && (dp = link_downsample(ds, err)) != 0;
+      if (ok && !build(vs, fs, err)) { glDeleteProgram(dp); ok = false; }
+      if (!ok) {
+        /* the programs in use stay */
         Tcl_SetObjResult(interp, Tcl_ObjPrintf("gazewin: shader: %s", err.c_str()));
         return TCL_ERROR;
       }
+      adopt_downsample(dp, ds);
       shader_path = path;
       uniforms = unis;
     }

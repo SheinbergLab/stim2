@@ -92,6 +92,24 @@ void main() { frag = vec4(tint.rgb, 1.0); }
 -- Uniforms
 tint "1.0 0.0 0.0 1.0"}
 close $f
+# a pass that shows level 3, over a pyramid filter that paints it red
+set ::dsfile [file join [file dirname [info script]] gazewin_test_ds.glsl]
+set f [open $::dsfile w]
+puts $f {-- Fragment
+uniform sampler2D scene;
+uniform vec2 resolution;
+out vec4 frag;
+void main() { frag = textureLod(scene, gl_FragCoord.xy / resolution, 3.0); }
+
+-- Downsample
+uniform sampler2D src;
+out vec4 frag;
+void main() { frag = vec4(1.0, 0.0, 0.0, 1.0); }}
+close $f
+set ::dsbadfile [file join [file dirname [info script]] gazewin_test_dsbad.glsl]
+set f [open $::dsbadfile w]
+puts $f "-- Fragment\nout vec4 frag;\nvoid main() { frag = vec4(0.0); }\n-- Downsample\nthis is not glsl;\n"
+close $f
 set ::badfile [file join [file dirname [info script]] gazewin_test_bad.glsl]
 set f [open $::badfile w]
 puts $f "-- Fragment\nthis is not glsl;\n"
@@ -220,7 +238,19 @@ set ::steps {
         ck "  and the last one stays" [expr {[gazewin shader] eq $::shaderfile}] }
       { ck "the last shader still draws (green)" [near [at $bytes 0 0] {0 255 0}] } }
 
-    { { gazewin shader default
+    { { gazewin set -blur 3
+        ck "a file with a Downsample section loads" [expr {[gazewin shader $::dsfile] eq $::dsfile}] }
+      { ck "its filter made the levels (red)" [near [at $bytes 0 0] {255 0 0}] } }
+
+    { { ck "a Downsample that does not build is refused" [catch { gazewin shader $::dsbadfile } e]
+        ck "  saying which section" [string match "*downsample*" $e]
+        ck "  and the last file stays" [expr {[gazewin shader] eq $::dsfile}] }
+      { ck "  with its filter (red)" [near [at $bytes 0 0] {255 0 0}] } }
+
+    { { gazewin shader default }
+      { ck "back to the built-in filter: the levels remade (blurred white, not red: [at $bytes 6 3])" [near [at $bytes 6 3] {255 255 255} 8] } }
+
+    { { gazewin set -blur 0
         ck "off returns 0" [expr {[gazewin off] == 0}] }
       { ck "off: the scene untouched" [expr {[near [at $bytes 0 0] {255 255 255}] && [near [at $bytes 6 3] {255 255 255}]}] } }
 
@@ -235,7 +265,7 @@ set ::steps {
 set ::stepi 0
 proc next {} {
     if {$::stepi >= [llength $::steps]} {
-        file delete $::shaderfile $::badfile
+        file delete $::shaderfile $::badfile $::dsfile $::dsbadfile
         finish
     }
     lassign [lindex $::steps $::stepi] setup check

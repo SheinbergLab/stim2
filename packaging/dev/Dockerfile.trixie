@@ -1,0 +1,42 @@
+# A Debian 13 (trixie) build environment for stim2, matching the Linux
+# release workflow (.github/workflows/release_linux.yml): its apt deps, Tcl
+# 9 / GLFW / spine-c / box2d built from the pinned submodules, and dlsh's
+# released .debs.  For building a dev stim2 to try on a rig before tagging;
+# see packaging/dev/build-linux.sh.
+#
+#   docker build --platform linux/amd64 -f packaging/dev/Dockerfile.trixie \
+#       --build-arg STIM2_REF=$(git rev-parse HEAD) -t stim2-dev:trixie .
+FROM debian:13
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y \
+      sudo wget git ca-certificates curl jq \
+      build-essential cmake pkg-config cmake-data zlib1g-dev \
+      libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev \
+      libwayland-dev libxkbcommon-dev libglew-dev libglm-dev \
+      libopenal-dev libfreetype-dev \
+      libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# the submodules at a stim2 commit (the deps only; the source is mounted)
+ARG STIM2_REF=main
+RUN git clone https://github.com/SheinbergLab/stim2.git /deps-src \
+    && cd /deps-src && git checkout ${STIM2_REF} \
+    && git submodule update --init --depth 1 deps/tcl deps/glfw deps/spine-runtimes deps/box2d
+
+RUN cd /deps-src/deps/tcl/unix && ./configure && make -j"$(nproc)" && make install
+RUN cd /deps-src/deps/glfw && cmake -B b -D GLFW_BUILD_WAYLAND=ON -D GLFW_BUILD_X11=ON \
+    && cmake --build b --parallel && cmake --install b
+RUN cd /deps-src/deps/spine-runtimes/spine-c && cmake -B b -D CMAKE_POSITION_INDEPENDENT_CODE=ON \
+    && cmake --build b --parallel && cmake --install b --prefix ./b \
+    && mkdir -p /usr/local/include/spine && cp b/dist/include/*.h /usr/local/include/spine/ \
+    && cp b/dist/lib/*.a /usr/local/lib
+RUN cd /deps-src/deps/box2d && cmake -B b -D BOX2D_UNIT_TESTS=OFF -D BOX2D_SAMPLES=OFF \
+      -D BOX2D_BENCHMARKS=OFF -D BUILD_SHARED_LIBS=OFF \
+    && cmake --build b --parallel && cmake --install b
+
+ARG DLSH_VERSION=latest
+RUN v=${DLSH_VERSION}; \
+    if [ "$v" = latest ]; then v=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | jq -r .tag_name); fi; \
+    cd /tmp && for p in dg dlsh; do \
+      wget -q https://github.com/SheinbergLab/dlsh/releases/download/$v/dlsh-${p}_${v}_amd64.deb \
+      && dpkg --install dlsh-${p}_${v}_amd64.deb; done && rm -f /tmp/*.deb
