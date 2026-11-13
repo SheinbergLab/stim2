@@ -18,9 +18,10 @@ Self-checking scripts that run inside a real stim2. Each prints `OK` /
 | `test_ack_header.tcl` | the `@` reply-header prefix on the message port (`ACK1 <dequeue> <done> <swapcount> <flipwall_us>\n<result>`), `@!` after-swap stamps, `stimAckHeader` probe, that plain and `!` commands are unchanged, and `stimClock` (`<ticks_ms> <wall_us> <span_us>`: tick lies between the surrounding `@` stamps, wall within 1 s of the client's clock, span small) |
 | `test_frame_log.tcl` | the per-swap frame record (`stimFrameLog host ?0|1?`, dserv datapoint `stim/frame`, see `docs/stim-frame.md`): stands in for dserv on a free port, decodes the 128-byte `>` frames, checks ordering and units of the seven fields, stop/restart, status counts, and that a dead sink only costs dropped records |
 | `test_late_draw.tcl` | the `stimLateDraw` command (opt-in draw-late scheduler, see `docs/late-draw.md`): status dict shape, argument errors, that enabling is refused naming the strategy where there are no flip timestamps (Mac/glfinish) and accepted on a rig with them (then a dynamic group animates without misses and `@!` acks still follow a swap) |
+| `test_gazewin.tcl` | the gaze-contingent pass (`gazewin`, see `docs/gazewin.md`): argument errors, window and scotoma by `gazewin point`, mask colour and alpha, soft edge, lost gaze (mask / show), samples by `gazewin datapoint` (base64 floats, plain numbers, NaN), the background as the mask, a blank display, blur, a custom shader file and its uniforms, a shader that fails to build, and that after `gazewin reset` a frame is byte-identical to one from before the pass was on. Headless or windowed |
 | `test_stimess.tcl` | the `stimess` package (`modules/stimess-1.0.tm`, see `docs/stimess.md`): `stim::bind` / `get` / `count` / event handlers / error counting / `unbind_all` / `bindings_json`, with stim2's `::dsCmds` dispatch imitated and the qpcs procs stubbed |
 
-Four tests are exceptions and run from plain `tclsh`. `test_ack_header.tcl`,
+Five tests are exceptions and run from plain `tclsh`. `test_ack_header.tcl`,
 `test_frame_log.tcl` and `test_late_draw.tcl` are clients against an
 already running stim2 (default `localhost 4612`; the frame-log test's fake
 dserv listens on 127.0.0.1, so that stim2 must be local). To test a build
@@ -29,6 +30,12 @@ beside a live stim2, start it with `--port-base 5610` and pass port 5612:
     tclsh tests/test_ack_header.tcl ?host? ?port?
     tclsh tests/test_frame_log.tcl ?host? ?port?
     tclsh tests/test_late_draw.tcl ?host? ?port?
+    tclsh tests/test_gazewin_client.tcl ?host? ?msgport? ?dsport?
+
+`test_gazewin_client.tcl` also stands in for dserv on the datapoint port
+(port base + 1): samples decoded in C, a static display repainted for
+them at most once per frame, the stale-sample wake-up, the latency record,
+and `gazewin reset` stopping it all.
 
 The draw-late scheduler's arithmetic has a display-free unit check built
 with stim2 (`tests/latedraw_check.cpp`):

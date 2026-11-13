@@ -164,6 +164,7 @@ set(STIM2_SOURCES
     src/framelog.cpp
     src/mirror.cpp
     src/overlay.cpp
+    src/gazewin.cpp
     src/latedraw.cpp
     src/glad.c
     src/rawapi.c

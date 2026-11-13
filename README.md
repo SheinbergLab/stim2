@@ -194,6 +194,15 @@ a `--headless` stim2 renders without a display for that. See
 [docs/stim-frame.md](docs/stim-frame.md) and
 [docs/headless.md](docs/headless.md).
 
+## Gaze-contingent displays
+
+`gazewin` passes every frame through one full-screen shader that knows
+where the eye is: a window around gaze, a scotoma at it, a dimmed or
+blurred periphery, or a custom shader. It runs after the stim's scene, so
+it works over any display without changing the stim, and repaints a static
+display when the gaze moves. Off by default, at the cost of a flag test.
+See [docs/gazewin.md](docs/gazewin.md).
+
 ## Linux Systemd Service
 
 For dedicated stimulus presentation systems (e.g., Raspberry Pi, embedded Linux), stim2 can run as a systemd service using [Cage](https://github.com/cage-kiosk/cage) as a minimal Wayland compositor.
