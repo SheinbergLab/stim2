@@ -61,7 +61,8 @@ struct Sample {
   bool valid = false;             /* finite */
   float x = 0.0f, y = 0.0f;       /* deg */
   unsigned long long ts_us = 0;   /* dserv's stamp; 0 = none (a point) */
-  double arrival_s = 0.0;         /* glfwGetTime() when it was taken */
+  double arrival_s = 0.0;         /* glfwGetTime() when it was taken: latency */
+  double stim_s = 0.0;            /* the stim clock then: its age, for -hold */
   unsigned long long seq = 0;
 };
 
@@ -450,12 +451,12 @@ bool ensure_target(int w, int h, std::string &err)
 
 /* ---- the gaze as the pass sees it -------------------------------------- */
 
-bool is_lost(double now_s)
+bool is_lost(void)
 {
   if (point_on) return false;
   if (!gaze.have || !gaze.valid) return true;
   if (S.lost == LOST_FREEZE) return false;
-  if (S.hold_ms > 0.0f && (now_s - gaze.arrival_s) * 1000.0 > S.hold_ms) return true;
+  if (S.hold_ms > 0.0f && (gazewinStimClock() - gaze.stim_s) * 1000.0 > S.hold_ms) return true;
   return false;
 }
 
@@ -544,7 +545,7 @@ void draw_pass(int w, int h, float halfx, float halfy, GLuint drawfb, double now
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawfb);
   glViewport(0, 0, w, h);
 
-  bool lost = is_lost(now_s);
+  bool lost = is_lost();
   const Sample &g = gaze;
   float gx = point_on || g.have ? g.x : 0.0f;
   float gy = point_on || g.have ? g.y : 0.0f;
@@ -557,7 +558,7 @@ void draw_pass(int w, int h, float halfx, float halfy, GLuint drawfb, double now
   if (L.gaze >= 0) glUniform2f(L.gaze, gx, gy);
   if (L.valid >= 0) glUniform1i(L.valid, lost ? 0 : 1);
   if (L.age_ms >= 0)
-    glUniform1f(L.age_ms, point_on ? 0.0f : g.have ? (float) ((now_s - g.arrival_s) * 1000.0) : 1e9f);
+    glUniform1f(L.age_ms, point_on ? 0.0f : g.have ? (float) ((gazewinStimClock() - g.stim_s) * 1000.0) : 1e9f);
   if (L.time >= 0) glUniform1f(L.time, (float) now_s);
   if (L.radius >= 0) glUniform1f(L.radius, S.radius);
   if (L.edge >= 0) glUniform1f(L.edge, S.edge);
@@ -673,6 +674,7 @@ void take_sample(int type, unsigned long long ts, const char *val, size_t n, dou
   gaze.y = (float) y;
   gaze.ts_us = ts;
   gaze.arrival_s = now_s;
+  gaze.stim_s = gazewinStimClock();
   gaze.seq = ++seq_counter;
 }
 
@@ -766,13 +768,13 @@ int gazewinRepaintDue(double now_s, double *wait_s)
   *wait_s = -1.0;
   if (!on || !prog) return 0;
   if (settings_dirty) return 1;
-  bool lost = is_lost(now_s);
+  bool lost = is_lost();
   if ((lost ? 1 : 0) != drawn_lost) return 1;
   unsigned long long cur = gaze.seq;
   if (!lost && cur != drawn_seq) return 1;
   /* nothing new: when will the current sample go stale? */
   if (!lost && !point_on && gaze.have && S.lost != LOST_FREEZE && S.hold_ms > 0.0f) {
-    double t = gaze.arrival_s + S.hold_ms / 1000.0 - now_s;
+    double t = gaze.stim_s + S.hold_ms / 1000.0 - gazewinStimClock();
     *wait_s = t > 0.0 ? t : 0.0;
   }
   return 0;
@@ -836,7 +838,6 @@ Tcl_Obj *settings_dict(void)
 
 Tcl_Obj *status_dict(void)
 {
-  double now = tclNow();
   Tcl_Obj *d = settings_dict();
   auto put = [&](const char *k, Tcl_Obj *v) { Tcl_DictObjPut(nullptr, d, Tcl_NewStringObj(k, -1), v); };
   put("on", Tcl_NewIntObj(on ? 1 : 0));
@@ -857,8 +858,8 @@ Tcl_Obj *status_dict(void)
     Tcl_ListObjAppendElement(nullptr, g, Tcl_NewDoubleObj(gaze.y));
   }
   put("gaze", g);
-  put("age_ms", Tcl_NewDoubleObj(gaze.have ? (now - gaze.arrival_s) * 1000.0 : -1.0));
-  put("gaze_lost", Tcl_NewIntObj(is_lost(now) ? 1 : 0));   /* "lost" is the policy */
+  put("age_ms", Tcl_NewDoubleObj(gaze.have ? (gazewinStimClock() - gaze.stim_s) * 1000.0 : -1.0));
+  put("gaze_lost", Tcl_NewIntObj(is_lost() ? 1 : 0));   /* "lost" is the policy */
   put("stages", Tcl_NewWideIntObj(stages));
   put("repaints", Tcl_NewWideIntObj(composites));
   put("arrival_to_flip_ms", ring_stats(arrival_to_flip));
@@ -982,6 +983,7 @@ int gazewinCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
     gaze.x = (float) x; gaze.y = (float) y;
     gaze.ts_us = 0;
     gaze.arrival_s = tclNow();
+    gaze.stim_s = gazewinStimClock();
     gaze.seq = ++seq_counter;
     settings_dirty = true;
     return TCL_OK;

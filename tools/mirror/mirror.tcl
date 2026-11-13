@@ -1111,6 +1111,21 @@ proc gaze_cmd_now {} {
 }
 proc gaze_hidden {g} { string match "overlay set gaze -show 0*" $g }
 
+# The newest sample for the stim2's gazewin, whatever the overlay shows.
+# The rig's stim2 got the gaze from dserv itself; the mirror's runs the
+# rig's `gazewin source` but is not subscribed (it is not a rig), so it
+# gets the samples here, as a replay gives them (`gazewin datapoint`, which
+# takes only its source's).  It goes with every rig frame and every gaze
+# repaint, so the window follows the eye between rig frames as on the rig.
+# ("" with no live sample: gazewin's -hold then calls the gaze lost.  The
+# catch: a stim2 without gazewin.)
+proc gazewin_feed {} {
+    global gaze opt
+    if {![llength $gaze]} { return "" }
+    lassign [lindex $gaze end] arrived ts x y
+    return "catch {gazewin datapoint [list $opt(eye)] 2 $ts 0 [list "$x $y"]}\n"
+}
+
 # a touch: a disc where the finger is, from the press (following a drag)
 # to the release (3 s at most without news), then a fainter one at the
 # release point for 300 ms
@@ -1135,6 +1150,7 @@ proc overlay_now {} {
     if {$opt(eye) ne "off"} {
         set g [gaze_cmd_now]
         append s "if {\[::mirror_shows gaze\]} {$g} else {overlay set gaze -show 0; overlay set gaze_trail -show 0}\n"
+        append s [gazewin_feed]
     }
     if {$opt(touch) ne "off"} {
         append s "if {\[::mirror_shows touch\]} {[touch_cmd_now]} else {overlay set touch -show 0}\n"

@@ -199,6 +199,8 @@ static inline double stimClockNow(void)
   return glfwGetTime();
 }
 
+extern "C" double gazewinStimClock(void) { return stimClockNow(); }
+
 void updateTimes(void);
 static void frameClockHold(void)
 {
@@ -2160,12 +2162,25 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
      SwapCount, frame record or frame scripts */
   bool frameRepaint(void)
   {
-    if (!scene_valid || scene_w != winWidth || scene_h != winHeight) return false;
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, scene_fbo);
-    glReadBuffer(GL_COLOR_ATTACHMENT0);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawFramebuffer());
-    glBlitFramebuffer(0, 0, winWidth, winHeight, 0, 0, winWidth, winHeight,
-                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    /* under gazewin the saved scene has the pass in it, at the gaze of its
+       frame: draw the pass again from gazewin's own copy of the scene, at
+       the gaze now (a mirror feeds it between rig frames).  That needs no
+       overlay; with one, it is kept as the scene for the next repaint. */
+    glBindVertexArray(vao);
+    if (gazewinWanted() &&
+        gazewinComposite(winWidth, winHeight, HALF_SCREEN_DEG_X, HALF_SCREEN_DEG_Y,
+                         drawFramebuffer(), glfwGetTime())) {
+      glBindFramebuffer(GL_FRAMEBUFFER, drawFramebuffer());
+      if (overlayCount()) sceneSave();
+    }
+    else {
+      if (!scene_valid || scene_w != winWidth || scene_h != winHeight) return false;
+      glBindFramebuffer(GL_READ_FRAMEBUFFER, scene_fbo);
+      glReadBuffer(GL_COLOR_ATTACHMENT0);
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawFramebuffer());
+      glBlitFramebuffer(0, 0, winWidth, winHeight, 0, 0, winWidth, winHeight,
+                        GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, drawFramebuffer());
     glReadBuffer(drawnBuffer());
     overlayDraw(winWidth, winHeight, HALF_SCREEN_DEG_X, HALF_SCREEN_DEG_Y);

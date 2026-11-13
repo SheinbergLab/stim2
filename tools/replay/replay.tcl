@@ -25,7 +25,8 @@
 #                      to this
 #       -stream NAME   also inject records named NAME (repeatable); the
 #                      streams in the file's stim/bind table are always
-#                      injected
+#                      injected, and so is gazewin's source (named by the
+#                      session's `gazewin source` commands)
 #       -dry           read and plan, print the timeline summary, send nothing
 #       -verbose       print every event as it is sent
 #       -dumpplan F    with -render, write the frame-locked plan to F: every
@@ -226,7 +227,7 @@ run {
                -eye $opt(eye) -touch $opt(touch)]
     if {$opt(render) ne "" && $opt(dumpplan) ne ""} { replay::dumpplan $P $opt(dumpplan) }
 }
-foreach v {script script_path libs stimdg stimdg_b64 bind_names obs_note counts hashed eye_recs} {
+foreach v {script script_path libs stimdg stimdg_b64 bind_names obs_note counts hashed eye_recs gazewin_sources} {
     set $v [replay::get $S $v]
 }
 array set geom [replay::get $S geom]
@@ -243,6 +244,14 @@ if {[info exists geom(halfx)] && [info exists geom(halfy)]} {
 }
 puts "          $bg_note"
 if {$obs_note ne ""} { puts "  NOTE: $obs_note" }
+foreach n $gazewin_sources {
+    set c [expr {[dict exists $counts $n] ? [dict get $counts $n] : 0}]
+    if {$c} {
+        puts "  gazewin source $n: $c records, injected"
+    } else {
+        puts "  NOTE: the session's gazewin source $n was not logged: gazewin will see the gaze as lost"
+    }
+}
 puts "  file    [format %.1f [expr {($t_last - $t_first)/6e7}]] min, $ntrials observation periods, [dict get $counts stim/cmd] commands ($hashed hash-only, skipped)"
 puts "  playing $span_note: $ncmd commands, $ndp datapoints, span [format %.1f [expr {([lindex $events end 0] - [lindex $events 0 0])/1e6}]] s, speed $opt(speed), gaps capped at $opt(gap) s"
 if {[llength $bind_names] == 0 && [llength $opt(streams)] == 0} {

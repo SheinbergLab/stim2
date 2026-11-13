@@ -39,11 +39,18 @@ did.
 - **Live**: each forwarded sample is decoded in C in `processDSCommands`,
   without a Tcl binding. The Tcl side still sees it (`::dsVals`, and a
   script's own `stim::bind` of the same name still works).
+- **Mirror**: a mirror's stim2 runs the rig's commands, `gazewin source`
+  among them, but is not subscribed to dserv itself. The mirror already
+  follows the gaze for its overlay disc, and it hands each newest sample to
+  `gazewin datapoint` with every frame and every gaze repaint. So the
+  mirror shows the window where the rig did, and moves it between rig
+  frames as the eye moves over a static display.
 - **Replay**: `stim::inject` hands the source's datapoints to `gazewin
-  datapoint`. Replay feeds the streams named in the session's `stim/bind`
-  table; the gaze source is not one of them (being listed there would
-  change how ESS logs it), so pass it: `replay ... -stream
-  eyetracking/position`. The session must have logged that stream.
+  datapoint`. Replay finds the source in the session's `gazewin source`
+  commands and injects its records along with the streams of the
+  `stim/bind` table; `-dry` says how many it found. The session must have
+  logged that stream (`eyetracking/position` is, by default). If it did
+  not, replay says so and the render shows the gaze as lost.
 - **Tests**: `gazewin point x y` holds a fixed gaze (never stale) until
   `gazewin point off`.
 
@@ -117,6 +124,14 @@ waits until `lastFlip + period - budget` (see `-late`), so the newest
 sample makes the flip, and at most one happens per refresh however fast
 samples arrive. With `-hold`, the loop also wakes when the last sample
 goes stale, so a tracker that stops sending masks the screen by itself.
+
+A sample's age, for `-hold` and the shader's `age_ms`, is on the stim
+clock (`stimClockNow`). Live, that is the real clock. In a mirror or a
+replay render it is the stepped clock, so a render that runs faster or
+slower than real time masks exactly where the rig did. The latency record
+and the repaint timing stay on the real clock. In a stepped stim2,
+`frameRepaint` draws the pass again from its own copy of the scene at the
+newest sample, rather than re-showing the saved frame.
 
 A dynamic display draws every frame anyway; the pass uses the newest
 sample at draw time, which with `stimLateDraw` on is just before the
@@ -215,7 +230,7 @@ The pass sets these uniforms when the shader declares them:
 | `halfdeg` | `vec2` | half the screen in degrees (`HalfScreenDegreeX/Y`) |
 | `gaze` | `vec2` | degrees, origin at the centre, y up |
 | `valid` | `int` | 1, or 0 while gaze is lost |
-| `age_ms` | `float` | age of the sample |
+| `age_ms` | `float` | age of the sample, on the stim clock |
 | `time` | `float` | seconds (glfwGetTime) |
 | `radius`, `edge`, `blur` | `float` | from `gazewin set` |
 | `mode`, `lostmode` | `int` | 0 window / 1 scotoma; 0 mask / 1 show |
@@ -246,12 +261,20 @@ the one before it, headless and in a window.
     stim2 --headless -w 320 -h 180 --port-base 5610 &
     tclsh tests/test_gazewin_client.tcl localhost 5612 5611
 
+    stim2 --headless -w 320 -h 180 --port-base 5610 -f /abs/path/tests/test_gazewin_step.tcl
+
 The first checks pixels from inside stim2. The second plays dserv's role
 on the datapoint port and checks the live path: samples decoded in C, the
 repaint of a static display and its rate, the stale-sample wake-up, the
 latency record, and that `reset` stops it all.
 
+`test_gazewin_step.tcl` covers the stepped clock that a mirror and a replay
+render run on. It checks that `frameRepaint` moves the window with an
+overlay up and without one, and that `-hold` ages samples by the stim
+clock, not by wall time.
+
 Not yet exercised: the GLES build (Raspberry Pi); the late repaint
 timing, which needs flip timestamps (a Linux rig; a Mac has none and
-repaints at once); the Linux and Windows builds; a live mirror and a
-replay of a session that used the pass; and a real eye tracker.
+repaints at once); the Windows build; and a real eye tracker. A live
+mirror and a replay render of a session that used the pass were checked
+on a desk rig with the virtual eye.

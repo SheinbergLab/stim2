@@ -4,7 +4,10 @@
 draws, frame for frame, while the session runs. The data comes from the
 rig's dserv, not from the rig's stim2. The live gaze (`eyetracking/position`)
 is drawn over it. The rig's stim2 never gets eye data, so the mirror
-subscribes to the gaze itself.
+subscribes to the gaze itself. If the session uses a gaze-contingent
+display (`gazewin`, see `docs/gazewin.md`), the mirror also hands each
+newest sample to its stim2's `gazewin`, so the window is drawn where the
+rig drew it. `-eye off` turns that off too.
 
 The mirror's stim2 can be:
 

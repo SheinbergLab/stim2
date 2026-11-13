@@ -43,6 +43,13 @@ extern "C" {
 int  gazewinWanted(void);
 int  gazewinSourceSet(void);
 
+/* stim2.cpp: the stim clock (stimClockNow).  A sample's age, for -hold and
+   the shader's age_ms, is on this clock: the real one live, the stepped
+   one in a replay or a mirror, so a render that runs faster or slower than
+   real time ages samples as the rig did.  The latency record and the
+   repaint timing keep glfwGetTime(). */
+double gazewinStimClock(void);
+
 /* processDSCommands: if `name` is the source, take the sample from the
    line as received ("name type ts len {value}").  now_s: glfwGetTime(). */
 void gazewinMaybeSample(const char *name, const char *line, double now_s);

@@ -29,7 +29,7 @@ columns empty, which the script reports. The `.ess` always works.
 | `-trial N`, `-trials A-B` | one trial or a range, 1-based by observation period. A trial's window runs from the previous period's end to its own, so the commands that set it up (`nexttrial`, `targets_on`) travel with it. Default: the whole file. |
 | `-speed X` | playback rate, default 1.0. `0` sends as fast as stim2 takes it. |
 | `-gap S` | longest pause kept between two events (default 1 s). Idle time between trials is compressed to this. |
-| `-stream NAME` | also inject records named `NAME`. The streams named in the file's `stim/bind` table are always injected. |
+| `-stream NAME` | also inject records named `NAME`. The streams named in the file's `stim/bind` table are always injected, and so is the source of any `gazewin source` command in the file. Numeric records are injected as text (`"x y"`), as the obs reader gives them. |
 | `-dry` | read and plan, print the summary and the first events, send nothing. |
 | `-verbose` | print every event as it goes out. |
 | `-render OUT` | frame-locked into a movie on the rig's timeline (below). `OUT` ending `.mp4`/`.mov`/`.mkv` goes through ffmpeg; anything else gets raw RGBA (a file, or `"|command"`). `-speed` is ignored; `-gap` compresses only when given. |

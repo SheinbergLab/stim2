@@ -37,7 +37,8 @@ namespace eval replay {
     # what load fills in a session's namespace (geom is an array)
     variable state_vars {path script script_path script_meta libs bind_names stimdg
         stimdg_b64 obs_begin obs_end events frames eye_recs em_settings counts
-        hashed stream_set records obs_note obs_frames_narrow geom touches}
+        hashed stream_set records obs_note obs_frames_narrow geom touches
+        gazewin_sources}
 }
 
 proc replay::say {msg} { puts "  $msg" }
@@ -98,6 +99,7 @@ proc replay::load {file args} {
     set counts [dict create]
     set hashed 0
     set stream_set [dict create]
+    set gazewin_sources {}  ;# streams named by `gazewin source` commands
     set records {}
     set obs_note ""
     set obs_frames_narrow 0   ;# an obs DG whose stim/frame columns are there but empty
@@ -119,6 +121,17 @@ proc replay::load {file args} {
     }
     foreach n $bind_names { dict set stream_set $n 1 }
     dict set stream_set stimdg 1      ;# stim2 subscribes to it (readdg)
+    # gazewin's source, named by the session's own `gazewin source NAME`:
+    # not in stim/bind, but the rig's stim2 subscribed to it and counted
+    # each sample in ds_dispatched, and stim::inject hands it to gazewin.
+    # (The session must have logged it; planko's gaze window does.)
+    foreach e $events {
+        if {[lindex $e 1] ne "cmd"} continue
+        foreach {- n} [regexp -all -inline {gazewin\s+source\s+\{?([^\s;\}\]]+)} [lindex $e 2]] {
+            dict set stream_set $n 1
+            if {$n ni $gazewin_sources} { lappend gazewin_sources $n }
+        }
+    }
     foreach r $records {
         lassign $r ts nm type data
         if {[dict exists $stream_set $nm]} { lappend events [list $ts dp $nm $type $data] }
@@ -139,6 +152,23 @@ proc replay::load {file args} {
 # ---------------------------------------------------------------------------
 # the .ess reader
 # ---------------------------------------------------------------------------
+
+# A stream record's value as stim::inject carries it.  The file holds the raw
+# bytes; numbers become text ("x y"), as the obs reader gives them: a bound
+# handler splits the value as text, and gazewin reads plain numbers first.
+# Other binary types go as base64, dserv's own wire form for them; text types
+# (string, script, json) go as they are.  Raw bytes cannot cross the message
+# port in a command.
+proc replay::_wire_value {type data} {
+    switch -- $type {
+        1 - 7 - 8 - 11 { return $data }
+        0 { set f cu* } 2 { set f r* } 3 { set f q* } 4 { set f s* } 5 { set f i* }
+        default { return [binary encode base64 $data] }
+    }
+    binary scan $data $f v
+    return [join $v " "]
+}
+
 proc replay::_read_ess {S fname} {
     _vars $S
     set h [dslog::open $path r]
@@ -225,7 +255,9 @@ proc replay::_read_ess {S fname} {
                 # stream records: all kept for now, filtered once bind_names is
                 # known (stim/bind may come after them, and a bound stream can
                 # be named anything -- runner/press_cmd, not only ess/*)
-                lappend records [list [dict get $d timestamp] $nm [dict get $d type] [dict get $d data]]
+                set type [dict get $d type]
+                lappend records [list [dict get $d timestamp] $nm $type \
+                                     [_wire_value $type [dict get $d data]]]
             }
         }
     }
@@ -1126,7 +1158,12 @@ proc replay::_sink_target {out movie_out blend fps win_w win_h render_fps crf ke
     # "|command" is always a command (it may well end in .mp4 itself); a
     # movie file goes through ffmpeg
     if {!$movie_out} { return $out }
-    set vf [expr {$blend > 1 ? "-vf tmix=frames=$blend,fps=$fps" : ""}]
+    # yuv420p needs even sides: a window of odd size gets a row or column
+    # of padding, not a failed encode
+    set f {}
+    if {$blend > 1} { lappend f tmix=frames=$blend fps=$fps }
+    if {$win_w % 2 || $win_h % 2} { lappend f "pad=[expr {($win_w + 1) & ~1}]:[expr {($win_h + 1) & ~1}]" }
+    set vf [expr {[llength $f] ? "-vf [join $f ,]" : ""}]
     set g [expr {$keyint ne "" ? "-g $keyint" : ""}]
     return "|ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgba -s ${win_w}x${win_h}\
  -r $render_fps -i - $vf -c:v libx264 -preset medium -tune animation -crf $crf $g\
