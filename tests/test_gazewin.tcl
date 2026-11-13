@@ -100,6 +100,12 @@ close $f
 proc f2b64 { x y } { binary encode base64 [binary format f2 [list $x $y]] }
 
 # Each step: a setup script, then a check run on the next grabbed frame.
+# (No comments inside the list: they would be list elements.)
+#
+# The graded-blur steps (-falloff) use scene B's black/white edge at x = 0
+# and measure the bleed 0.8 deg to its right.  Gaze at -2 (radius 1) puts
+# the edge 1 deg into the treated region: uniform blur 6 smears it, graded
+# hardly at all.  Gaze at -14 puts it 13 deg in: graded smears it too.
 set ::steps {
     { {}
       { set ::base $bytes
@@ -181,7 +187,27 @@ set ::steps {
         ck "blur 6: and left ($r2)" [expr {$r2 < 235}]
         ck "blur 6: the window is exact" [near [at $bytes -8 0] {255 255 255} 0] } }
 
-    { { sceneA; gazewin set -blur 0
+    { { ck "-falloff -1 refused" [catch { gazewin set -falloff -1 }]
+        gazewin point -2 0 }
+      { lassign [at $bytes 0.8 0] ::r_uni
+        ck "falloff 0 (uniform blur 6), near the window: smeared ($::r_uni)" [expr {$::r_uni > 40}] } }
+
+    { { gazewin set -falloff 0.5
+        ck "settings report falloff 0.5" [expr {[dict get [gazewin set] falloff] == 0.5}] }
+      { lassign [at $bytes 0.8 0] r
+        ck "falloff 0.5, 1 deg past the window: nearly sharp ($r, uniform $::r_uni)" [expr {$r < 20 && $r < $::r_uni - 30}]
+        ck "falloff 0.5: the window is exact" [near [at $bytes -2 0] {255 255 255} 0] } }
+
+    { { gazewin point -14 0 }
+      { lassign [at $bytes 0.8 0] r
+        ck "falloff 0.5, 13 deg past the window: smeared ($r)" [expr {$r > 40}]
+        ck "falloff 0.5: the window is exact there too" [near [at $bytes -14 0] {255 255 255} 0] } }
+
+    { { gazewin point off }
+      { lassign [at $bytes 0.8 0] r
+        ck "falloff, gaze lost: the whole screen at blur 6 ($r)" [expr {$r > 40}] } }
+
+    { { sceneA; gazewin point 0 0; gazewin set -blur 0 -falloff 0
         ck "shader file loads" [expr {[gazewin shader $::shaderfile] eq $::shaderfile}]
         ck "its uniform default is read" [expr {[gazewin uniform tint] eq {1.0 0.0 0.0 1.0}}] }
       { ck "custom shader: its output (red)" [near [at $bytes 0 0] {255 0 0}] } }
@@ -198,10 +224,11 @@ set ::steps {
         ck "off returns 0" [expr {[gazewin off] == 0}] }
       { ck "off: the scene untouched" [expr {[near [at $bytes 0 0] {255 255 255}] && [near [at $bytes 6 3] {255 255 255}]}] } }
 
-    { { gazewin on; gazewin set -radius 3 -mode scotoma; gazewin source test/gaze; gazewin reset
+    { { gazewin on; gazewin set -radius 3 -mode scotoma -falloff 1; gazewin source test/gaze; gazewin reset
         set st [gazewin]
         ck "reset: off, no source, defaults" [expr {[dict get $st on] == 0 && [dict get $st source] eq "" &&
-            [dict get $st mode] eq "window" && [dict get $st radius] == 5.0 && [dict get $st point] eq "off"}] }
+            [dict get $st mode] eq "window" && [dict get $st radius] == 5.0 && [dict get $st falloff] == 0.0 &&
+            [dict get $st point] eq "off"}] }
       { ck "reset: the frame is byte-identical to before the pass was ever on" [expr {$bytes eq $::base}] } }
 }
 

@@ -42,6 +42,8 @@ struct Settings {
   bool color_bg = true;           /* the mask is the background colour */
   float color[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
   float blur = 0.0f;              /* max mip level in the treated region */
+  float falloff = 0.0f;           /* deg of blur per deg into the treated
+                                     region; 0 = uniform `blur` */
   int lost = LOST_MASK;
   float hold_ms = 100.0f;         /* a sample older than this is lost; 0 never */
   double late_ms = -1.0;          /* repaint budget; -1 = follow stimLateDraw */
@@ -107,7 +109,7 @@ std::map<std::string, std::vector<float>> uniforms;
 struct Loc {
   GLint scene = -1, resolution = -1, halfdeg = -1, gaze = -1, valid = -1,
     age_ms = -1, time = -1, radius = -1, edge = -1, mode = -1,
-    maskcolor = -1, blur = -1, lostmode = -1;
+    maskcolor = -1, blur = -1, falloff = -1, lostmode = -1;
 } L;
 
 #ifdef STIM2_USE_GLES
@@ -128,7 +130,13 @@ const char *VS_BODY =
    full treatment -- the scene blurred to `blur` mip levels, then mixed
    toward maskcolor by its alpha.  So maskcolor alpha 1 hides, alpha 0.5
    halves the contrast toward the mask colour, alpha 0 with blur > 0 only
-   blurs. */
+   blurs.
+
+   falloff > 0 grades the blur: the box is falloff * (distance into the
+   treated region) degrees wide, so it starts at nothing at the window's
+   edge and widens linearly with eccentricity (as acuity falls), as a mip
+   level log2(width in pixels), capped at `blur`.  While gaze is lost there
+   is no eccentricity and the whole screen gets `blur`. */
 const char *FS_BODY =
   "uniform sampler2D scene;\n"
   "uniform vec2 resolution;\n"
@@ -140,11 +148,13 @@ const char *FS_BODY =
   "uniform float radius;\n"
   "uniform float edge;\n"
   "uniform float blur;\n"
+  "uniform float falloff;\n"
   "uniform vec4 maskcolor;\n"
   "out vec4 frag;\n"
   "void main() {\n"
   "  vec4 s = texelFetch(scene, ivec2(gl_FragCoord.xy), 0);\n"
   "  float w;\n"
+  "  float lod = blur;\n"
   "  if (valid == 0) {\n"
   "    w = lostmode == 1 ? 0.0 : 1.0;\n"
   "  } else {\n"
@@ -154,10 +164,15 @@ const char *FS_BODY =
   "      ? 1.0 - smoothstep(radius - 0.5 * edge, radius + 0.5 * edge, d)\n"
   "      : (d <= radius ? 1.0 : 0.0);\n"
   "    w = mode == 0 ? 1.0 - inside : inside;\n"
+  "    if (falloff > 0.0) {\n"
+  "      float into = mode == 0 ? d - radius : radius - d;\n"
+  "      float px = falloff * into * resolution.x / (2.0 * halfdeg.x);\n"
+  "      lod = clamp(log2(max(px, 1.0)), 0.0, blur);\n"
+  "    }\n"
   "  }\n"
   "  if (w <= 0.0) { frag = s; return; }\n"
   "  vec4 t = s;\n"
-  "  if (blur > 0.0) t = textureLod(scene, gl_FragCoord.xy / resolution, blur * w);\n"
+  "  if (blur > 0.0) t = textureLod(scene, gl_FragCoord.xy / resolution, lod * w);\n"
   "  t.rgb = mix(t.rgb, maskcolor.rgb, maskcolor.a);\n"
   "  frag = vec4(mix(s.rgb, t.rgb, w), s.a);\n"
   "}\n";
@@ -224,6 +239,7 @@ bool build(const std::string &vs_body, const std::string &fs_body, std::string &
   L.mode = glGetUniformLocation(prog, "mode");
   L.maskcolor = glGetUniformLocation(prog, "maskcolor");
   L.blur = glGetUniformLocation(prog, "blur");
+  L.falloff = glGetUniformLocation(prog, "falloff");
   L.lostmode = glGetUniformLocation(prog, "lostmode");
   if (!vao) glGenVertexArrays(1, &vao);
   return true;
@@ -376,6 +392,7 @@ void draw_pass(int w, int h, float halfx, float halfy, GLuint drawfb, double now
   if (L.edge >= 0) glUniform1f(L.edge, S.edge);
   if (L.mode >= 0) glUniform1i(L.mode, S.mode);
   if (L.blur >= 0) glUniform1f(L.blur, S.blur);
+  if (L.falloff >= 0) glUniform1f(L.falloff, S.falloff);
   if (L.lostmode >= 0) glUniform1i(L.lostmode, S.lost == LOST_SHOW ? 1 : 0);
   if (L.maskcolor >= 0) {
     if (S.color_bg)   /* the background, at the alpha given with it */
@@ -654,6 +671,7 @@ Tcl_Obj *settings_dict(void)
     put("color", c);
   }
   put("blur", Tcl_NewDoubleObj(S.blur));
+  put("falloff", Tcl_NewDoubleObj(S.falloff));
   put("lost", Tcl_NewStringObj(S.lost == LOST_MASK ? "mask" : S.lost == LOST_SHOW ? "show" : "freeze", -1));
   put("hold", Tcl_NewDoubleObj(S.hold_ms));
   put("late", Tcl_NewDoubleObj(S.late_ms));
@@ -877,7 +895,8 @@ int gazewinCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
         memcpy(n.color, c, sizeof(c));
         n.color_bg = false;
       }
-      else if (opt == "-radius" || opt == "-edge" || opt == "-blur" || opt == "-hold" || opt == "-late") {
+      else if (opt == "-radius" || opt == "-edge" || opt == "-blur" || opt == "-falloff" ||
+               opt == "-hold" || opt == "-late") {
         if (Tcl_GetDoubleFromObj(interp, val, &d) != TCL_OK) return TCL_ERROR;
         bool neg_ok = opt == "-late";
         if (d < 0.0 && !(neg_ok && d == -1.0)) {
@@ -887,11 +906,12 @@ int gazewinCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
         if (opt == "-radius") n.radius = (float) d;
         else if (opt == "-edge") n.edge = (float) d;
         else if (opt == "-blur") n.blur = (float) d;
+        else if (opt == "-falloff") n.falloff = (float) d;
         else if (opt == "-hold") n.hold_ms = (float) d;
         else n.late_ms = d;
       }
       else {
-        Tcl_SetObjResult(interp, Tcl_ObjPrintf("gazewin set: unknown option \"%s\" (-mode -radius -edge -color -blur -lost -hold -late)", opt.c_str()));
+        Tcl_SetObjResult(interp, Tcl_ObjPrintf("gazewin set: unknown option \"%s\" (-mode -radius -edge -color -blur -falloff -lost -hold -late)", opt.c_str()));
         return TCL_ERROR;
       }
     }

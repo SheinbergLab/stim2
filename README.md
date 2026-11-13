@@ -198,9 +198,10 @@ a `--headless` stim2 renders without a display for that. See
 
 `gazewin` passes every frame through one full-screen shader that knows
 where the eye is: a window around gaze, a scotoma at it, a dimmed or
-blurred periphery, or a custom shader. It runs after the stim's scene, so
-it works over any display without changing the stim, and repaints a static
-display when the gaze moves. Off by default, at the cost of a flag test.
+blurred periphery (uniform, or graded with eccentricity), or a custom
+shader. It runs after the stim's scene, so it works over any display
+without changing the stim, and repaints a static display when the gaze
+moves. Off by default, at the cost of a flag test.
 See [docs/gazewin.md](docs/gazewin.md).
 
 ## Linux Systemd Service

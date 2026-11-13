@@ -73,7 +73,8 @@ the next frame or repaint.
 | `-radius` | 5.0 | degrees |
 | `-edge` | 0.5 | degrees: width of the soft edge, centred on the radius; 0 is a hard edge |
 | `-color` | `background` | the mask colour: `background` or `{background a}` (stim2's background, tracking `setBackground`, at alpha `a`, default 1) or `{r g b ?a?}` 0..1. Its alpha is how strongly the treated region is pulled to it: 1 hides, 0.5 halves the contrast toward it, 0 leaves only the blur |
-| `-blur` | 0 | mip levels of blur in the treated region (0 none; each level halves the resolution). Box-filtered mips, trilinear: a cheap blur, not a Gaussian |
+| `-blur` | 0 | mip levels of blur in the treated region (0 none; each level halves the resolution, so level N averages about 2^N pixels). Box-filtered mips, trilinear: a cheap blur, not a Gaussian. With `-falloff`, the most blur anywhere |
+| `-falloff` | 0 | grades the blur with eccentricity: degrees of blur per degree into the treated region. 0 is uniform `-blur` everywhere treated. See below |
 | `-lost` | `mask` | while gaze is lost: `mask` treats the whole screen, `show` shows the scene untouched, `freeze` keeps the last position |
 | `-hold` | 100 | ms: a sample older than this is lost (0: never) |
 | `-late` | -1 | ms before the next vblank to repaint a static display; -1 follows `stimLateDraw` (its budget while it is on, else repaint at once) |
@@ -120,6 +121,33 @@ goes stale, so a tracker that stops sending masks the screen by itself.
 A dynamic display draws every frame anyway; the pass uses the newest
 sample at draw time, which with `stimLateDraw` on is just before the
 vblank.
+
+**Graded blur.** With `-falloff F`, a pixel `x` degrees into the treated
+region (past the window's edge, or inside a scotoma's) is blurred over a
+box about `F * x` degrees wide: nothing at the edge, then wider in
+proportion to the distance, as acuity falls off with eccentricity. The
+width becomes a mip level, log2 of the width in pixels (the pixels per
+degree come from `HalfScreenDegreeX`, so the same `F` blurs the same
+number of degrees on any display), capped at `-blur`. So `-falloff 0.1
+-blur 6` blurs 0.5 deg at 5 deg past the edge and 1 deg at 10 deg.
+`-radius 0` grades from the gaze point itself. While gaze is lost there is
+no eccentricity: the whole screen gets `-blur`. A blur-only periphery
+takes `-color {background 0}` (or any alpha 0), so nothing is dimmed. It
+costs what uniform blur costs: the mipmaps are the same, and each pixel
+still reads the scene once.
+
+**Pixel values, not light.** The blur and the mask alpha work on the
+values in the framebuffer: the mipmaps average them, and `-color`'s alpha
+mixes them. stim2 does no gamma handling, so these are what the display
+is sent. On a linearized display (a Display++, or any monitor driven
+through a calibrated gamma table) values are proportional to luminance
+and both are luminance-correct: a blur preserves the mean luminance, and
+alpha 0.5 halves the luminance contrast. On an uncorrected display
+(gamma about 2.2) they are not: a blurred region comes out darker than
+the light it averages (thin white lines on a dark ground can lose more
+than half their mean luminance), so blur also lowers contrast, and alpha
+0.5 is not half the luminance contrast. Use a linearized display for
+blur and mask conditions whose luminance matters.
 
 **Not covered**: groups in `SWAP_ONLY` or `NO_SWAP` mode draw outside the
 normal path and are not passed.
