@@ -73,7 +73,7 @@ the next frame or repaint.
 | `-radius` | 5.0 | degrees |
 | `-edge` | 0.5 | degrees: width of the soft edge, centred on the radius; 0 is a hard edge |
 | `-color` | `background` | the mask colour: `background` or `{background a}` (stim2's background, tracking `setBackground`, at alpha `a`, default 1) or `{r g b ?a?}` 0..1. Its alpha is how strongly the treated region is pulled to it: 1 hides, 0.5 halves the contrast toward it, 0 leaves only the blur |
-| `-blur` | 0 | mip levels of blur in the treated region (0 none; each level halves the resolution, so level N averages about 2^N pixels). Box-filtered mips, trilinear: a cheap blur, not a Gaussian. With `-falloff`, the most blur anywhere |
+| `-blur` | 0 | mip levels of blur in the treated region (0 none; each level halves the resolution, so level N averages about 2^N pixels). Box-filtered mips read with a cubic B-spline (below): smooth and close to a Gaussian, though not an exact one. With `-falloff`, the most blur anywhere |
 | `-falloff` | 0 | grades the blur with eccentricity: degrees of blur per degree into the treated region. 0 is uniform `-blur` everywhere treated. See below |
 | `-lost` | `mask` | while gaze is lost: `mask` treats the whole screen, `show` shows the scene untouched, `freeze` keeps the last position |
 | `-hold` | 100 | ms: a sample older than this is lost (0: never) |
@@ -133,8 +133,21 @@ number of degrees on any display), capped at `-blur`. So `-falloff 0.1
 `-radius 0` grades from the gaze point itself. While gaze is lost there is
 no eccentricity: the whole screen gets `-blur`. A blur-only periphery
 takes `-color {background 0}` (or any alpha 0), so nothing is dimmed. It
-costs what uniform blur costs: the mipmaps are the same, and each pixel
-still reads the scene once.
+costs what uniform blur costs: the same mipmaps and the same reads.
+
+**How the blur is read.** The mipmaps are 2x2 box averages. Read with
+the hardware's bilinear filter, their texels show as diamonds and blocks
+that shift as gaze moves and a pixel's level changes, and the periphery
+is sensitive to that kind of flicker. So each level is read with a cubic
+B-spline instead (four bilinear reads), and two levels are mixed for a
+fractional one: eight reads per blurred pixel, one for every other
+pixel. The result is smooth and close to a Gaussian. The level is
+lowered by 0.37 to compensate for the B-spline's wider spread, so a
+`-blur` or `-falloff` value spreads as far as it did with bilinear
+reads. An exact Gaussian (a pyramid built with a Gaussian filter instead
+of box averages) would cost a few small extra passes per frame, easily
+affordable on the desktop GPUs that gaze-contingent rigs use (a Pi is not
+a target for this pass).
 
 **Pixel values, not light.** The blur and the mask alpha work on the
 values in the framebuffer: the mipmaps average them, and `-color`'s alpha

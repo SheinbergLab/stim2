@@ -136,7 +136,16 @@ const char *VS_BODY =
    treated region) degrees wide, so it starts at nothing at the window's
    edge and widens linearly with eccentricity (as acuity falls), as a mip
    level log2(width in pixels), capped at `blur`.  While gaze is lost there
-   is no eccentricity and the whole screen gets `blur`. */
+   is no eccentricity and the whole screen gets `blur`.
+
+   The mips are 2x2 box averages; read with the hardware's bilinear filter
+   their texels show as diamonds and blocks, and shift as the level changes
+   with gaze.  So a level is read with a cubic B-spline instead (four
+   bilinear reads, Sigg & Hadwiger's trick), two levels mixed for a
+   fractional one: smooth, near-Gaussian.  The B-spline spreads a level
+   wider than bilinear does (sd 0.65 vs 0.5 texels, box included), so the
+   level is lowered by log2(1.29) = 0.37 to keep a setting's spread as it
+   was. */
 const char *FS_BODY =
   "uniform sampler2D scene;\n"
   "uniform vec2 resolution;\n"
@@ -151,6 +160,24 @@ const char *FS_BODY =
   "uniform float falloff;\n"
   "uniform vec4 maskcolor;\n"
   "out vec4 frag;\n"
+  "vec4 bspline(float lev, vec2 uv) {\n"
+  "  vec2 size = vec2(textureSize(scene, int(lev)));\n"
+  "  vec2 p = uv * size - 0.5;\n"
+  "  vec2 i = floor(p);\n"
+  "  vec2 f = p - i;\n"
+  "  vec2 f2 = f * f;\n"
+  "  vec2 f3 = f2 * f;\n"
+  "  vec2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;\n"
+  "  vec2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;\n"
+  "  vec2 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;\n"
+  "  vec2 w3 = f3 / 6.0;\n"
+  "  vec2 g0 = w0 + w1;\n"
+  "  vec2 g1 = w2 + w3;\n"
+  "  vec2 c0 = (i - 0.5 + w1 / g0) / size;\n"
+  "  vec2 c1 = (i + 1.5 + w3 / g1) / size;\n"
+  "  return g0.y * (g0.x * textureLod(scene, c0, lev) + g1.x * textureLod(scene, vec2(c1.x, c0.y), lev))\n"
+  "       + g1.y * (g0.x * textureLod(scene, vec2(c0.x, c1.y), lev) + g1.x * textureLod(scene, c1, lev));\n"
+  "}\n"
   "void main() {\n"
   "  vec4 s = texelFetch(scene, ivec2(gl_FragCoord.xy), 0);\n"
   "  float w;\n"
@@ -172,7 +199,14 @@ const char *FS_BODY =
   "  }\n"
   "  if (w <= 0.0) { frag = s; return; }\n"
   "  vec4 t = s;\n"
-  "  if (blur > 0.0) t = textureLod(scene, gl_FragCoord.xy / resolution, lod * w);\n"
+  "  if (blur > 0.0) {\n"
+  "    float top = floor(log2(max(resolution.x, resolution.y)));\n"
+  "    float l = min(max(lod * w - 0.37, 0.0), top);\n"
+  "    float l0 = floor(l);\n"
+  "    vec2 uv = gl_FragCoord.xy / resolution;\n"
+  "    t = bspline(l0, uv);\n"
+  "    if (l > l0 && l0 < top) t = mix(t, bspline(l0 + 1.0, uv), l - l0);\n"
+  "  }\n"
   "  t.rgb = mix(t.rgb, maskcolor.rgb, maskcolor.a);\n"
   "  frag = vec4(mix(s.rgb, t.rgb, w), s.a);\n"
   "}\n";
