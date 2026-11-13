@@ -161,6 +161,11 @@ set ::steps {
       { ck "-color background: the corner is the background" [near [px $::W $bytes 2 2] {0 0 255 255}]
         ck "-color background: the window shows" [near [at $bytes 0 0] {255 255 255}] } }
 
+    { { ck "-color {background 2} refused" [catch { gazewin set -color {background 2} }]
+        gazewin set -color {background 0.5}
+        ck "settings report {background 0.5}" [expr {[dict get [gazewin set] color] eq {background 0.5}}] }
+      { ck "-color {background 0.5}: halfway to the background ([px $::W $bytes 2 2])" [near [px $::W $bytes 2 2] {128 128 255 255}] } }
+
     { { gazewin set -color {1 0 0 1}; glistSetVisible 0; redraw }
       { ck "blank display: masked too (corner red)" [near [px $::W $bytes 2 2] {255 0 0 255}]
         ck "blank display: the window is the background" [near [at $bytes 0 0] {0 0 255}] } }

@@ -72,7 +72,7 @@ the next frame or repaint.
 | `-mode` | `window` | `window`: the region within `-radius` of gaze is untouched, the rest treated. `scotoma`: the reverse |
 | `-radius` | 5.0 | degrees |
 | `-edge` | 0.5 | degrees: width of the soft edge, centred on the radius; 0 is a hard edge |
-| `-color` | `background` | the mask colour: `background` (stim2's background, tracking `setBackground`) or `{r g b ?a?}` 0..1. Its alpha is how strongly the treated region is pulled to it: 1 hides, 0.5 halves the contrast toward it, 0 leaves only the blur |
+| `-color` | `background` | the mask colour: `background` or `{background a}` (stim2's background, tracking `setBackground`, at alpha `a`, default 1) or `{r g b ?a?}` 0..1. Its alpha is how strongly the treated region is pulled to it: 1 hides, 0.5 halves the contrast toward it, 0 leaves only the blur |
 | `-blur` | 0 | mip levels of blur in the treated region (0 none; each level halves the resolution). Box-filtered mips, trilinear: a cheap blur, not a Gaussian |
 | `-lost` | `mask` | while gaze is lost: `mask` treats the whole screen, `show` shows the scene untouched, `freeze` keeps the last position |
 | `-hold` | 100 | ms: a sample older than this is lost (0: never) |

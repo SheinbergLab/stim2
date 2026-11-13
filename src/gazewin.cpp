@@ -378,8 +378,8 @@ void draw_pass(int w, int h, float halfx, float halfy, GLuint drawfb, double now
   if (L.blur >= 0) glUniform1f(L.blur, S.blur);
   if (L.lostmode >= 0) glUniform1i(L.lostmode, S.lost == LOST_SHOW ? 1 : 0);
   if (L.maskcolor >= 0) {
-    if (S.color_bg)
-      glUniform4f(L.maskcolor, BackgroundColor[0], BackgroundColor[1], BackgroundColor[2], 1.0f);
+    if (S.color_bg)   /* the background, at the alpha given with it */
+      glUniform4f(L.maskcolor, BackgroundColor[0], BackgroundColor[1], BackgroundColor[2], S.color[3]);
     else
       glUniform4fv(L.maskcolor, 1, S.color);
   }
@@ -639,7 +639,15 @@ Tcl_Obj *settings_dict(void)
   put("mode", Tcl_NewStringObj(S.mode == MODE_WINDOW ? "window" : "scotoma", -1));
   put("radius", Tcl_NewDoubleObj(S.radius));
   put("edge", Tcl_NewDoubleObj(S.edge));
-  if (S.color_bg) put("color", Tcl_NewStringObj("background", -1));
+  if (S.color_bg) {
+    if (S.color[3] == 1.0f) put("color", Tcl_NewStringObj("background", -1));
+    else {
+      Tcl_Obj *c = Tcl_NewListObj(0, nullptr);
+      Tcl_ListObjAppendElement(nullptr, c, Tcl_NewStringObj("background", -1));
+      Tcl_ListObjAppendElement(nullptr, c, Tcl_NewDoubleObj(S.color[3]));
+      put("color", c);
+    }
+  }
   else {
     Tcl_Obj *c = Tcl_NewListObj(0, nullptr);
     for (int i = 0; i < 4; i++) Tcl_ListObjAppendElement(nullptr, c, Tcl_NewDoubleObj(S.color[i]));
@@ -849,10 +857,18 @@ int gazewinCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
         else { Tcl_SetObjResult(interp, Tcl_ObjPrintf("gazewin set: -lost must be mask, show or freeze, not \"%s\"", m.c_str())); return TCL_ERROR; }
       }
       else if (opt == "-color") {
-        if (std::string(Tcl_GetString(val)) == "background") { n.color_bg = true; continue; }
         Tcl_Size lc; Tcl_Obj **le;
         if (Tcl_ListObjGetElements(interp, val, &lc, &le) != TCL_OK) return TCL_ERROR;
-        if (lc != 3 && lc != 4) { Tcl_SetObjResult(interp, Tcl_NewStringObj("gazewin set: -color is background or {r g b ?a?}", -1)); return TCL_ERROR; }
+        /* background ?alpha?: stim2's background colour, followed live */
+        if (lc >= 1 && lc <= 2 && std::string(Tcl_GetString(le[0])) == "background") {
+          double a = 1.0;
+          if (lc == 2 && Tcl_GetDoubleFromObj(interp, le[1], &a) != TCL_OK) return TCL_ERROR;
+          if (a < 0.0 || a > 1.0) { Tcl_SetObjResult(interp, Tcl_NewStringObj("gazewin set: -color background alpha must be 0..1", -1)); return TCL_ERROR; }
+          n.color_bg = true;
+          n.color[3] = (float) a;
+          continue;
+        }
+        if (lc != 3 && lc != 4) { Tcl_SetObjResult(interp, Tcl_NewStringObj("gazewin set: -color is {background ?a?} or {r g b ?a?}", -1)); return TCL_ERROR; }
         float c[4] = { 0, 0, 0, 1 };
         for (int k = 0; k < lc; k++) {
           if (Tcl_GetDoubleFromObj(interp, le[k], &d) != TCL_OK) return TCL_ERROR;
