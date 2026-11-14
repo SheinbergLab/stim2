@@ -22,8 +22,9 @@ order, with or without the gaze window ([gazewin.md](gazewin.md)).
 `-file` is a path, or a name looked for along the shader module's search
 path (`shaderGetPaths`: your directories, then stim2's own shaders, see
 `shaders/README.md`): in
-each directory and in a `passes/` directory under it, with or without
-`.glsl`.
+a `passes/` directory under each one first, then in the directory itself,
+with or without `.glsl`. `passes/` comes first because `shaders/` holds
+files for shader objects under some of the same names (`noise.glsl`).
 
 Two shaders ship in `shaders/passes/`:
 

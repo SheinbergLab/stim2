@@ -159,6 +159,10 @@ shaderAddPath [file normalize [file join [file dirname [info script]] .. shaders
 ck "a shader by name, along shaderGetPaths (passes/)" [expr {![catch { shaderpass create byname -file colormatrix }] &&
     [file tail [dict get [shaderpass status byname] file]] eq "colormatrix.glsl"}]
 ck "a name that is nowhere is refused" [catch { shaderpass create byname2 -file nosuchshader }]
+# shaders/ has a noise.glsl for shader objects as well as passes/noise.glsl
+ck "a name in both shaders/ and shaders/passes/ is the pass" [expr {![catch { shaderpass create byname3 -file noise }] &&
+    [file tail [file dirname [dict get [shaderpass status byname3] file]]] eq "passes"}]
+catch { shaderpass delete byname3 }
 shaderpass delete byname
 
 polycolor $full 1 1 1

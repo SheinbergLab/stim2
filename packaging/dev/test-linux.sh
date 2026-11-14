@@ -8,13 +8,18 @@
 #   packaging/dev/test-linux.sh         # every test below
 #   packaging/dev/test-linux.sh test_gazewin test_shaderpass
 #
+# On a Linux host with a GPU, DOCKER_ARGS passes its render device in, and
+# stim2 then draws on the GPU (the last line says which renderer it was):
+#
+#   DOCKER_ARGS="--device /dev/dri/renderD128" packaging/dev/test-linux.sh
+#
 # Exits non-zero if any test fails, errors or times out.
 set -e
 here=$(cd "$(dirname "$0")/../.." && pwd)
 out=${OUT:-$here/build-dev-trixie}
 [ -x "$out/stim2" ] && [ -d "$out/stimdlls" ] || {
   echo "no dev build in $out: run packaging/dev/build-linux.sh first" >&2; exit 2; }
-docker run --rm --platform linux/amd64 \
+docker run --rm --platform linux/amd64 $DOCKER_ARGS \
   -e TESTS="$*" -v "$here":/src:ro -v "$out":/out:ro \
   stim2-dev:trixie sh -c '
     # the build, laid out as the .deb installs it

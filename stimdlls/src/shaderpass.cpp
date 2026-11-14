@@ -135,8 +135,9 @@ bool build(Pass *p, const std::string &vs, const std::string &fs, std::string &e
 }
 
 /* A shader file as named: a path that reads, or else a name looked for
-   along the shader module's search path (shaderGetPaths), there and in a
-   passes/ directory under each, with and without the suffix .glsl.  "" if
+   along the shader module's search path (shaderGetPaths): in a passes/
+   directory under each, then in the directory itself, with and without
+   the suffix .glsl.  "" if
    it is nowhere. */
 std::string resolve_file(Tcl_Interp *interp, const std::string &name)
 {
@@ -154,7 +155,9 @@ std::string resolve_file(Tcl_Interp *interp, const std::string &name)
   for (std::string dir : dirs) {
     if (dir.empty()) continue;
     if (dir.back() != '/' && dir.back() != '\\') dir += '/';
-    for (const char *sub : { "", "passes/" })
+    /* passes/ first: shaders/ has files for shader objects under the same
+       names (noise.glsl), and a pass asked for by name is a pass */
+    for (const char *sub : { "passes/", "" })
       for (const char *suffix : { "", ".glsl" }) {
         std::string f = dir + sub + name + suffix;
         if (readable(f)) return f;

@@ -87,3 +87,83 @@ rates there mean nothing.
 The image gets `dlsh.zip` from dlsh's released `dlsh-interp` package. An
 image built before that was added has none, and the script says so:
 build the image again.
+
+## Timing a render
+
+How fast the build renders without a GPU, for sizing a machine that will
+render trials (the `stim2-render` service, a replay):
+
+    packaging/dev/bench-linux.sh             # 1920x1080
+    packaging/dev/bench-linux.sh 1280 720
+    BENCH_N=200 packaging/dev/bench-linux.sh
+
+It runs `bench.tcl`: stepped frames into a frame sink, as a replay render
+makes them, for a planko-like board, then with a gaze window (masked;
+graded blur), a noise pass, and both. One line per condition: ms per
+frame, frames per second. The same script runs in any stim2:
+
+    stim2 --headless -w 1920 -h 1080 -f /abs/path/packaging/dev/bench.tcl
+
+What was measured on 2026-11-14, at 1920x1080, in frames per second:
+
+| | llvmpipe, Ryzen 9 9950X3D (16 cores, 32 threads) | llvmpipe, emulated on an Apple M3 (8 CPUs) | the M3's GPU |
+|---|---|---|---|
+| scene + frame sink | 937 | 408 | 360 |
+| + gaze window, soft, masked | 430 | 108 | 300 |
+| + gaze window, graded blur | 150 | 16 | 238 |
+| + noise pass | 447 | 156 | 282 |
+| + graded blur + noise | 126 | 15 | 202 |
+
+On a Mac the image runs x86 code under emulation: its column is a floor
+that says little about an x86 host, which is the first column. There, the
+software renderer keeps up with a 120 Hz display in every condition.
+
+Several containers at once, on the same Ryzen (each with `--cpus T` and
+`LP_NUM_THREADS=T`; total frames per second over all of them; one run
+each, so read differences under 10% as noise):
+
+| containers x threads | scene + sink | soft gaze | graded blur | blur + noise |
+|---|---|---|---|---|
+| 1 x 32 | 937 | 434 | 148 | 127 |
+| 1 x 8 | 1116 | 329 | 82 | 72 |
+| 1 x 4 | 928 | 215 | 48 | 43 |
+| 1 x 1 | 446 | 78 | 13 | 12 |
+| 4 x 8 | 1255 | 578 | 201 | 176 |
+| 8 x 4 | 1667 | 562 | 206 | 186 |
+| 16 x 2 | 636 | 421 | 213 | 190 |
+| 32 x 1 | 621 | 411 | 204 | 189 |
+
+A container costs nothing measurable (one container with every thread
+gives what the same stim2 gives alone). Splitting the machine among 4 to 8
+containers renders 1.3 to 1.8 times as many frames in total as one
+container with every thread, and each used about 170 MB at its peak. Past
+8, a plain scene gets slower in total: those frames are mostly memory
+traffic (the readback and the sink), which the containers compete for.
+
+**A GPU.** On a Linux host with one, pass its render device into the
+container and stim2 draws on it (no other change: Mesa's surfaceless EGL
+finds the device, and the `renderer:` line says which was used):
+
+    DOCKER_ARGS="--device /dev/dri/renderD128" packaging/dev/test-linux.sh
+    DOCKER_ARGS="--device /dev/dri/renderD128" packaging/dev/bench-linux.sh
+
+Measured the same day on that Ryzen's integrated Radeon (radeonsi), where
+all ten tests pass as they do on llvmpipe. Total frames per second:
+
+| containers, 2 CPUs each | scene + sink | soft gaze | graded blur | blur + noise |
+|---|---|---|---|---|
+| 1 | 636 | 416 | 206 | 166 |
+| 2 | 925 | 675 | 309 | 254 |
+| 4 | 927 | 565 | 304 | 262 |
+| 8 | 737 | 528 | 300 | 253 |
+
+A small integrated GPU is about what the 32 CPU threads are together, a
+little ahead on the blur and behind on a plain scene (the frame comes back
+from the GPU to be written). Two containers saturate it, and one CPU each
+is enough. Its use is that it leaves the CPUs free. An NVIDIA card, which
+needs the vendor's container runtime instead of the render device, was
+not tried.
+
+It times stim2 alone. Not in it: encoding the video (frames go to
+`/dev/null`), and what a real stim script does each frame (physics, video,
+images).
