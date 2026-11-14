@@ -65,6 +65,10 @@ ck "point needs x y" [catch { gazewin point 1 }]
 ck "datapoint needs five words" [catch { gazewin datapoint a b }]
 ck "shader: missing file refused" [catch { gazewin shader /nonexistent/x.glsl }]
 ck "unknown subcommand refused" [catch { gazewin bogus }]
+# the module is a post pass in stim2's chain (docs/postpass.md)
+set ::pp [lsearch -inline -index 1 [postpass list] gazewin]
+ck "postpass list has gazewin, off" [expr {[llength $::pp] && [dict get $::pp on] == 0}]
+ck "postpass: unknown subcommand refused" [catch { postpass bogus }]
 
 # --- scenes ------------------------------------------------------------------
 # A: white over the whole screen.  B: white left half, black right half.
@@ -254,9 +258,11 @@ set ::steps {
         ck "off returns 0" [expr {[gazewin off] == 0}] }
       { ck "off: the scene untouched" [expr {[near [at $bytes 0 0] {255 255 255}] && [near [at $bytes 6 3] {255 255 255}]}] } }
 
-    { { gazewin on; gazewin set -radius 3 -mode scotoma -falloff 1; gazewin source test/gaze; gazewin reset
+    { { gazewin on; gazewin set -radius 3 -mode scotoma -falloff 1; gazewin source test/gaze
+        ck "postpass list shows it on" [expr {[dict get [lsearch -inline -index 1 [postpass list] gazewin] on] == 1}]
+        postpass reset            ;# what stim::prelude runs at every script load
         set st [gazewin]
-        ck "reset: off, no source, defaults" [expr {[dict get $st on] == 0 && [dict get $st source] eq "" &&
+        ck "postpass reset: off, no source, defaults" [expr {[dict get $st on] == 0 && [dict get $st source] eq "" &&
             [dict get $st mode] eq "window" && [dict get $st radius] == 5.0 && [dict get $st falloff] == 0.0 &&
             [dict get $st point] eq "off"}] }
       { ck "reset: the frame is byte-identical to before the pass was ever on" [expr {$bytes eq $::base}] } }

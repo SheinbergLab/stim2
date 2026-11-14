@@ -446,9 +446,9 @@ proc ::stim::prelude_reset {} {
         proc stim_deinit {} {}
         catch { array unset ::dsCmds }
         catch { array unset ::dsVals }
-        # a gaze pass one system turned on must not outlive its script
-        # (an older stim2 has no gazewin command: the catch)
-        catch { gazewin reset }
+        # a post pass one system turned on (gazewin, ...) must not outlive
+        # its script (an older stim2 has no postpass command: the catch)
+        catch { postpass reset }
     }
     # this package's own table, without server calls: the registration is
     # gone (live: dsStimUnregister follows; playback: there is none)
@@ -506,7 +506,7 @@ proc ::stim::inject {name value {type 1} {timestamp {}}} {
     if {$timestamp eq ""} { set timestamp [clock microseconds] }
     set line [list $name $type $timestamp [string length $value] $value]
     set ::dsVals($name) $line
-    # gazewin's source: live, stim2 hands it to C itself; here (a replay)
+    # gazewin's source: live, its datapoint tap gets it in C; here (a replay)
     # it goes the same way, whether or not a script also bound it
     if {[llength [info commands ::gazewin]] && [::gazewin source] eq $name} {
         ::gazewin datapoint {*}$line

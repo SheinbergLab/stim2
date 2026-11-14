@@ -26,7 +26,7 @@
 
 #include "stim2.h"
 #include "overlay.h"
-#include "gazewin.h"
+#include "postpass.h"
 #include "objname.h"
 #include "diagnostics.h"
 #include "swapsync.h"
@@ -3629,7 +3629,7 @@ void addTclCommands(Tcl_Interp *interp)
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "frameRepaint", (Tcl_CmdProc *) frameRepaintCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
-  Gazewin_TclInit(interp);     /* gazewin: gaze-contingent pass (gazewin.h) */
+  Postpass_TclInit(interp);    /* postpass: modules' full-screen passes (postpass.h) */
   Tcl_CreateCommand(interp, "swapTagCallback",
 		    (Tcl_CmdProc *) swapTagCallbackCmd,
 		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);

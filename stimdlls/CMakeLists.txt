@@ -142,11 +142,18 @@ set(COMMON_LIBS
     ${APP_LIB}
 )
 
+set(CORE_LIBS
+    ${TCLLIB}
+    ${OPENGL_LIBRARIES}
+    ${LIBDL}
+    ${APP_LIB}
+)
+
 ###############################
 # Helper function for modules
 ###############################
 function(add_stim_module name)
-    cmake_parse_arguments(MOD "NO_STIMUTILS;WITH_IMAGE" "" "SOURCES;LIBS;INCLUDES" ${ARGN})
+    cmake_parse_arguments(MOD "NO_STIMUTILS;WITH_IMAGE;CORE_LIBS_ONLY" "" "SOURCES;LIBS;INCLUDES" ${ARGN})
     
     # Build source list
     set(ALL_SOURCES ${MOD_SOURCES})
@@ -162,7 +169,13 @@ function(add_stim_module name)
     # Use MODULE type - these are dynamically loaded plugins
     add_library(${name} MODULE ${ALL_SOURCES})
     
-    target_link_libraries(${name} ${COMMON_LIBS} ${MOD_LIBS})
+    # CORE_LIBS_ONLY: a module that uses only Tcl, GL and stim2's own
+    # exports links neither dlsh nor a GLFW of its own
+    if(MOD_CORE_LIBS_ONLY)
+        target_link_libraries(${name} ${CORE_LIBS} ${MOD_LIBS})
+    else()
+        target_link_libraries(${name} ${COMMON_LIBS} ${MOD_LIBS})
+    endif()
     
     if(MOD_INCLUDES)
         target_include_directories(${name} PRIVATE ${MOD_INCLUDES})
@@ -211,6 +224,22 @@ add_stim_module(svg SOURCES ${SRC_DIR}/svg.cpp ${SRC_DIR}/shape.cpp LIBS lunasvg
 
 # Metagroup module
 add_stim_module(metagroup SOURCES ${SRC_DIR}/metagroup.c)
+
+# gazewin: the gaze-contingent post pass (stim2's src/postpass.h).  It needs
+# only GL: no stimutils, no dlsh, and no GLFW of its own (stim2 hands it the
+# clocks)
+add_stim_module(gazewin
+    NO_STIMUTILS
+    CORE_LIBS_ONLY
+    SOURCES ${SRC_DIR}/gazewin.cpp ${APP_DIR}/glad.c
+)
+
+# shaderpass: any fragment shader as a post pass (noise, a colour transform)
+add_stim_module(shaderpass
+    NO_STIMUTILS
+    CORE_LIBS_ONLY
+    SOURCES ${SRC_DIR}/shaderpass.cpp ${APP_DIR}/glad.c
+)
 
 # Shader module with image support
 add_stim_module(shader

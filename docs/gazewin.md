@@ -12,6 +12,15 @@ knowledge of the stim: polygons, Box2D worlds, shader objects, video and
 text are all just pixels to it. It does not live in the object list or a
 group, so `resetObjList` and `glistInit` leave it alone.
 
+`gazewin` is a loadable module (`stimdlls/src/gazewin.cpp`, loaded with
+the other stimdlls by `stim2.cfg`), not part of the stim2 binary. It
+plugs into stim2's post-pass chain: stim2 decides when a pass runs and
+when a static display is repainted, and the module decides what is drawn.
+See [postpass.md](postpass.md) for that seam, and for writing another
+pass that runs before or after this one. Noise or a colour transform
+over the display needs no module: see [shaderpass.md](shaderpass.md). A
+stim2 without the module has no `gazewin` command.
+
 ## Quick start
 
     gazewin source eyetracking/position          ;# subscribes, like stim::bind
@@ -23,8 +32,8 @@ group, so `resetObjList` and `glistInit` leave it alone.
 A stim script that uses it sets the source and settings when it loads and
 turns the pass on and off at the states that need it (ESS sends `gazewin
 on` with the rest of its stim commands). Every script load resets it:
-`stim::prelude` runs `gazewin reset`, so a pass one system turned on can
-never carry over into the next system.
+`stim::prelude` runs `postpass reset`, which resets every post pass, so
+a pass one system turned on can never carry over into the next system.
 
 ## Where the gaze comes from
 
@@ -36,8 +45,9 @@ desk test. stim2 subscribes to it through `qpcs::dsStimAddMatch` when
 `::dservhost` is set, as `stim::bind` does; the command returns 1 if it
 did.
 
-- **Live**: each forwarded sample is decoded in C in `processDSCommands`,
-  without a Tcl binding. The Tcl side still sees it (`::dsVals`, and a
+- **Live**: each forwarded sample is decoded in C as stim2 receives it
+  (a datapoint tap, see [postpass.md](postpass.md)), without a Tcl
+  binding. The Tcl side still sees it (`::dsVals`, and a
   script's own `stim::bind` of the same name still works).
 - **Mirror**: a mirror's stim2 runs the rig's commands, `gazewin source`
   among them, but is not subscribed to dserv itself. The mirror already
@@ -218,7 +228,7 @@ while it runs exposes only level k-1 (so `textureSize(src, 0)` is that
 level's size and `textureLod(src, uv, 0.0)` reads it), with `uniform
 vec2 dstsize` the size of level k; the output pixel's uv is
 `gl_FragCoord.xy / dstsize`. The built-in one is `DS_BODY` in
-`src/gazewin.cpp`. A file whose either part does not build is refused,
+`stimdlls/src/gazewin.cpp`. A file whose either part does not build is refused,
 and the shaders in use stay.
 
 The pass sets these uniforms when the shader declares them:
@@ -244,9 +254,10 @@ use stays.
 
 ## Cost when off
 
-Nothing is created until `gazewin on`. Off, stim2 does one flag test per
-frame and one per forwarded datapoint (whether a source is named), and
-nothing else; the main loop, late-draw, the overlay and the frame record
+Nothing is created until `gazewin on`. Off, stim2 asks each registered
+pass whether it is wanted once per frame (a flag test behind a function
+pointer), tests once per forwarded datapoint whether any tap exists (none
+until a source is named), and does nothing else; the main loop, late-draw, the overlay and the frame record
 are as they were. `tests/test_gazewin.tcl` checks that after `gazewin
 reset` a frame is byte-identical to one drawn before the pass was ever
 on, and frames from polygon, overlay, blank, shader-object, dynamic and

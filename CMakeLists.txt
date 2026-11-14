@@ -164,7 +164,7 @@ set(STIM2_SOURCES
     src/framelog.cpp
     src/mirror.cpp
     src/overlay.cpp
-    src/gazewin.cpp
+    src/postpass.cpp
     src/latedraw.cpp
     src/glad.c
     src/rawapi.c
@@ -461,6 +461,11 @@ elseif(APPLE)
         DESTINATION ${APP_BUNDLE}/Contents/Resources/shaders
         COMPONENT stim2
     )
+    # ... and the post-pass shaders (docs/shaderpass.md)
+    install(DIRECTORY shaders/passes
+        DESTINATION ${APP_BUNDLE}/Contents/Resources/shaders
+        FILES_MATCHING PATTERN "*.glsl"
+    )
     
     # Add modules (Tcl modules for workspace system)
     message("Bundling modules from modules/")
@@ -684,6 +689,11 @@ else()
         FILES ${STIM_SHADERS}
         DESTINATION "/usr/local/stim2/shaders"
         COMPONENT stim2
+    )
+    # ... and the post-pass shaders (docs/shaderpass.md)
+    install(DIRECTORY shaders/passes
+        DESTINATION "/usr/local/stim2/shaders"
+        FILES_MATCHING PATTERN "*.glsl"
     )
     
     # Add modules (Tcl modules for workspace system)
