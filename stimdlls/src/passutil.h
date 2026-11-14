@@ -18,7 +18,9 @@ namespace passutil {
 #ifdef STIM2_USE_GLES
 static const char *HEAD = "#version 300 es\nprecision highp float;\nprecision highp int;\n";
 #else
-static const char *HEAD = "#version 150\n";
+/* 330, as the shader module's files get (shaderutils.c): a shader written
+   for one builds in the other */
+static const char *HEAD = "#version 330\n";
 #endif
 
 /* a triangle covering the viewport, from gl_VertexID alone (no buffer) */
@@ -92,7 +94,8 @@ typedef std::map<std::string, std::vector<float>> Uniforms;
    "name v1 ?v2 v3 v4?", values optionally in double quotes. */
 struct ShaderText {
   std::map<std::string, std::string> sections;
-  Uniforms uniforms;
+  Uniforms uniforms;                              /* up to 4 floats each */
+  std::map<std::string, std::string> uniform_text; /* the values as written */
   const std::string &section(const std::string &name) const {
     static const std::string none;
     auto it = sections.find(name);
@@ -116,6 +119,12 @@ inline void parse_shader(std::istream &in, ShaderText &out)
       std::istringstream ls(line);
       std::string name;
       if (!(ls >> name)) continue;
+      if (name[0] == '#') continue;
+      std::string rest;
+      std::getline(ls, rest);
+      out.uniform_text[name] = rest;
+      ls.clear();
+      ls.str(rest);
       std::vector<float> vals;
       float x;
       while (vals.size() < 4 && ls >> x) vals.push_back(x);

@@ -217,7 +217,7 @@ The file uses the layout of stim2's `shaders/` directory: `-- Vertex`,
 `-- Fragment` and `-- Uniforms` sections. Only the fragment is required (a
 file with no section markers is all fragment); the default vertex shader
 draws the full-screen triangle. A source without its own `#version` gets
-the platform's (`#version 150`, or `#version 300 es` with highp precision).
+the platform's (`#version 330`, or `#version 300 es` with highp precision).
 `-- Uniforms` lines give defaults, `name v1 ?v2 v3 v4?` (values may be
 quoted), and `gazewin uniform` changes them live.
 

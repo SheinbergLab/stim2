@@ -108,7 +108,22 @@ if(WIN32)
         set(PRMUTIL "${APP_DIR}/prmutil.c")
     endif()
 elseif(APPLE)
-    set(DLSH dlsh)
+    # stim2 loads libdlsh from dlsh.zip before it loads the stimdlls, so no
+    # libdlsh need be installed to run.  A module must still be linked
+    # against one: it records the library's install name
+    # (@rpath/libdlsh.dylib), which dyld matches to the copy already loaded.
+    # Leaving the symbols to -undefined dynamic_lookup does not work: that
+    # copy's symbols are not in the flat namespace.  So link an installed
+    # libdlsh, or the one in a dlsh checkout beside stim2.
+    find_library(DLSH_LIBRARY dlsh
+        PATHS /usr/local/lib /opt/homebrew/lib
+              ${CMAKE_CURRENT_SOURCE_DIR}/../../dlsh/build)
+    if(DLSH_LIBRARY)
+        message(STATUS "libdlsh: ${DLSH_LIBRARY}")
+        set(DLSH ${DLSH_LIBRARY})
+    else()
+        set(DLSH dlsh)
+    endif()
     set(GLFW glfw3)
     set(TCLLIB tclstub)
     set(SPINE_LIB spine-c)
@@ -234,11 +249,11 @@ add_stim_module(gazewin
     SOURCES ${SRC_DIR}/gazewin.cpp ${APP_DIR}/glad.c
 )
 
-# shaderpass: any fragment shader as a post pass (noise, a colour transform)
+# shaderpass: any fragment shader as a post pass (noise, a colour transform).
+# stimutils for the shader module's uniform tables (shaderutils.c)
 add_stim_module(shaderpass
-    NO_STIMUTILS
     CORE_LIBS_ONLY
-    SOURCES ${SRC_DIR}/shaderpass.cpp ${APP_DIR}/glad.c
+    SOURCES ${SRC_DIR}/shaderpass.cpp
 )
 
 # Shader module with image support

@@ -116,8 +116,9 @@ refresh. A pass that depends only on its settings (a colour transform)
 returns 1 when a setting changed since it last drew, and 0 otherwise.
 
 `stimdlls/src/shaderpass.cpp` is the short worked example and
-`stimdlls/src/gazewin.cpp` the full one. `stimdlls/src/passutil.h` holds
-what they share: a program from a fragment body, a full-screen triangle
+`stimdlls/src/gazewin.cpp` the full one. shaderpass keeps its uniforms in
+the shader module's typed uniform tables (`shaderutils.c`);
+`stimdlls/src/passutil.h` holds what the two passes share: a program from a fragment body, a full-screen triangle
 from `gl_VertexID`, a shader file's `-- Fragment` and `-- Uniforms`
 sections, and the GL state saved and restored around the draw (`GLSave`).
 

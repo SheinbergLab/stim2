@@ -112,9 +112,6 @@ typedef struct _shader_obj {
   Tcl_HashTable attribTable;    /* local unique version */
 } SHADER_OBJ;
 
-static int uniform_set(Tcl_Interp *interp, Tcl_HashTable *table,
-               char *shader_name, char *name, char *valstr);
-
 static void delete_vao_info(VAO_INFO *v);
 
 static int parse_ints(char *str, int *vals, int n);
@@ -410,11 +407,11 @@ static int set_default_uniforms(Tcl_Interp *interp, SHADER_OBJ *s)
     
   entryPtr = Tcl_FirstHashEntry(table, &searchEntry);
   if (entryPtr) {
-    uniform_set(interp, &s->uniformTable, s->program->name, 
+    shader_uniform_set(interp, &s->uniformTable, s->program->name, 
         Tcl_GetHashKey(table, entryPtr),
         Tcl_GetHashValue(entryPtr));
     while ((entryPtr = Tcl_NextHashEntry(&searchEntry))) {
-      uniform_set(interp, &s->uniformTable, s->program->name, 
+      shader_uniform_set(interp, &s->uniformTable, s->program->name, 
           Tcl_GetHashKey(table, entryPtr),
           Tcl_GetHashValue(entryPtr));
     }
@@ -1027,202 +1024,6 @@ static int parse_floats(char *str, float *vals, int n)
   return i;
 }
 
-static int uniform_set(Tcl_Interp *interp, Tcl_HashTable *table,
-                       char *shader_name, char *name, char *valstr)
-{
-  Tcl_HashEntry *entryPtr;
-  UNIFORM_INFO *uinfo;
-  Tcl_Obj *listObj;
-  Tcl_Obj **elements;
-  Tcl_Size elementCount;
-  int totalNumbersRequired = 0;
-  int i;
-
-  Tcl_ResetResult(interp);
-  
-  if ((entryPtr = Tcl_FindHashEntry(table, name))) {
-    uinfo = (UNIFORM_INFO *)Tcl_GetHashValue(entryPtr);
-  }
-  else {
-    Tcl_AppendResult(interp, "uniform \"", name, "\" not found in shader \"",
-                     shader_name, "\"", NULL);
-    return TCL_ERROR;
-  }
-
-  listObj = Tcl_NewStringObj(valstr, -1);
-  Tcl_IncrRefCount(listObj);
-
-  // Determine the total number of individual numbers required based on the type
-  switch (uinfo->type) {
-  case GL_BOOL:
-  case GL_INT:
-  case GL_FLOAT:
-    totalNumbersRequired = uinfo->size; // 1 number per element
-    break;
-  case GL_FLOAT_VEC2:
-    totalNumbersRequired = uinfo->size * 2; // 2 numbers per element
-    break;
-  case GL_FLOAT_VEC3:
-    totalNumbersRequired = uinfo->size * 3; // 3 numbers per element
-    break;
-  case GL_FLOAT_VEC4:
-  case GL_FLOAT_MAT2:
-    totalNumbersRequired = uinfo->size * 4; // 4 numbers per element
-    break;
-  case GL_FLOAT_MAT3:
-    totalNumbersRequired = uinfo->size * 9; // 9 numbers per element
-    break;
-  case GL_FLOAT_MAT4:
-    totalNumbersRequired = uinfo->size * 16; // 16 numbers per element
-    break;
-  default:
-    Tcl_DecrRefCount(listObj);
-    Tcl_AppendResult(interp,
-		     "unsupported uniform type for \"", name, "\"", NULL);
-    return TCL_ERROR;
-  }
-
-  // Split the input string into individual components
-  if (Tcl_ListObjGetElements(interp, listObj,
-			     &elementCount, &elements) != TCL_OK) {
-    Tcl_DecrRefCount(listObj);
-    Tcl_AppendResult(interp, "failed to parse uniform value: \"",
-		     valstr, "\"", NULL);
-    return TCL_ERROR;
-  }
-	
-  // Check if the number of elements is a multiple of the total numbers required
-  if (elementCount > totalNumbersRequired) {
-      Tcl_DecrRefCount(listObj);
-      Tcl_AppendResult(interp, "uniform \"", name, "\" expects no more than ",
-                     totalNumbersRequired,
-		     " values but got ", elementCount, NULL);
-    return TCL_ERROR;
-  }
-
-  // Parse and store the values based on the uniform type
-  if (uinfo->type == GL_BOOL || uinfo->type == GL_INT) {
-    if (!uinfo->val) {
-      uinfo->val = malloc(totalNumbersRequired * sizeof(int));
-      if (!uinfo->val){
-        Tcl_DecrRefCount(listObj);
-        Tcl_AppendResult(interp,
-			 "memory allocation failed for uniform \"",
-			 name, "\"", NULL);
-        return TCL_ERROR;
-      }
-    }
-    int ival;
-    for (i = 0; i < elementCount; i++) {
-      if (Tcl_GetIntFromObj(interp, elements[i], &ival) != TCL_OK) {
-        Tcl_DecrRefCount(listObj);
-        return TCL_ERROR;
-      }
-      ((int *)uinfo->val)[i] = ival;
-    }
-  }
-  else {
-    for (i = 0; i < elementCount; i++) {
-      if (!uinfo->val) {
-        uinfo->val = malloc(totalNumbersRequired * sizeof(float));
-        if (!uinfo->val)
-        {
-          Tcl_DecrRefCount(listObj);
-          Tcl_AppendResult(interp,
-			   "memory allocation failed for uniform \"",
-			   name, "\"", NULL);
-          return TCL_ERROR;
-        }
-      }
-      double fval;
-      if (Tcl_GetDoubleFromObj(interp, elements[i], &fval) != TCL_OK) {
-        Tcl_DecrRefCount(listObj);
-        return TCL_ERROR;
-      }
-      ((float *)uinfo->val)[i] = (float)fval;
-    }
-  }
-
-  Tcl_DecrRefCount(listObj);
-  return TCL_OK;
-}
-
-static int uniform_get(Tcl_Interp *interp, Tcl_HashTable *table,
-                       char *shader_name, char *name)
-{
-  Tcl_HashEntry *entryPtr;
-  UNIFORM_INFO *uinfo;
-  Tcl_Obj *listObj;
-  int *ival;
-  float *fvals;
-  int i, j, elementsPerUniform;
-
-  if ((entryPtr = Tcl_FindHashEntry(table, name))) {
-    uinfo = (UNIFORM_INFO *)Tcl_GetHashValue(entryPtr);
-  } else {
-    Tcl_AppendResult(interp, "uniform \"", name, "\" not found in shader \"",
-                     shader_name, "\"", NULL);
-    return TCL_ERROR;
-  }
-
-  if (!uinfo->val) {
-    Tcl_AppendResult(interp, "uniform \"", name, "\" has no value set", NULL);
-    return TCL_ERROR;
-  }
- 
-  // Create a new Tcl list object to hold the uniform values
-  listObj = Tcl_NewListObj(0, NULL);
-
-  // Determine the number of elements per uniform based on the type
-  switch (uinfo->type) {
-  case GL_BOOL:
-  case GL_INT:
-  case GL_FLOAT:
-    elementsPerUniform = 1;
-    break;
-  case GL_FLOAT_VEC2:
-    elementsPerUniform = 2;
-    break;
-  case GL_FLOAT_VEC3:
-    elementsPerUniform = 3;
-    break;
-  case GL_FLOAT_VEC4:
-  case GL_FLOAT_MAT2:
-    elementsPerUniform = 4;
-    break;
-  case GL_FLOAT_MAT3:
-    elementsPerUniform = 9;
-    break;
-  case GL_FLOAT_MAT4:
-    elementsPerUniform = 16;
-    break;
-  default:
-    Tcl_AppendResult(interp, "unsupported uniform type for \"", name, "\"", NULL);
-    return TCL_ERROR;
-  }
-
-  // Iterate over the uniform values and add them to the list
-  if (uinfo->type == GL_BOOL || uinfo->type == GL_INT) {
-    ival = (int *)uinfo->val;
-    for (i = 0; i < uinfo->size; i++) {
-      for (j = 0; j < elementsPerUniform; j++) {
-        Tcl_ListObjAppendElement(interp, listObj, Tcl_NewIntObj(ival[i * elementsPerUniform + j]));
-      }
-    }
-  } else {
-    fvals = (float *)uinfo->val;
-    for (i = 0; i < uinfo->size; i++) {
-      for (j = 0; j < elementsPerUniform; j++) {
-        Tcl_ListObjAppendElement(interp, listObj, Tcl_NewDoubleObj(fvals[i * elementsPerUniform + j]));
-      }
-    }
-  }
-
-  // Set the Tcl list as the result
-  Tcl_SetObjResult(interp, listObj);
-  return TCL_OK;
-}
-
 static int shaderObjSetUniformCmd(ClientData clientData, Tcl_Interp *interp,
                   int argc, char *argv[])
 {
@@ -1241,11 +1042,11 @@ static int shaderObjSetUniformCmd(ClientData clientData, Tcl_Interp *interp,
   
   g = GR_CLIENTDATA(OL_OBJ(olist,id));
   if (argc > 3) {
-    return(uniform_set(interp, &g->uniformTable, g->program->name, 
+    return(shader_uniform_set(interp, &g->uniformTable, g->program->name, 
                argv[2], argv[3]));
   }
   else {
-    return(uniform_get(interp, &g->uniformTable, g->program->name,
+    return(shader_uniform_get(interp, &g->uniformTable, g->program->name,
                argv[2]));
   }
 }

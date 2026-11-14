@@ -13,11 +13,16 @@ order, with or without the gaze window ([gazewin.md](gazewin.md)).
 
 ## Quick start
 
-    shaderpass create nz -file $shaders/passes/noise.glsl
+    shaderpass create nz -file noise
     shaderpass uniform nz amount 0.15
     shaderpass on nz
     ...
     shaderpass off nz
+
+`-file` is a path, or a name looked for along the shader module's search
+path (`shaderGetPaths`, set with `shaderAddPath` / `shaderSetPath`): in
+each directory and in a `passes/` directory under it, with or without
+`.glsl`.
 
 Two shaders ship in `shaders/passes/`:
 
@@ -28,7 +33,7 @@ Two shaders ship in `shaders/passes/`:
 
 The colour matrix covers the common transforms:
 
-    shaderpass create cm -file $shaders/passes/colormatrix.glsl
+    shaderpass create cm -file colormatrix
     # swap red and blue
     shaderpass uniform cm red 0 0 1 0;  shaderpass uniform cm blue 1 0 0 0
     # invert
@@ -46,9 +51,10 @@ the states that need them.
     shaderpass                    ;# the names
     shaderpass create NAME ?-file PATH? ?-fragment SOURCE? ?-priority P? ?-animate auto|0|1?
     shaderpass on NAME | off NAME
-    shaderpass uniform NAME UNIFORM ?v1 ?v2 v3 v4??   ;# no values: read
+    shaderpass uniform NAME UNIFORM ?value ...?        ;# no values: read
+    shaderpass sampler NAME UNIFORM ?TEXTUREID?        ;# a texture for a sampler2D; 0 removes
     shaderpass animate NAME ?auto|0|1?                 ;# returns whether it is animated
-    shaderpass status NAME        ;# dict: on priority file animate animated uniforms stages repaints
+    shaderpass status NAME        ;# dict: name on priority file animate animated uniforms stages repaints
     shaderpass delete NAME
     shaderpass reset              ;# delete them all
 
@@ -56,6 +62,36 @@ the states that need them.
 nor `-fragment` the pass copies the scene through. Creating a name that
 exists replaces that pass; if the new shader does not build, the error is
 the compiler's message and the old pass stays as it was.
+
+## Uniforms and textures
+
+Uniforms are kept in the shader module's uniform tables (`shaderutils.c`,
+the code behind `shaderObjSetUniform`), so they are typed by the
+program's own declarations: `bool`, `int`, `float`, `vec2`-`vec4`,
+`mat2`-`mat4`, and arrays of them. Values are numbers, as separate words
+or lists, flattened:
+
+    shaderpass uniform p gain 0.5
+    shaderpass uniform p which 2                       ;# an int
+    shaderpass uniform p m {0 0 1} {0 1 0} {1 0 0}     ;# a mat3, column by column
+    shaderpass uniform p pair {1 1} {0 0}              ;# vec2 pair[2]
+
+A uniform the shader does not declare (or declares and never uses, which
+the compiler removes) is an error, as is a value of the wrong kind or too
+many values. `shaderpass status NAME` lists every uniform the program has
+under `uniforms`, each with its `type`, its `size` if an array, and its
+`value` if one is set. Integer vectors (`ivec2`...) cannot be set.
+
+A `sampler2D` other than `scene` takes a GL texture id, as
+`shaderObjSetSampler` does:
+
+    set img [shaderImageCreate $pixels $w $h linear]
+    shaderpass sampler p lut [shaderImageID $img]
+
+The pass binds it on a texture unit of its own when it draws. The texture
+is the script's: deleting the pass does not delete it.
+
+## Order
 
 `-priority` (default 200) places the pass in the chain, lower first.
 `gazewin` is at 100, so by default a shaderpass applies to the gaze
@@ -69,10 +105,14 @@ A file uses the layout of stim2's `shaders/` directory: `-- Vertex`,
 `-- Fragment` and `-- Uniforms` sections. Only the fragment is required,
 and text with no section markers is all fragment (so `-fragment` can be a
 bare `main`). The default vertex shader draws a full-screen triangle. A
-source without its own `#version` gets the platform's (`#version 150`, or
-`#version 300 es` with highp precision). `-- Uniforms` lines give
-defaults, `name v1 ?v2 v3 v4?` (values may be quoted), and `shaderpass
-uniform` changes them live.
+source without its own `#version` gets the platform's (`#version 330`, or
+`#version 300 es` with highp precision), the same as a shader module
+file. `-- Uniforms` lines give defaults, `name value ...` (values may be
+quoted), set as `shaderpass uniform` sets them.
+
+Two differences from a file for `shaderBuild`: a pass file needs no
+`-- Vertex` section, and a shader that fails to build returns the
+compiler's message as the Tcl error.
 
     -- Fragment
     uniform sampler2D scene;
@@ -97,8 +137,8 @@ The pass sets these when the shader declares them:
 | `background` | `vec4` | stim2's background colour |
 
 A pixel's position in degrees is
-`(gl_FragCoord.xy / resolution * 2.0 - 1.0) * halfdeg`. User uniforms are
-one to four floats.
+`(gl_FragCoord.xy / resolution * 2.0 - 1.0) * halfdeg`. A script cannot
+override these five: the pass sets them after the script's uniforms.
 
 ## Static displays and animation
 
@@ -133,7 +173,9 @@ white its distribution is one-sided.
     stim2 --headless -w 320 -h 180 --port-base 5610 -f /abs/path/tests/test_shaderpass.tcl
 
 Stepped, into a frame sink: an inline swizzle, both shipped shaders, a
-uniform change shown by `frameRepaint`, shaders that fail to build, noise
+uniform change shown by `frameRepaint`, typed uniforms (an int, a mat3, a
+vec2 array), a texture sampler, a shader found by name, shaders that fail
+to build, noise
 repeating at the same stim time and differing at another, `gazewin` and a
 shaderpass chained in either order on a frame and on a repaint, and
 `postpass reset`.

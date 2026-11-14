@@ -10,6 +10,10 @@
 #define MAX_PATH 260
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * Shader path management
  */
@@ -82,6 +86,16 @@ int delete_uniform_table(Tcl_HashTable *utable);
 int update_uniforms(Tcl_HashTable *utable);
 
 /*
+ * Uniform values from and to Tcl: set from a list of numbers by the
+ * uniform's own type; get leaves the value as the interp's result
+ */
+int shader_uniform_set(Tcl_Interp *interp, Tcl_HashTable *table,
+                       const char *shader_name, const char *name,
+                       const char *valstr);
+int shader_uniform_get(Tcl_Interp *interp, Tcl_HashTable *table,
+                       const char *shader_name, const char *name);
+
+/*
  * Defaults table management (for -- Uniforms section in .glsl files)
  */
 int add_defaults_to_table(Tcl_Interp *interp, Tcl_HashTable *dtable, char *shadername);
@@ -107,5 +121,9 @@ int build_prog_from_file(SHADER_PROG *sp, char *shadername, int verbose);
  */
 void printProgramInfoLog(GLuint program);
 void printShaderInfoLog(GLuint obj);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SHADERUTILS_H */

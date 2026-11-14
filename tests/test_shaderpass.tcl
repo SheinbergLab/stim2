@@ -5,11 +5,13 @@
 #
 # Stepped, into a manual frame sink, so every frame is exact: a channel
 # swizzle given inline, the shipped colour matrix and noise shaders, a
-# uniform change shown by frameRepaint, shaders that do not build, and the
+# uniform change shown by frameRepaint, typed uniforms (int, mat3, an
+# array), a texture sampler, a shader found by name, shaders that do not
+# build, and the
 # chain -- gazewin and a shaderpass together in either order, on a frame
 # and on a repaint (where the second pass is staged again over the first's
 # new output) -- and `postpass reset` deleting the passes.
-# Needs the shaderpass and gazewin stimdlls.  Prints OK/FAIL lines and
+# Needs the shaderpass, gazewin and shader stimdlls.  Prints OK/FAIL lines and
 # exits non-zero on any failure.
 
 set ::log {}
@@ -101,7 +103,57 @@ ck "animate 0 overrides" [expr {[shaderpass animate nz 0] == 0}]
 ck "animate auto restores" [expr {[shaderpass animate nz auto] == 1}]
 shaderpass delete nz
 
-# --- the chain: gazewin (100) and an inverting pass ---------------------------
+# --- typed uniforms, a texture, a shader by name -------------------------------
+# (the shader module's uniform tables: shaderutils.c)
+polycolor $full 1 0 0
+shaderpass create ty -fragment {
+uniform sampler2D scene;
+uniform sampler2D lut;
+uniform int which;
+uniform mat3 m;
+uniform vec2 pair[2];
+out vec4 frag;
+void main() {
+  vec4 s = texelFetch(scene, ivec2(gl_FragCoord.xy), 0);
+  if (which == 1) frag = texture(lut, vec2(0.5));
+  else if (which == 2) frag = vec4(pair[0].x, pair[0].y, pair[1].x, 1.0);
+  else frag = vec4(m * s.rgb, 1.0);
+}
+-- Uniforms
+which 0
+m "0 0 1  0 1 0  1 0 0"
+}
+set u [dict get [shaderpass status ty] uniforms]
+ck "status lists the declared uniforms by type" [expr {[dict get $u which type] eq "int" &&
+    [dict get $u m type] eq "mat3" && [dict get $u lut type] eq "sampler2D" && [dict get $u pair type] eq "vec2"}]
+ck "  an array's size" [expr {[dict get $u pair size] == 2}]
+ck "an inline source's Uniforms defaults: int and mat3" [expr {[shaderpass uniform ty which] == 0 &&
+    [shaderpass uniform ty m] eq {0.0 0.0 1.0 0.0 1.0 0.0 1.0 0.0 0.0}}]
+ck "a uniform not yet set reads empty" [expr {[shaderpass uniform ty pair] eq ""}]
+ck "a uniform the shader does not declare is refused" [catch { shaderpass uniform ty nothere 1 }]
+ck "an int uniform refuses 1.5" [catch { shaderpass uniform ty which 1.5 }]
+ck "too many values refused" [catch { shaderpass uniform ty which 1 2 } e]
+ck "  saying how many ($e)" [string match "*no more than 1*" $e]
+ck "sampler: not a sampler refused" [catch { shaderpass sampler ty which 3 }]
+ck "sampler: the scene refused" [catch { shaderpass sampler ty scene 3 }]
+shaderpass on ty
+stepFrame 5210; set f_mat [keep]              ;# mat3: red and blue swapped
+set pix [dl_char [dl_ilist 0 255 0 255]]
+set img [shaderImageCreate $pix 1 1]
+ck "sampler: takes a texture id" [expr {[shaderpass sampler ty lut [shaderImageID $img]] == [shaderImageID $img]}]
+shaderpass uniform ty which 1
+frameRepaint; set f_lut [keep]                ;# the texture, by repaint alone
+shaderpass uniform ty which 2
+shaderpass uniform ty pair {1 1} {0 0}
+frameRepaint; set f_arr [keep]                ;# a vec2 array
+shaderpass delete ty
+
+shaderAddPath [file normalize [file join [file dirname [info script]] .. shaders]]
+ck "a shader by name, along shaderGetPaths (passes/)" [expr {![catch { shaderpass create byname -file colormatrix }] &&
+    [file tail [dict get [shaderpass status byname] file]] eq "colormatrix.glsl"}]
+ck "a name that is nowhere is refused" [catch { shaderpass create byname2 -file nosuchshader }]
+shaderpass delete byname
+
 polycolor $full 1 1 1
 gazewin source test/gaze
 gazewin set -mode window -radius 2 -edge 0 -color {0 0 0 1} -hold 0 -lost mask
@@ -166,6 +218,10 @@ ck "noise: mono" $mono
 ck "noise: not flat ([llength [lsort -unique $vals]] values in 21 pixels)" [expr {[llength [lsort -unique $vals]] > 10}]
 ck "noise: the same stim time gives the same field" [expr {[frame $f_n1b] eq [frame $f_n1]}]
 ck "noise: a later time gives another" [expr {[frame $f_n2] ne [frame $f_n1]}]
+
+ck "mat3 uniform: red shows blue ([px $f_mat 0 0])" [is $f_mat 0 0 {0 0 255}]
+ck "sampler: the texture's green ([px $f_lut 0 0])" [is $f_lut 0 0 {0 255 0}]
+ck "vec2 array: yellow ([px $f_arr 0 0])" [is $f_arr 0 0 {255 255 0}]
 
 ck "chain order, priority 200: $order_after" [expr {$order_after eq "gazewin shader/inv"}]
 ck "window then invert: inside black, outside white ([px $f_c1 -6 0] / [px $f_c1 6 0])" \
