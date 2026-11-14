@@ -20,7 +20,8 @@ order, with or without the gaze window ([gazewin.md](gazewin.md)).
     shaderpass off nz
 
 `-file` is a path, or a name looked for along the shader module's search
-path (`shaderGetPaths`, set with `shaderAddPath` / `shaderSetPath`): in
+path (`shaderGetPaths`: your directories, then stim2's own shaders, see
+`shaders/README.md`): in
 each directory and in a `passes/` directory under it, with or without
 `.glsl`.
 
@@ -110,9 +111,14 @@ source without its own `#version` gets the platform's (`#version 330`, or
 file. `-- Uniforms` lines give defaults, `name value ...` (values may be
 quoted), set as `shaderpass uniform` sets them.
 
-Two differences from a file for `shaderBuild`: a pass file needs no
-`-- Vertex` section, and a shader that fails to build returns the
-compiler's message as the Tcl error.
+A file for `shaderBuild` (a shader object in the scene) may leave out
+`-- Vertex` too, but its default is a different one: the object's quad,
+placed by `projMat * modelviewMat`, with `texcoord` passed to the
+fragment shader. A pass's default is a triangle covering the screen, with
+no matrices and no `texcoord` (use `gl_FragCoord`). So a fragment shader
+that reads `texcoord` is for an object, not a pass. A pass shader that
+fails to build returns the compiler's message as the Tcl error;
+`shaderBuild` prints it to stim2's log.
 
     -- Fragment
     uniform sampler2D scene;

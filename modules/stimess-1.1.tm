@@ -449,6 +449,19 @@ proc ::stim::prelude_reset {} {
         # a post pass one system turned on (gazewin, ...) must not outlive
         # its script (an older stim2 has no postpass command: the catch)
         catch { postpass reset }
+        # nor a shader directory one system added: the user's search list
+        # goes back to what it was when the first script loaded (so a
+        # directory added by a local config file at startup stays).
+        # stim2's own shaders are found whatever the list holds.  (An
+        # older stim2 has no `shaderGetPaths -user`: the catch.)
+        catch {
+            if {![info exists ::stim::shader_paths0]} {
+                set ::stim::shader_paths0 [shaderGetPaths -user]
+            }
+            shaderClearPaths
+            foreach _p $::stim::shader_paths0 { shaderAddPath $_p }
+            unset -nocomplain _p
+        }
     }
     # this package's own table, without server calls: the registration is
     # gone (live: dsStimUnregister follows; playback: there is none)

@@ -642,12 +642,17 @@ static int meshObjSetSamplerCmd(ClientData clientData, Tcl_Interp *interp,
 static int shaderSetPathCmd(ClientData clientData, Tcl_Interp *interp,
 			    int argc, char *argv[])
 {
+  /* The search path becomes this one directory, and the one that was
+     searched first is returned.  (This used to fill only the legacy
+     shaderPath global, which is read just while the list is empty: once
+     anything had added a path -- or the first build had read the global -- the command did nothing.)  With no
+     argument: the directory searched first, unchanged. */
   char oldpath[MAX_PATH];
-  strncpy(oldpath, shaderPath, MAX_PATH-1);
+  const char *first = shaderGetPathN(0);
+  strncpy(oldpath, first ? first : shaderPath, MAX_PATH-1);
+  oldpath[MAX_PATH-1] = '\0';
 
-  if (argc >= 2) {
-    strncpy(shaderPath, argv[1], MAX_PATH-1);
-  }
+  if (argc >= 2) shaderSetPath(argv[1]);
 
   Tcl_SetResult(interp, oldpath, TCL_VOLATILE);
   return(TCL_OK);

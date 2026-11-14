@@ -17,10 +17,16 @@ extern "C" {
 /*
  * Shader path management
  */
+/* the user's list, searched in order ... */
 void shaderClearPaths(void);
-int  shaderAddPath(const char *path);
-int  shaderPrependPath(const char *path);
-void shaderSetPath(const char *path);       /* legacy - sets single path */
+int  shaderAddPath(const char *path);       /* already there: not again */
+int  shaderPrependPath(const char *path);   /* already there: moved first */
+int  shaderRemovePath(const char *path);    /* 1 if it was there */
+void shaderSetPath(const char *path);       /* the list becomes this one */
+/* ... then the system directory: stim2's shipped shaders, which nothing
+   done to the list removes */
+void        shaderSetSystemPath(const char *path);
+const char *shaderGetSystemPath(void);
 
 const char *shaderGetPaths(void);           /* colon-separated list */
 int         shaderGetPathCount(void);
@@ -115,6 +121,11 @@ GLenum CompileProgram(GLenum target, const GLchar *sourcecode, GLuint *shader, i
 GLenum LinkProgram(GLuint program, int verbose);
 int build_prog(SHADER_PROG *sp, const char *v, const char *f, int verbose);
 int build_prog_from_file(SHADER_PROG *sp, char *shadername, int verbose);
+/* ... with a vertex shader for a file that has no "-- Vertex" section */
+int build_prog_from_file_ex(SHADER_PROG *sp, char *shadername, int verbose,
+                            const char *default_vertex);
+/* a quad placed in the scene: complete source, with its #version */
+const char *shaderDefaultVertexSource(void);
 
 /*
  * Debug output
