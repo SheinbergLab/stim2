@@ -202,7 +202,14 @@ blurred periphery (uniform, or graded with eccentricity), or a custom
 shader. It runs after the stim's scene, so it works over any display
 without changing the stim, and repaints a static display when the gaze
 moves. Off by default, at the cost of a flag test.
-See [docs/gazewin.md](docs/gazewin.md).
+See [docs/gazewin.md](docs/gazewin.md). It is a loadable module on
+stim2's post-pass chain ([docs/postpass.md](docs/postpass.md)), where
+other full-screen passes plug in the same way.
+
+`shaderpass` runs any fragment shader over the finished scene on the same
+chain: noise, a colour matrix (swizzle, invert, grey), or your own, alone
+or combined with the gaze window in either order.
+See [docs/shaderpass.md](docs/shaderpass.md).
 
 ## Linux Systemd Service
 

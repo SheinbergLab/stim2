@@ -38,3 +38,11 @@ EXPORTS
 	
 	add_shutdown_func
 	
+
+	stimPostpassRegister
+	stimPostpassUnregister
+	stimDatapointTapAdd
+	stimDatapointTapRemove
+	stimClockSeconds
+	stimRealSeconds
+	stimLogMessage

@@ -10,13 +10,23 @@
 #define MAX_PATH 260
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * Shader path management
  */
+/* the user's list, searched in order ... */
 void shaderClearPaths(void);
-int  shaderAddPath(const char *path);
-int  shaderPrependPath(const char *path);
-void shaderSetPath(const char *path);       /* legacy - sets single path */
+int  shaderAddPath(const char *path);       /* already there: not again */
+int  shaderPrependPath(const char *path);   /* already there: moved first */
+int  shaderRemovePath(const char *path);    /* 1 if it was there */
+void shaderSetPath(const char *path);       /* the list becomes this one */
+/* ... then the system directory: stim2's shipped shaders, which nothing
+   done to the list removes */
+void        shaderSetSystemPath(const char *path);
+const char *shaderGetSystemPath(void);
 
 const char *shaderGetPaths(void);           /* colon-separated list */
 int         shaderGetPathCount(void);
@@ -82,6 +92,16 @@ int delete_uniform_table(Tcl_HashTable *utable);
 int update_uniforms(Tcl_HashTable *utable);
 
 /*
+ * Uniform values from and to Tcl: set from a list of numbers by the
+ * uniform's own type; get leaves the value as the interp's result
+ */
+int shader_uniform_set(Tcl_Interp *interp, Tcl_HashTable *table,
+                       const char *shader_name, const char *name,
+                       const char *valstr);
+int shader_uniform_get(Tcl_Interp *interp, Tcl_HashTable *table,
+                       const char *shader_name, const char *name);
+
+/*
  * Defaults table management (for -- Uniforms section in .glsl files)
  */
 int add_defaults_to_table(Tcl_Interp *interp, Tcl_HashTable *dtable, char *shadername);
@@ -101,11 +121,20 @@ GLenum CompileProgram(GLenum target, const GLchar *sourcecode, GLuint *shader, i
 GLenum LinkProgram(GLuint program, int verbose);
 int build_prog(SHADER_PROG *sp, const char *v, const char *f, int verbose);
 int build_prog_from_file(SHADER_PROG *sp, char *shadername, int verbose);
+/* ... with a vertex shader for a file that has no "-- Vertex" section */
+int build_prog_from_file_ex(SHADER_PROG *sp, char *shadername, int verbose,
+                            const char *default_vertex);
+/* a quad placed in the scene: complete source, with its #version */
+const char *shaderDefaultVertexSource(void);
 
 /*
  * Debug output
  */
 void printProgramInfoLog(GLuint program);
 void printShaderInfoLog(GLuint obj);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SHADERUTILS_H */

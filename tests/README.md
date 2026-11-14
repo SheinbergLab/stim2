@@ -20,6 +20,8 @@ Self-checking scripts that run inside a real stim2. Each prints `OK` /
 | `test_late_draw.tcl` | the `stimLateDraw` command (opt-in draw-late scheduler, see `docs/late-draw.md`): status dict shape, argument errors, that enabling is refused naming the strategy where there are no flip timestamps (Mac/glfinish) and accepted on a rig with them (then a dynamic group animates without misses and `@!` acks still follow a swap) |
 | `test_gazewin.tcl` | the gaze-contingent pass (`gazewin`, see `docs/gazewin.md`): argument errors, window and scotoma by `gazewin point`, mask colour and alpha, soft edge, lost gaze (mask / show), samples by `gazewin datapoint` (base64 floats, plain numbers, NaN), the background as the mask, a blank display, uniform and eccentricity-graded (`-falloff`) blur, a custom shader file and its uniforms, a `-- Downsample` filter and the levels remade when it changes, shaders that fail to build, and that after `gazewin reset` a frame is byte-identical to one from before the pass was on. Headless or windowed |
 | `test_gazewin_step.tcl` | `gazewin` under step mode, as a mirror and a replay render run it: `frameRepaint` draws the pass again at the newest sample, with an overlay up and without one, and a sample's age for `-hold` is on the stepped stim clock, not wall time. Headless |
+| `test_shaderpass.tcl` | `shaderpass` (a fragment shader as a post pass, see `docs/shaderpass.md`) and stim2's post-pass chain with two passes (`docs/postpass.md`): argument errors, an inline swizzle, the shipped colour matrix and noise shaders, a uniform change shown by `frameRepaint`, shaders that fail to build, noise repeating at the same stim time, `gazewin` and a shaderpass chained in either order on a frame and on a repaint, and `postpass reset` deleting the passes. Headless |
+| `test_shader_fragment_only.tcl` | the shader module's default vertex shader: a shader file with no `-- Vertex` section and a `shaderBuildInline` with an empty vertex source draw the object's quad where the matrices put it, with `texcoord` across it and the file's `-- Uniforms` default set; a file with its own Vertex section still uses it; a bad fragment and a missing file are still refused. Also the shader search path: add (no duplicates), prepend, remove, clear and set on the user's list, the system directory of shipped shaders surviving all of them, a user directory overriding a shipped shader by name, and shaders read from two directories in turn. Headless |
 | `test_stimess.tcl` | the `stimess` package (`modules/stimess-1.0.tm`, see `docs/stimess.md`): `stim::bind` / `get` / `count` / event handlers / error counting / `unbind_all` / `bindings_json`, with stim2's `::dsCmds` dispatch imitated and the qpcs procs stubbed |
 
 Five tests are exceptions and run from plain `tclsh`. `test_ack_header.tcl`,
@@ -37,6 +39,10 @@ beside a live stim2, start it with `--port-base 5610` and pass port 5612:
 (port base + 1): samples decoded in C, a static display repainted for
 them at most once per frame, the stale-sample wake-up, the latency record,
 and `gazewin reset` stopping it all.
+
+The `gazewin` and `shaderpass` tests need those two stimdlls (built in
+`stimdlls/`, and loaded by `stim2.cfg` with the others); between them they also cover
+stim2's post-pass seam (`docs/postpass.md`).
 
 The draw-late scheduler's arithmetic has a display-free unit check built
 with stim2 (`tests/latedraw_check.cpp`):

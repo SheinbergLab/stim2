@@ -1,9 +1,31 @@
 /*
  * gazewin.cpp -- gaze-contingent pass over stim2's finished scene
- * (see gazewin.h and docs/gazewin.md)
+ * (see docs/gazewin.md)
+ *
+ * A stimdll.  When on, every frame stim2 shows is the scene the stim drew,
+ * passed through one full-screen fragment shader that knows where the eye
+ * is: a window (only the region around gaze shows), a scotoma (that region
+ * is hidden), or anything a custom shader does with the scene and the gaze.
+ *
+ * It is a post pass (stim2's src/postpass.h, docs/postpass.md): stim2 calls
+ * it after the scene is finished, repaints a static display when a new
+ * sample is due, and hands it the flip times.  It does not live in the
+ * object list or a group, so it works over any display and survives
+ * resetObjList and glistInit.
+ *
+ *   - The gaze is a dserv datapoint (`gazewin source`, normally
+ *     eyetracking/position: two floats, degrees, origin at screen centre).
+ *     Live, a datapoint tap hands each sample straight to C; a replay
+ *     hands the same line over with `gazewin datapoint` (stim::inject does
+ *     this).  Or a fixed point (`gazewin point x y`) for tests.
+ *   - Each drawn frame: the scene is copied into a texture (one blit) and
+ *     the pass draws over the whole framebuffer.
+ *   - A static display is repainted from that copy with the newest gaze.
+ *
+ * Off (the default), no GL object exists until `gazewin on`.
  *
  * State is plain statics: the render thread is the only one that reads or
- * writes it (Tcl commands, processDSCommands and the draw all run there).
+ * writes it (Tcl commands, the datapoint tap and the draw all run there).
  */
 #include <string>
 #include <vector>
@@ -16,19 +38,44 @@
 #include <fstream>
 #include <sstream>
 
+#include <cstdarg>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#include <tcl.h>
 #include <glad/glad.h>
-#include <GLFW/glfw3.h>       /* glfwGetTime: the draw's clock */
 
-#include "gazewin.h"
+#include "postpass.h"         /* stim2's seam for full-screen passes */
+#include "passutil.h"         /* shared with the other pass modules */
 
-void log_message(const char *level, const char *fmt, ...);   /* stim2.cpp, C++ */
+#ifndef TCL_SIZE_MAX
+typedef int Tcl_Size;
+#endif
 
+/* stim2 (the clocks and the log come from postpass.h: this module must not
+   call GLFW, which would be its own copy of the library) */
 extern "C" {
 void redraw(void);
-extern float BackgroundColor[];
+float *getBackgroundColor(void);
 }
 
 namespace {
+
+using namespace passutil;
+
+void log_message(const char *level, const char *fmt, ...)
+{
+  char buf[2048];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  stimLogMessage(level, buf);
+}
+
+inline double gazewinStimClock(void) { return stimClockSeconds(); }
 
 /* ---- settings ---------------------------------------------------------- */
 
@@ -61,7 +108,7 @@ struct Sample {
   bool valid = false;             /* finite */
   float x = 0.0f, y = 0.0f;       /* deg */
   unsigned long long ts_us = 0;   /* dserv's stamp; 0 = none (a point) */
-  double arrival_s = 0.0;         /* glfwGetTime() when it was taken: latency */
+  double arrival_s = 0.0;         /* the real clock when it was taken: latency */
   double stim_s = 0.0;            /* the stim clock then: its age, for -hold */
   unsigned long long seq = 0;
 };
@@ -117,19 +164,6 @@ struct Loc {
     maskcolor = -1, blur = -1, falloff = -1, lostmode = -1;
 } L;
 struct DLoc { GLint src = -1, dstsize = -1; } D;
-
-#ifdef STIM2_USE_GLES
-const char *HEAD = "#version 300 es\nprecision highp float;\nprecision highp int;\n";
-#else
-const char *HEAD = "#version 150\n";
-#endif
-
-/* a triangle covering the viewport, from gl_VertexID alone (no buffer) */
-const char *VS_BODY =
-  "void main() {\n"
-  "  vec2 p = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0);\n"
-  "  gl_Position = vec4(p, 0.0, 1.0);\n"
-  "}\n";
 
 /* The built-in pass.  w is how much of the treatment a pixel gets: 0 is
    the scene untouched (texelFetch, so exactly the scene's pixel), 1 the
@@ -238,56 +272,6 @@ const char *DS_BODY =
   "  frag = c;\n"
   "}\n";
 
-GLuint compile(GLenum type, const std::string &src, std::string &err)
-{
-  GLuint s = glCreateShader(type);
-  const char *p = src.c_str();
-  glShaderSource(s, 1, &p, nullptr);
-  glCompileShader(s);
-  GLint ok = 0;
-  glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-  if (!ok) {
-    char log[1024];
-    glGetShaderInfoLog(s, sizeof(log), nullptr, log);
-    err = std::string(type == GL_VERTEX_SHADER ? "vertex: " : "fragment: ") + log;
-    glDeleteShader(s);
-    return 0;
-  }
-  return s;
-}
-
-/* a source without its own #version gets the platform's header */
-std::string with_head(const std::string &body)
-{
-  size_t k = body.find_first_not_of(" \t\r\n");
-  if (k != std::string::npos && body.compare(k, 8, "#version") == 0) return body;
-  return std::string(HEAD) + body;
-}
-
-GLuint link(const std::string &vs_body, const std::string &fs_body, std::string &err)
-{
-  GLuint vs = compile(GL_VERTEX_SHADER, with_head(vs_body), err);
-  if (!vs) return 0;
-  GLuint fs = compile(GL_FRAGMENT_SHADER, with_head(fs_body), err);
-  if (!fs) { glDeleteShader(vs); return 0; }
-  GLuint p = glCreateProgram();
-  glAttachShader(p, vs);
-  glAttachShader(p, fs);
-  glLinkProgram(p);
-  glDeleteShader(vs);
-  glDeleteShader(fs);
-  GLint ok = 0;
-  glGetProgramiv(p, GL_LINK_STATUS, &ok);
-  if (!ok) {
-    char log[1024];
-    glGetProgramInfoLog(p, sizeof(log), nullptr, log);
-    err = std::string("link: ") + log;
-    glDeleteProgram(p);
-    return 0;
-  }
-  return p;
-}
-
 /* The pyramid's downsample program, `body` or the built-in one. */
 GLuint link_downsample(const std::string &body, std::string &err)
 {
@@ -346,50 +330,17 @@ bool build(const std::string &vs_body, const std::string &fs_body, std::string &
   return true;
 }
 
-/* A shader file: "-- Vertex", "-- Fragment" and "-- Uniforms" sections (the
-   layout of stim2's shaders/ directory), and "-- Downsample", the
-   pyramid's filter; a file with no section markers is all fragment.
-   Uniform lines are "name v1 ?v2 v3 v4?", values optionally in double
-   quotes. */
+/* A shader file (passutil.h): "-- Vertex", "-- Fragment" and "-- Uniforms"
+   sections, and "-- Downsample", the pyramid's filter. */
 bool load_file(const std::string &path, std::string &vs, std::string &fs, std::string &ds,
                std::map<std::string, std::vector<float>> &unis, std::string &err)
 {
-  std::ifstream in(path);
-  if (!in) { err = "cannot read " + path; return false; }
-  std::string line, section = "Fragment";
-  bool any_marker = false;
-  std::string v, f, dsrc;
-  while (std::getline(in, line)) {
-    if (line.compare(0, 2, "--") == 0) {
-      std::string name = line.substr(2);
-      size_t a = name.find_first_not_of(" \t");
-      size_t b = name.find_last_not_of(" \t\r");
-      section = a == std::string::npos ? "" : name.substr(a, b - a + 1);
-      any_marker = true;
-      continue;
-    }
-    if (section == "Vertex") v += line + "\n";
-    else if (section == "Fragment") f += line + "\n";
-    else if (section == "Downsample") dsrc += line + "\n";
-    else if (section == "Uniforms") {
-      for (char &c : line) if (c == '"') c = ' ';
-      std::istringstream ls(line);
-      std::string name;
-      if (!(ls >> name)) continue;
-      std::vector<float> vals;
-      float x;
-      while (vals.size() < 4 && ls >> x) vals.push_back(x);
-      if (!vals.empty()) unis[name] = vals;
-    }
-  }
-  (void) any_marker;
-  if (f.find_first_not_of(" \t\r\n") == std::string::npos) {
-    err = path + ": no fragment shader";
-    return false;
-  }
-  vs = v.find_first_not_of(" \t\r\n") == std::string::npos ? VS_BODY : v;
-  fs = f;
-  ds = dsrc.find_first_not_of(" \t\r\n") == std::string::npos ? "" : dsrc;
+  ShaderText t;
+  if (!load_shader(path, t, err)) return false;
+  vs = blank(t.section("Vertex")) ? VS_BODY : t.section("Vertex");
+  fs = t.section("Fragment");
+  ds = blank(t.section("Downsample")) ? "" : t.section("Downsample");
+  unis = t.uniforms;
   return true;
 }
 
@@ -462,44 +413,6 @@ bool is_lost(void)
 
 /* ---- the pass ---------------------------------------------------------- */
 
-/* The GL state a pass changes, put back as it was when this goes out of
-   scope (the framebuffer bindings are the caller's).  Texture unit 0 is
-   left active, with its binding saved. */
-struct GLSave {
-  GLint prog, vao, vp[4], tex, active;
-  GLboolean blend, depth, scissor, cull, stencil;
-  GLSave() {
-    glGetIntegerv(GL_CURRENT_PROGRAM, &prog);
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
-    glGetIntegerv(GL_VIEWPORT, vp);
-    glGetIntegerv(GL_ACTIVE_TEXTURE, &active);
-    glActiveTexture(GL_TEXTURE0);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex);
-    blend = glIsEnabled(GL_BLEND);
-    depth = glIsEnabled(GL_DEPTH_TEST);
-    scissor = glIsEnabled(GL_SCISSOR_TEST);
-    cull = glIsEnabled(GL_CULL_FACE);
-    stencil = glIsEnabled(GL_STENCIL_TEST);
-    glDisable(GL_BLEND);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_CULL_FACE);
-    glDisable(GL_STENCIL_TEST);
-  }
-  ~GLSave() {
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glActiveTexture(active);
-    glBindVertexArray(vao);
-    glUseProgram(prog);
-    if (blend) glEnable(GL_BLEND);
-    if (depth) glEnable(GL_DEPTH_TEST);
-    if (scissor) glEnable(GL_SCISSOR_TEST);
-    if (cull) glEnable(GL_CULL_FACE);
-    if (stencil) glEnable(GL_STENCIL_TEST);
-    glViewport(vp[0], vp[1], vp[2], vp[3]);
-  }
-};
-
 /* Fill the blur's levels from level 0: each drawn from the one below with
    the downsample program.  While it runs, BASE_LEVEL = MAX_LEVEL = k-1,
    so the texture it samples never includes level k, the one it writes. */
@@ -567,22 +480,14 @@ void draw_pass(int w, int h, float halfx, float halfy, GLuint drawfb, double now
   if (L.falloff >= 0) glUniform1f(L.falloff, S.falloff);
   if (L.lostmode >= 0) glUniform1i(L.lostmode, S.lost == LOST_SHOW ? 1 : 0);
   if (L.maskcolor >= 0) {
-    if (S.color_bg)   /* the background, at the alpha given with it */
-      glUniform4f(L.maskcolor, BackgroundColor[0], BackgroundColor[1], BackgroundColor[2], S.color[3]);
+    if (S.color_bg) { /* the background, at the alpha given with it */
+      const float *bg = getBackgroundColor();
+      glUniform4f(L.maskcolor, bg[0], bg[1], bg[2], S.color[3]);
+    }
     else
       glUniform4fv(L.maskcolor, 1, S.color);
   }
-  for (auto &u : uniforms) {
-    GLint loc = glGetUniformLocation(prog, u.first.c_str());
-    if (loc < 0) continue;
-    const float *v = u.second.data();
-    switch (u.second.size()) {
-    case 1: glUniform1f(loc, v[0]); break;
-    case 2: glUniform2f(loc, v[0], v[1]); break;
-    case 3: glUniform3f(loc, v[0], v[1], v[2]); break;
-    case 4: glUniform4f(loc, v[0], v[1], v[2], v[3]); break;
-    }
-  }
+  apply_uniforms(prog, uniforms);
 
   glBindVertexArray(vao);
   glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -695,21 +600,18 @@ Tcl_Obj *ring_stats(Ring &r)
   return d;
 }
 
-} /* namespace */
-
 /* ======================================================================== */
+/* the pass, as stim2 calls it (postpass.h)                                 */
 
-extern "C" {
+int pass_wanted(void *) { return on && prog; }
 
-int gazewinWanted(void) { return on && prog; }
-int gazewinSourceSet(void) { return !source.empty(); }
-double gazewinLateMs(void) { return S.late_ms; }
-int gazewinFlipPending(void) { return flip_pending; }
+double pass_late_ms(void *) { return S.late_ms; }
 
-void gazewinMaybeSample(const char *name, const char *line, double now_s)
+/* the datapoint tap: a sample of the source, from the line as received
+   ("name type ts len {value}") */
+void pass_sample_line(void *, const char *name, const char *line, double now_s)
 {
   if (source.empty() || source != name || point_on) return;
-  /* "name type ts len {value}" */
   int type = 0, len = 0;
   unsigned long long ts = 0;
   const char *p = strchr(line, ' ');
@@ -721,9 +623,10 @@ void gazewinMaybeSample(const char *name, const char *line, double now_s)
   take_sample(type, ts, a + 1, (size_t) (b - a - 1), now_s);
 }
 
-int gazewinStage(int w, int h, float halfx, float halfy,
-                 unsigned drawfb, unsigned drawnbuf, double now_s)
+/* the finished scene is in f->drawfb: copy it aside and draw the pass */
+int pass_stage(void *, const stim_postpass_frame_t *f)
 {
+  int w = f->w, h = f->h;
   if (!on || !prog || w <= 0 || h <= 0) return 0;
   std::string err;
   if (!ensure_target(w, h, err)) {
@@ -731,23 +634,24 @@ int gazewinStage(int w, int h, float halfx, float halfy,
     scene_valid = false;
     return 0;
   }
-  glBindFramebuffer(GL_READ_FRAMEBUFFER, drawfb);
-  glReadBuffer(drawnbuf);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, f->drawfb);
+  glReadBuffer(f->drawnbuf);
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
   glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
   if (tex_mips) make_levels(w, h);
   levels_ok = tex_mips;
   scene_valid = true;
-  draw_pass(w, h, halfx, halfy, drawfb, now_s);
-  glBindFramebuffer(GL_FRAMEBUFFER, drawfb);
-  glReadBuffer(drawnbuf);
+  draw_pass(w, h, f->halfx, f->halfy, f->drawfb, f->now_s);
+  glBindFramebuffer(GL_FRAMEBUFFER, f->drawfb);
+  glReadBuffer(f->drawnbuf);
   stages++;
   return 1;
 }
 
-int gazewinComposite(int w, int h, float halfx, float halfy,
-                     unsigned drawfb, double now_s)
+/* the pass again over the scene saved by the last stage */
+int pass_composite(void *, const stim_postpass_frame_t *f)
 {
+  int w = f->w, h = f->h;
   if (!on || !prog || !scene_valid || w != tex_w || h != tex_h) return 0;
   std::string err;
   if (!ensure_target(w, h, err)) return 0;   /* a -blur change: the filter */
@@ -757,13 +661,16 @@ int gazewinComposite(int w, int h, float halfx, float halfy,
     make_levels(w, h);
     levels_ok = true;
   }
-  draw_pass(w, h, halfx, halfy, drawfb, now_s);
-  glBindFramebuffer(GL_FRAMEBUFFER, drawfb);
+  draw_pass(w, h, f->halfx, f->halfy, f->drawfb, f->now_s);
+  glBindFramebuffer(GL_FRAMEBUFFER, f->drawfb);
   composites++;
   return 1;
 }
 
-int gazewinRepaintDue(double now_s, double *wait_s)
+/* 1 if what the pass would show has changed since it was last drawn (a new
+   sample, gaze lost or regained, a setting); else *wait_s is when the
+   current sample goes stale */
+int pass_repaint_due(void *, double, double *wait_s)
 {
   *wait_s = -1.0;
   if (!on || !prog) return 0;
@@ -780,7 +687,8 @@ int gazewinRepaintDue(double now_s, double *wait_s)
   return 0;
 }
 
-void gazewinNoteFlip(double flip_s, long long flip_wall_us)
+/* the flip that showed a pass: the latency records */
+void pass_flip(void *, double flip_s, long long flip_wall_us)
 {
   if (!flip_pending) return;
   flip_pending = false;
@@ -790,14 +698,10 @@ void gazewinNoteFlip(double flip_s, long long flip_wall_us)
     sample_to_flip.add((float) ((double) (flip_wall_us - (long long) pass_sample.ts_us) / 1000.0));
 }
 
-} /* extern "C" */
-
 /* ======================================================================== */
 /* the Tcl command                                                          */
 
-namespace {
-
-double tclNow(void) { return glfwGetTime(); }
+double tclNow(void) { return stimRealSeconds(); }
 
 void reset_gl_program(void)
 {
@@ -880,8 +784,10 @@ int set_source(Tcl_Interp *interp, const std::string &name)
     Tcl_DecrRefCount(cmd);
   }
   subscribed = false;
+  if (!source.empty()) stimDatapointTapRemove(source.c_str(), pass_sample_line, nullptr);
   source = name;
   gaze = Sample();
+  if (!source.empty()) stimDatapointTapAdd(source.c_str(), pass_sample_line, nullptr);
   if (!source.empty()) {
     Tcl_Obj *cmd = Tcl_NewListObj(0, nullptr);
     Tcl_IncrRefCount(cmd);
@@ -1159,10 +1065,34 @@ int gazewinCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
   return TCL_ERROR;
 }
 
+void pass_reset(void *, Tcl_Interp *interp) { reset_all(interp); }
+
+/* 100: a pass that selects or degrades the scene (postpass.h) */
+stim_postpass_t gazewin_pass = {
+  "gazewin", 100.0f, nullptr,
+  pass_wanted, pass_stage, pass_composite, pass_repaint_due,
+  pass_late_ms, pass_flip, pass_reset
+};
+
 } /* namespace */
 
-extern "C" int Gazewin_TclInit(Tcl_Interp *interp)
+#ifdef _WIN32
+extern "C" __declspec(dllexport) int Gazewin_Init(Tcl_Interp *interp)
+#else
+extern "C" int Gazewin_Init(Tcl_Interp *interp)
+#endif
 {
+  if (
+#ifdef USE_TCL_STUBS
+      Tcl_InitStubs(interp, "8.5-", 0)
+#else
+      Tcl_PkgRequire(interp, "Tcl", "8.5-", 0)
+#endif
+      == NULL) {
+    return TCL_ERROR;
+  }
+  gladLoadGL();
+  stimPostpassRegister(&gazewin_pass);
   Tcl_CreateObjCommand(interp, "gazewin", gazewinCmd, nullptr, nullptr);
   return Tcl_Eval(interp, SUBSCRIBE_PROCS);
 }

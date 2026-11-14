@@ -29,9 +29,16 @@
 
 /*
  * Shader search path - like PATH environment variable
- * 
- * Paths are searched in order until a shader file is found.
- * Use shaderAddPath() to append paths, shaderPrependPath() to prepend.
+ *
+ * Two parts, searched in this order until a shader file is found:
+ *
+ *   - the user's list: shaderAddPath() appends, shaderPrependPath() puts
+ *     first, shaderRemovePath() takes one out, shaderClearPaths() empties
+ *     it, shaderSetPath() makes it one directory;
+ *   - the system directory (shaderSetSystemPath): the shaders that ship
+ *     with stim2.  It is not in the user's list, so nothing done to that
+ *     list loses the shipped shaders, and a user directory searched before
+ *     it can override one of them by name.
  */
 
 #define MAX_SHADER_PATHS 16
@@ -39,6 +46,7 @@
 static struct {
     char paths[MAX_SHADER_PATHS][MAX_PATH];
     int count;
+    char system_path[MAX_PATH];    /* searched after the list; "" = none */
     char suffix[32];
     char resolved_path[MAX_PATH];  /* last successful path */
     int glsw_initialized;
@@ -52,29 +60,71 @@ static struct {
 /* Legacy global for backwards compatibility */
 char shaderPath[MAX_PATH];
 
-/*
- * shaderClearPaths - Remove all search paths
- */
-void shaderClearPaths(void)
+static void glsw_forget(void)
 {
-    shader_config.count = 0;
-    shader_config.resolved_path[0] = '\0';
-    
     if (shader_config.glsw_initialized) {
         glswShutdown();
         shader_config.glsw_initialized = 0;
     }
 }
 
+/* the same directory, whether or not either is written with a trailing
+   slash */
+static int same_dir(const char *a, const char *b)
+{
+    size_t la = strlen(a), lb = strlen(b);
+    while (la > 1 && (a[la-1] == '/' || a[la-1] == '\\')) la--;
+    while (lb > 1 && (b[lb-1] == '/' || b[lb-1] == '\\')) lb--;
+    return la == lb && strncmp(a, b, la) == 0;
+}
+
+static int find_path(const char *path)
+{
+    int i;
+    for (i = 0; i < shader_config.count; i++)
+        if (same_dir(shader_config.paths[i], path)) return i;
+    return -1;
+}
+
 /*
- * shaderAddPath - Append a path to the search list
+ * shaderClearPaths - Empty the user's list (the system directory stays)
+ */
+void shaderClearPaths(void)
+{
+    shader_config.count = 0;
+    shader_config.resolved_path[0] = '\0';
+    shaderPath[0] = '\0';   /* or the legacy global would come back as a path */
+    glsw_forget();
+}
+
+/*
+ * shaderRemovePath - Take one directory out of the user's list
  *
- * Path should include trailing slash (e.g., "/usr/share/stim/shaders/")
+ * Returns: 1 if it was there, 0 if not
+ */
+int shaderRemovePath(const char *path)
+{
+    int i, at;
+
+    if (!path || !path[0]) return 0;
+    if ((at = find_path(path)) < 0) return 0;
+    for (i = at; i < shader_config.count - 1; i++)
+        strcpy(shader_config.paths[i], shader_config.paths[i+1]);
+    shader_config.count--;
+    glsw_forget();
+    return 1;
+}
+
+/*
+ * shaderAddPath - Append a path to the user's list
+ *
+ * A directory already in the list is not added again (it keeps its place).
  * Returns: 1 on success, 0 if path list is full
  */
 int shaderAddPath(const char *path)
 {
     if (!path || !path[0]) return 0;
+    if (find_path(path) >= 0) return 1;
     if (shader_config.count >= MAX_SHADER_PATHS) return 0;
     
     strncpy(shader_config.paths[shader_config.count], path, MAX_PATH - 1);
@@ -82,25 +132,27 @@ int shaderAddPath(const char *path)
     shader_config.count++;
     
     /* Reset glsw so it picks up new path on next use */
-    if (shader_config.glsw_initialized) {
-        glswShutdown();
-        shader_config.glsw_initialized = 0;
-    }
+    glsw_forget();
     
     return 1;
 }
 
 /*
- * shaderPrependPath - Add a path to the front of the search list
+ * shaderPrependPath - Put a path at the front of the user's list
  *
- * Useful for letting user paths override system paths.
+ * Useful for letting one directory override the others.  A directory
+ * already in the list is moved to the front.
  * Returns: 1 on success, 0 if path list is full
  */
 int shaderPrependPath(const char *path)
 {
     int i;
+    char keep[MAX_PATH];
     
     if (!path || !path[0]) return 0;
+    strncpy(keep, path, MAX_PATH - 1);   /* path may point into the list */
+    keep[MAX_PATH - 1] = '\0';
+    shaderRemovePath(keep);
     if (shader_config.count >= MAX_SHADER_PATHS) return 0;
     
     /* Shift existing paths down */
@@ -108,22 +160,33 @@ int shaderPrependPath(const char *path)
         strcpy(shader_config.paths[i], shader_config.paths[i-1]);
     }
     
-    strncpy(shader_config.paths[0], path, MAX_PATH - 1);
-    shader_config.paths[0][MAX_PATH - 1] = '\0';
+    strcpy(shader_config.paths[0], keep);
     shader_config.count++;
     
-    if (shader_config.glsw_initialized) {
-        glswShutdown();
-        shader_config.glsw_initialized = 0;
-    }
+    glsw_forget();
     
     return 1;
 }
 
 /*
- * shaderSetPath - Set a single path (replaces all existing paths)
- *
- * For backward compatibility with old code.
+ * shaderSetSystemPath - The directory of the shaders that ship with stim2,
+ * searched after the user's list.  "" or NULL: none.
+ */
+void shaderSetSystemPath(const char *path)
+{
+    strncpy(shader_config.system_path, path ? path : "", MAX_PATH - 1);
+    shader_config.system_path[MAX_PATH - 1] = '\0';
+    glsw_forget();
+}
+
+const char *shaderGetSystemPath(void)
+{
+    return shader_config.system_path;
+}
+
+/*
+ * shaderSetPath - Make the user's list this one directory (the system
+ * directory is still searched after it)
  */
 void shaderSetPath(const char *path)
 {
@@ -230,55 +293,63 @@ static void sync_legacy_path(void)
     }
 }
 
+/* is shadername's file in dir?  then dir is the resolved path */
+static int try_dir(const char *dir, const char *shadername)
+{
+    char fullpath[MAX_PATH * 2];
+
+    snprintf(fullpath, sizeof(fullpath), "%s%s%s",
+             dir, shadername, shader_config.suffix);
+    if (access(fullpath, F_OK) != 0) {
+        snprintf(fullpath, sizeof(fullpath), "%s/%s%s",
+                 dir, shadername, shader_config.suffix);
+        if (access(fullpath, F_OK) != 0) return 0;
+    }
+    strncpy(shader_config.resolved_path, dir, MAX_PATH - 1);
+    shader_config.resolved_path[MAX_PATH - 1] = '\0';
+    return 1;
+}
+
 /*
- * find_shader_file - Search for a shader file in the path list
+ * find_shader_file - Search for a shader file: the user's list in order,
+ * then the system directory
  *
- * Tries each path in order until the file is found.
- * On success, stores the full directory path in shader_config.resolved_path
- * and returns 1. Returns 0 if not found.
+ * On success, stores the directory in shader_config.resolved_path and
+ * returns 1. Returns 0 if not found.
  */
 static int find_shader_file(const char *shadername)
 {
-    char fullpath[MAX_PATH * 2];
     int i;
     
     sync_legacy_path();
     
-    /* If no paths configured, add defaults */
-    if (shader_config.count == 0) {
+    /* Nowhere to look at all (a module that set nothing): the defaults */
+    if (shader_config.count == 0 && !shader_config.system_path[0]) {
         add_default_paths();
     }
     
-    /* Try each path in order */
     for (i = 0; i < shader_config.count; i++) {
-      snprintf(fullpath, sizeof(fullpath), "%s%s%s",
-	       shader_config.paths[i], shadername, shader_config.suffix);
-      
-      if (access(fullpath, F_OK) == 0) {
-	/* Found it - save the successful path */
-	strncpy(shader_config.resolved_path, shader_config.paths[i], MAX_PATH - 1);
-	shader_config.resolved_path[MAX_PATH - 1] = '\0';
-	return 1;
-      }
-      
-      snprintf(fullpath, sizeof(fullpath), "%s/%s%s",
-	       shader_config.paths[i], shadername, shader_config.suffix);
-      
-      if (access(fullpath, F_OK) == 0) {
-	/* Found it - save the successful path */
-	strncpy(shader_config.resolved_path, shader_config.paths[i], MAX_PATH - 1);
-	shader_config.resolved_path[MAX_PATH - 1] = '\0';
-	return 1;
-      }
+        if (try_dir(shader_config.paths[i], shadername)) return 1;
     }
+    if (shader_config.system_path[0] &&
+        try_dir(shader_config.system_path, shadername)) return 1;
     
-    /* Not found in any path */
+    /* Not found anywhere */
     return 0;
 }
 
 /*
- * ensure_glsw_initialized - Initialize glsw with current resolved path
+ * ensure_glsw_initialized - Initialize glsw for the directory a shader was
+ * found in
+ *
+ * glsw reads from one directory at a time, so it is set up again when the
+ * shader just found is in another one than the last.  (This compared the
+ * path with shader_config.resolved_path, which is the very string the
+ * callers pass: always equal, so once a shader had been read from one
+ * directory, one found in another could not be read.)
  */
+static char glsw_dir[MAX_PATH];     /* the directory glsw is set up for */
+
 static int ensure_glsw_initialized(const char *path)
 {
     char pathbuf[MAX_PATH];
@@ -286,7 +357,7 @@ static int ensure_glsw_initialized(const char *path)
     
     if (shader_config.glsw_initialized) {
         /* Check if we need to reinit for a different path */
-        if (strcmp(path, shader_config.resolved_path) != 0) {
+        if (strcmp(path, glsw_dir) != 0) {
             glswShutdown();
             shader_config.glsw_initialized = 0;
         } else {
@@ -318,7 +389,12 @@ static int ensure_glsw_initialized(const char *path)
     glswAddDirectiveToken("Fragment", "precision highp int;");
 #endif
     
-    strncpy(shader_config.resolved_path, path, MAX_PATH - 1);
+    strncpy(glsw_dir, path, MAX_PATH - 1);
+    glsw_dir[MAX_PATH - 1] = '\0';
+    if (path != shader_config.resolved_path) {
+        strncpy(shader_config.resolved_path, path, MAX_PATH - 1);
+        shader_config.resolved_path[MAX_PATH - 1] = '\0';
+    }
     shader_config.glsw_initialized = 1;
     
     return 1;
@@ -708,6 +784,215 @@ int update_uniforms(Tcl_HashTable *utable)
 }
 
 /********************************************************************/
+/*                  UNIFORM VALUES FROM AND TO TCL                  */
+/********************************************************************/
+
+/*
+ * shader_uniform_set - set a uniform in a table from a Tcl list of
+ * numbers, by the uniform's own type (bool, int, float, vec2-4, mat2-4,
+ * and arrays of them).  shader_uniform_get returns the value as a list.
+ * Shared by the modules that keep uniform tables (shader, shaderpass).
+ */
+int shader_uniform_set(Tcl_Interp *interp, Tcl_HashTable *table,
+                       const char *shader_name, const char *name,
+                       const char *valstr)
+{
+  Tcl_HashEntry *entryPtr;
+  UNIFORM_INFO *uinfo;
+  Tcl_Obj *listObj;
+  Tcl_Obj **elements;
+  Tcl_Size elementCount;
+  int totalNumbersRequired = 0;
+  int i;
+
+  Tcl_ResetResult(interp);
+  
+  if ((entryPtr = Tcl_FindHashEntry(table, name))) {
+    uinfo = (UNIFORM_INFO *)Tcl_GetHashValue(entryPtr);
+  }
+  else {
+    Tcl_AppendResult(interp, "uniform \"", name, "\" not found in shader \"",
+                     shader_name, "\"", NULL);
+    return TCL_ERROR;
+  }
+
+  listObj = Tcl_NewStringObj(valstr, -1);
+  Tcl_IncrRefCount(listObj);
+
+  // Determine the total number of individual numbers required based on the type
+  switch (uinfo->type) {
+  case GL_BOOL:
+  case GL_INT:
+  case GL_FLOAT:
+    totalNumbersRequired = uinfo->size; // 1 number per element
+    break;
+  case GL_FLOAT_VEC2:
+    totalNumbersRequired = uinfo->size * 2; // 2 numbers per element
+    break;
+  case GL_FLOAT_VEC3:
+    totalNumbersRequired = uinfo->size * 3; // 3 numbers per element
+    break;
+  case GL_FLOAT_VEC4:
+  case GL_FLOAT_MAT2:
+    totalNumbersRequired = uinfo->size * 4; // 4 numbers per element
+    break;
+  case GL_FLOAT_MAT3:
+    totalNumbersRequired = uinfo->size * 9; // 9 numbers per element
+    break;
+  case GL_FLOAT_MAT4:
+    totalNumbersRequired = uinfo->size * 16; // 16 numbers per element
+    break;
+  default:
+    Tcl_DecrRefCount(listObj);
+    Tcl_AppendResult(interp,
+		     "unsupported uniform type for \"", name, "\"", NULL);
+    return TCL_ERROR;
+  }
+
+  // Split the input string into individual components
+  if (Tcl_ListObjGetElements(interp, listObj,
+			     &elementCount, &elements) != TCL_OK) {
+    Tcl_DecrRefCount(listObj);
+    Tcl_AppendResult(interp, "failed to parse uniform value: \"",
+		     valstr, "\"", NULL);
+    return TCL_ERROR;
+  }
+	
+  // Check if the number of elements is a multiple of the total numbers required
+  if (elementCount > totalNumbersRequired) {
+      Tcl_DecrRefCount(listObj);
+      /* (this passed the two counts to Tcl_AppendResult as if they were
+         strings, and crashed) */
+      Tcl_SetObjResult(interp,
+		       Tcl_ObjPrintf("uniform \"%s\" expects no more than %d values but got %d",
+				     name, totalNumbersRequired, (int) elementCount));
+    return TCL_ERROR;
+  }
+
+  // Parse and store the values based on the uniform type
+  if (uinfo->type == GL_BOOL || uinfo->type == GL_INT) {
+    if (!uinfo->val) {
+      uinfo->val = malloc(totalNumbersRequired * sizeof(int));
+      if (!uinfo->val){
+        Tcl_DecrRefCount(listObj);
+        Tcl_AppendResult(interp,
+			 "memory allocation failed for uniform \"",
+			 name, "\"", NULL);
+        return TCL_ERROR;
+      }
+    }
+    int ival;
+    for (i = 0; i < elementCount; i++) {
+      if (Tcl_GetIntFromObj(interp, elements[i], &ival) != TCL_OK) {
+        Tcl_DecrRefCount(listObj);
+        return TCL_ERROR;
+      }
+      ((int *)uinfo->val)[i] = ival;
+    }
+  }
+  else {
+    for (i = 0; i < elementCount; i++) {
+      if (!uinfo->val) {
+        uinfo->val = malloc(totalNumbersRequired * sizeof(float));
+        if (!uinfo->val)
+        {
+          Tcl_DecrRefCount(listObj);
+          Tcl_AppendResult(interp,
+			   "memory allocation failed for uniform \"",
+			   name, "\"", NULL);
+          return TCL_ERROR;
+        }
+      }
+      double fval;
+      if (Tcl_GetDoubleFromObj(interp, elements[i], &fval) != TCL_OK) {
+        Tcl_DecrRefCount(listObj);
+        return TCL_ERROR;
+      }
+      ((float *)uinfo->val)[i] = (float)fval;
+    }
+  }
+
+  Tcl_DecrRefCount(listObj);
+  return TCL_OK;
+}
+
+int shader_uniform_get(Tcl_Interp *interp, Tcl_HashTable *table,
+                       const char *shader_name, const char *name)
+{
+  Tcl_HashEntry *entryPtr;
+  UNIFORM_INFO *uinfo;
+  Tcl_Obj *listObj;
+  int *ival;
+  float *fvals;
+  int i, j, elementsPerUniform;
+
+  if ((entryPtr = Tcl_FindHashEntry(table, name))) {
+    uinfo = (UNIFORM_INFO *)Tcl_GetHashValue(entryPtr);
+  } else {
+    Tcl_AppendResult(interp, "uniform \"", name, "\" not found in shader \"",
+                     shader_name, "\"", NULL);
+    return TCL_ERROR;
+  }
+
+  if (!uinfo->val) {
+    Tcl_AppendResult(interp, "uniform \"", name, "\" has no value set", NULL);
+    return TCL_ERROR;
+  }
+ 
+  // Create a new Tcl list object to hold the uniform values
+  listObj = Tcl_NewListObj(0, NULL);
+
+  // Determine the number of elements per uniform based on the type
+  switch (uinfo->type) {
+  case GL_BOOL:
+  case GL_INT:
+  case GL_FLOAT:
+    elementsPerUniform = 1;
+    break;
+  case GL_FLOAT_VEC2:
+    elementsPerUniform = 2;
+    break;
+  case GL_FLOAT_VEC3:
+    elementsPerUniform = 3;
+    break;
+  case GL_FLOAT_VEC4:
+  case GL_FLOAT_MAT2:
+    elementsPerUniform = 4;
+    break;
+  case GL_FLOAT_MAT3:
+    elementsPerUniform = 9;
+    break;
+  case GL_FLOAT_MAT4:
+    elementsPerUniform = 16;
+    break;
+  default:
+    Tcl_AppendResult(interp, "unsupported uniform type for \"", name, "\"", NULL);
+    return TCL_ERROR;
+  }
+
+  // Iterate over the uniform values and add them to the list
+  if (uinfo->type == GL_BOOL || uinfo->type == GL_INT) {
+    ival = (int *)uinfo->val;
+    for (i = 0; i < uinfo->size; i++) {
+      for (j = 0; j < elementsPerUniform; j++) {
+        Tcl_ListObjAppendElement(interp, listObj, Tcl_NewIntObj(ival[i * elementsPerUniform + j]));
+      }
+    }
+  } else {
+    fvals = (float *)uinfo->val;
+    for (i = 0; i < uinfo->size; i++) {
+      for (j = 0; j < elementsPerUniform; j++) {
+        Tcl_ListObjAppendElement(interp, listObj, Tcl_NewDoubleObj(fvals[i * elementsPerUniform + j]));
+      }
+    }
+  }
+
+  // Set the Tcl list as the result
+  Tcl_SetObjResult(interp, listObj);
+  return TCL_OK;
+}
+
+/********************************************************************/
 /*                       SHADER COMPILATION                         */
 /********************************************************************/
 
@@ -804,7 +1089,46 @@ int build_prog(SHADER_PROG *sp, const char *v, const char *f, int verbose)
     return GL_NO_ERROR;
 }
 
+/*
+ * The vertex shader of a quad placed in the scene, for a shader file (or
+ * an inline build) that gives only a fragment shader: the position by the
+ * projection and modelview matrices, the texture coordinate passed on as
+ * `texcoord`.  It is what most files in shaders/ spell out themselves.
+ */
+const char *shaderDefaultVertexSource(void)
+{
+    return
+#ifndef STIM2_USE_GLES
+        "#version 330\n"
+#else
+        "#version 300 es\n"
+#endif
+        "in vec3 vertex_position;\n"
+        "in vec2 vertex_texcoord;\n"
+        "out vec2 texcoord;\n"
+        "uniform mat4 projMat;\n"
+        "uniform mat4 modelviewMat;\n"
+        "void main(void)\n"
+        "{\n"
+        "  texcoord = vertex_texcoord;\n"
+        "  gl_Position = projMat * modelviewMat * vec4(vertex_position, 1.0);\n"
+        "}\n";
+}
+
 int build_prog_from_file(SHADER_PROG *sp, char *shadername, int verbose)
+{
+    return build_prog_from_file_ex(sp, shadername, verbose, NULL);
+}
+
+/*
+ * build_prog_from_file_ex - as build_prog_from_file, but a file with no
+ * "-- Vertex" section is built with default_vertex (complete source, with
+ * its #version) when one is given.  NULL: such a file is an error, as it
+ * always was -- a module whose vertex shader needs other attributes (mesh)
+ * has no default to offer.
+ */
+int build_prog_from_file_ex(SHADER_PROG *sp, char *shadername, int verbose,
+                            const char *default_vertex)
 {
     char sname[256];
     const char *f, *v;
@@ -816,6 +1140,8 @@ int build_prog_from_file(SHADER_PROG *sp, char *shadername, int verbose)
         for (int i = 0; i < shader_config.count; i++) {
             fprintf(stderr, "  %s\n", shader_config.paths[i]);
         }
+        if (shader_config.system_path[0])
+            fprintf(stderr, "  %s\n", shader_config.system_path);
         return -1;
     }
     
@@ -826,18 +1152,21 @@ int build_prog_from_file(SHADER_PROG *sp, char *shadername, int verbose)
     
     ensure_glsw_initialized(shader_config.resolved_path);
 
-    sprintf(sname, "%s.Vertex", shadername);
-    v = glswGetShader(sname);
-    if (!v) {
-        fprintf(stderr, "ERROR: %s\n", glswGetError());
-        return -1;
-    }
-
     sprintf(sname, "%s.Fragment", shadername);
     f = glswGetShader(sname);
     if (!f) {
         fprintf(stderr, "ERROR: %s\n", glswGetError());
         return -1;
+    }
+
+    sprintf(sname, "%s.Vertex", shadername);
+    v = glswGetShader(sname);
+    if (!v) {
+        if (!default_vertex) {
+            fprintf(stderr, "ERROR: %s\n", glswGetError());
+            return -1;
+        }
+        v = default_vertex;
     }
 
     return build_prog(sp, v, f, verbose);

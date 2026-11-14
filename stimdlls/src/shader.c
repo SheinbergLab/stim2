@@ -112,9 +112,6 @@ typedef struct _shader_obj {
   Tcl_HashTable attribTable;    /* local unique version */
 } SHADER_OBJ;
 
-static int uniform_set(Tcl_Interp *interp, Tcl_HashTable *table,
-               char *shader_name, char *name, char *valstr);
-
 static void delete_vao_info(VAO_INFO *v);
 
 static int parse_ints(char *str, int *vals, int n);
@@ -410,11 +407,11 @@ static int set_default_uniforms(Tcl_Interp *interp, SHADER_OBJ *s)
     
   entryPtr = Tcl_FirstHashEntry(table, &searchEntry);
   if (entryPtr) {
-    uniform_set(interp, &s->uniformTable, s->program->name, 
+    shader_uniform_set(interp, &s->uniformTable, s->program->name, 
         Tcl_GetHashKey(table, entryPtr),
         Tcl_GetHashValue(entryPtr));
     while ((entryPtr = Tcl_NextHashEntry(&searchEntry))) {
-      uniform_set(interp, &s->uniformTable, s->program->name, 
+      shader_uniform_set(interp, &s->uniformTable, s->program->name, 
           Tcl_GetHashKey(table, entryPtr),
           Tcl_GetHashValue(entryPtr));
     }
@@ -541,9 +538,25 @@ static int shaderPrependPathCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 /*
+ * shaderRemovePath path
+ *   Take one directory out of the user's search list.
+ *   Returns: 1 if it was there, 0 if not
+ */
+static int shaderRemovePathCmd(ClientData clientData, Tcl_Interp *interp,
+                               int argc, char *argv[])
+{
+    if (argc != 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " path", NULL);
+        return TCL_ERROR;
+    }
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(shaderRemovePath(argv[1])));
+    return TCL_OK;
+}
+
+/*
  * shaderClearPaths
- *   Remove all paths from the shader search list.
- *   Also resets the glsw library state.
+ *   Empty the user's search list.  The system directory (stim2's shipped
+ *   shaders) is still searched.  Also resets the glsw library state.
  */
 static int shaderClearPathsCmd(ClientData clientData, Tcl_Interp *interp,
                                int argc, char *argv[])
@@ -553,14 +566,40 @@ static int shaderClearPathsCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 /*
- * shaderGetPaths
- *   Returns all search paths as a Tcl list.
+ * shaderSystemPath ?path?
+ *   The directory of the shaders that ship with stim2, searched after the
+ *   user's list whatever that list holds.  With a path: set it ("" for
+ *   none).  Returns the directory.
+ */
+static int shaderSystemPathCmd(ClientData clientData, Tcl_Interp *interp,
+                               int argc, char *argv[])
+{
+    if (argc > 2) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " ?path?", NULL);
+        return TCL_ERROR;
+    }
+    if (argc == 2) shaderSetSystemPath(argv[1]);
+    Tcl_SetResult(interp, (char *)shaderGetSystemPath(), TCL_VOLATILE);
+    return TCL_OK;
+}
+
+/*
+ * shaderGetPaths ?-user?
+ *   The directories searched, in order, as a Tcl list: the user's list,
+ *   then the system directory.  -user: the user's list alone.
  */
 static int shaderGetPathsCmd(ClientData clientData, Tcl_Interp *interp,
                              int argc, char *argv[])
 {
     Tcl_Obj *listObj;
     int i, count;
+    int user_only = 0;
+
+    if (argc == 2 && strcmp(argv[1], "-user") == 0) user_only = 1;
+    else if (argc != 1) {
+        Tcl_AppendResult(interp, "usage: ", argv[0], " ?-user?", NULL);
+        return TCL_ERROR;
+    }
 
     listObj = Tcl_NewListObj(0, NULL);
     count = shaderGetPathCount();
@@ -571,6 +610,9 @@ static int shaderGetPathsCmd(ClientData clientData, Tcl_Interp *interp,
             Tcl_ListObjAppendElement(interp, listObj, Tcl_NewStringObj(path, -1));
         }
     }
+    if (!user_only && shaderGetSystemPath()[0])
+        Tcl_ListObjAppendElement(interp, listObj,
+                                 Tcl_NewStringObj(shaderGetSystemPath(), -1));
 
     Tcl_SetObjResult(interp, listObj);
     return TCL_OK;
@@ -605,12 +647,19 @@ static int shaderSetSuffixCmd(ClientData clientData, Tcl_Interp *interp,
 static int shaderSetPathCmd(ClientData clientData, Tcl_Interp *interp,
                 int argc, char *argv[])
 {
+  /* The user's search list becomes this one directory, and the directory
+     that was searched first is returned.  stim2's own shaders (the system
+     directory) are still found after it.  (This used to fill only the
+     legacy shaderPath global, which is read just while the list is empty,
+     so once anything had added a path the command did nothing.)  With no
+     argument: the directory searched first, unchanged. */
   char oldpath[MAX_PATH];
-  strncpy(oldpath, shaderPath, MAX_PATH-1);
+  const char *first = shaderGetPathN(0);
+  if (!first) first = shaderGetSystemPath();
+  strncpy(oldpath, first, MAX_PATH-1);
+  oldpath[MAX_PATH-1] = '\0';
 
-  if (argc >= 2) {
-    strncpy(shaderPath, argv[1], MAX_PATH-1);
-  }
+  if (argc >= 2) shaderSetPath(argv[1]);
 
   Tcl_SetResult(interp, oldpath, TCL_VOLATILE);
   return(TCL_OK);
@@ -718,8 +767,14 @@ static int shaderBuildInlineCmd(ClientData clientData, Tcl_Interp *interp,
         return TCL_ERROR;
     }
 
-    /* Prepend version directives and precision qualifiers */
-    vertex_src = prepend_shader_preamble(argv[1]);
+    /* Prepend version directives and precision qualifiers; an empty
+       vertex source is the standard one (shaderutils.c) */
+    {
+      const char *p = argv[1];
+      while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+      vertex_src = *p ? prepend_shader_preamble(argv[1])
+                      : strdup(shaderDefaultVertexSource());
+    }
     fragment_src = prepend_shader_preamble(argv[2]);
 
     if (!vertex_src || !fragment_src) {
@@ -795,8 +850,14 @@ static int shaderBuildCmd(ClientData clientData, Tcl_Interp *interp,
     return(TCL_ERROR);
   }
 
-  if (build_prog_from_file(&shader_prog, argv[1], verbose) != GL_NO_ERROR) 
+  /* a file with no "-- Vertex" section draws the object's quad with the
+     standard vertex shader (shaderutils.c) */
+  if (build_prog_from_file_ex(&shader_prog, argv[1], verbose,
+			      shaderDefaultVertexSource()) != GL_NO_ERROR) {
+    Tcl_AppendResult(interp, argv[0], ": could not build shader \"", argv[1],
+		     "\" (see the log)", NULL);
     return TCL_ERROR;
+  }
 
   
   newprog = (SHADER_PROG *) calloc(1, sizeof(SHADER_PROG));
@@ -1027,202 +1088,6 @@ static int parse_floats(char *str, float *vals, int n)
   return i;
 }
 
-static int uniform_set(Tcl_Interp *interp, Tcl_HashTable *table,
-                       char *shader_name, char *name, char *valstr)
-{
-  Tcl_HashEntry *entryPtr;
-  UNIFORM_INFO *uinfo;
-  Tcl_Obj *listObj;
-  Tcl_Obj **elements;
-  Tcl_Size elementCount;
-  int totalNumbersRequired = 0;
-  int i;
-
-  Tcl_ResetResult(interp);
-  
-  if ((entryPtr = Tcl_FindHashEntry(table, name))) {
-    uinfo = (UNIFORM_INFO *)Tcl_GetHashValue(entryPtr);
-  }
-  else {
-    Tcl_AppendResult(interp, "uniform \"", name, "\" not found in shader \"",
-                     shader_name, "\"", NULL);
-    return TCL_ERROR;
-  }
-
-  listObj = Tcl_NewStringObj(valstr, -1);
-  Tcl_IncrRefCount(listObj);
-
-  // Determine the total number of individual numbers required based on the type
-  switch (uinfo->type) {
-  case GL_BOOL:
-  case GL_INT:
-  case GL_FLOAT:
-    totalNumbersRequired = uinfo->size; // 1 number per element
-    break;
-  case GL_FLOAT_VEC2:
-    totalNumbersRequired = uinfo->size * 2; // 2 numbers per element
-    break;
-  case GL_FLOAT_VEC3:
-    totalNumbersRequired = uinfo->size * 3; // 3 numbers per element
-    break;
-  case GL_FLOAT_VEC4:
-  case GL_FLOAT_MAT2:
-    totalNumbersRequired = uinfo->size * 4; // 4 numbers per element
-    break;
-  case GL_FLOAT_MAT3:
-    totalNumbersRequired = uinfo->size * 9; // 9 numbers per element
-    break;
-  case GL_FLOAT_MAT4:
-    totalNumbersRequired = uinfo->size * 16; // 16 numbers per element
-    break;
-  default:
-    Tcl_DecrRefCount(listObj);
-    Tcl_AppendResult(interp,
-		     "unsupported uniform type for \"", name, "\"", NULL);
-    return TCL_ERROR;
-  }
-
-  // Split the input string into individual components
-  if (Tcl_ListObjGetElements(interp, listObj,
-			     &elementCount, &elements) != TCL_OK) {
-    Tcl_DecrRefCount(listObj);
-    Tcl_AppendResult(interp, "failed to parse uniform value: \"",
-		     valstr, "\"", NULL);
-    return TCL_ERROR;
-  }
-	
-  // Check if the number of elements is a multiple of the total numbers required
-  if (elementCount > totalNumbersRequired) {
-      Tcl_DecrRefCount(listObj);
-      Tcl_AppendResult(interp, "uniform \"", name, "\" expects no more than ",
-                     totalNumbersRequired,
-		     " values but got ", elementCount, NULL);
-    return TCL_ERROR;
-  }
-
-  // Parse and store the values based on the uniform type
-  if (uinfo->type == GL_BOOL || uinfo->type == GL_INT) {
-    if (!uinfo->val) {
-      uinfo->val = malloc(totalNumbersRequired * sizeof(int));
-      if (!uinfo->val){
-        Tcl_DecrRefCount(listObj);
-        Tcl_AppendResult(interp,
-			 "memory allocation failed for uniform \"",
-			 name, "\"", NULL);
-        return TCL_ERROR;
-      }
-    }
-    int ival;
-    for (i = 0; i < elementCount; i++) {
-      if (Tcl_GetIntFromObj(interp, elements[i], &ival) != TCL_OK) {
-        Tcl_DecrRefCount(listObj);
-        return TCL_ERROR;
-      }
-      ((int *)uinfo->val)[i] = ival;
-    }
-  }
-  else {
-    for (i = 0; i < elementCount; i++) {
-      if (!uinfo->val) {
-        uinfo->val = malloc(totalNumbersRequired * sizeof(float));
-        if (!uinfo->val)
-        {
-          Tcl_DecrRefCount(listObj);
-          Tcl_AppendResult(interp,
-			   "memory allocation failed for uniform \"",
-			   name, "\"", NULL);
-          return TCL_ERROR;
-        }
-      }
-      double fval;
-      if (Tcl_GetDoubleFromObj(interp, elements[i], &fval) != TCL_OK) {
-        Tcl_DecrRefCount(listObj);
-        return TCL_ERROR;
-      }
-      ((float *)uinfo->val)[i] = (float)fval;
-    }
-  }
-
-  Tcl_DecrRefCount(listObj);
-  return TCL_OK;
-}
-
-static int uniform_get(Tcl_Interp *interp, Tcl_HashTable *table,
-                       char *shader_name, char *name)
-{
-  Tcl_HashEntry *entryPtr;
-  UNIFORM_INFO *uinfo;
-  Tcl_Obj *listObj;
-  int *ival;
-  float *fvals;
-  int i, j, elementsPerUniform;
-
-  if ((entryPtr = Tcl_FindHashEntry(table, name))) {
-    uinfo = (UNIFORM_INFO *)Tcl_GetHashValue(entryPtr);
-  } else {
-    Tcl_AppendResult(interp, "uniform \"", name, "\" not found in shader \"",
-                     shader_name, "\"", NULL);
-    return TCL_ERROR;
-  }
-
-  if (!uinfo->val) {
-    Tcl_AppendResult(interp, "uniform \"", name, "\" has no value set", NULL);
-    return TCL_ERROR;
-  }
- 
-  // Create a new Tcl list object to hold the uniform values
-  listObj = Tcl_NewListObj(0, NULL);
-
-  // Determine the number of elements per uniform based on the type
-  switch (uinfo->type) {
-  case GL_BOOL:
-  case GL_INT:
-  case GL_FLOAT:
-    elementsPerUniform = 1;
-    break;
-  case GL_FLOAT_VEC2:
-    elementsPerUniform = 2;
-    break;
-  case GL_FLOAT_VEC3:
-    elementsPerUniform = 3;
-    break;
-  case GL_FLOAT_VEC4:
-  case GL_FLOAT_MAT2:
-    elementsPerUniform = 4;
-    break;
-  case GL_FLOAT_MAT3:
-    elementsPerUniform = 9;
-    break;
-  case GL_FLOAT_MAT4:
-    elementsPerUniform = 16;
-    break;
-  default:
-    Tcl_AppendResult(interp, "unsupported uniform type for \"", name, "\"", NULL);
-    return TCL_ERROR;
-  }
-
-  // Iterate over the uniform values and add them to the list
-  if (uinfo->type == GL_BOOL || uinfo->type == GL_INT) {
-    ival = (int *)uinfo->val;
-    for (i = 0; i < uinfo->size; i++) {
-      for (j = 0; j < elementsPerUniform; j++) {
-        Tcl_ListObjAppendElement(interp, listObj, Tcl_NewIntObj(ival[i * elementsPerUniform + j]));
-      }
-    }
-  } else {
-    fvals = (float *)uinfo->val;
-    for (i = 0; i < uinfo->size; i++) {
-      for (j = 0; j < elementsPerUniform; j++) {
-        Tcl_ListObjAppendElement(interp, listObj, Tcl_NewDoubleObj(fvals[i * elementsPerUniform + j]));
-      }
-    }
-  }
-
-  // Set the Tcl list as the result
-  Tcl_SetObjResult(interp, listObj);
-  return TCL_OK;
-}
-
 static int shaderObjSetUniformCmd(ClientData clientData, Tcl_Interp *interp,
                   int argc, char *argv[])
 {
@@ -1241,11 +1106,11 @@ static int shaderObjSetUniformCmd(ClientData clientData, Tcl_Interp *interp,
   
   g = GR_CLIENTDATA(OL_OBJ(olist,id));
   if (argc > 3) {
-    return(uniform_set(interp, &g->uniformTable, g->program->name, 
+    return(shader_uniform_set(interp, &g->uniformTable, g->program->name, 
                argv[2], argv[3]));
   }
   else {
-    return(uniform_get(interp, &g->uniformTable, g->program->name,
+    return(shader_uniform_get(interp, &g->uniformTable, g->program->name,
                argv[2]));
   }
 }
@@ -1304,6 +1169,12 @@ int Shader_Init(Tcl_Interp *interp)
   Tcl_CreateCommand(interp, "shaderClearPaths",
             (Tcl_CmdProc *) shaderClearPathsCmd,
             (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "shaderRemovePath",
+            (Tcl_CmdProc *) shaderRemovePathCmd,
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "shaderSystemPath",
+            (Tcl_CmdProc *) shaderSystemPathCmd,
+            (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateCommand(interp, "shaderGetPaths",
             (Tcl_CmdProc *) shaderGetPathsCmd,
             (ClientData) OBJList, (Tcl_CmdDeleteProc *) NULL);
@@ -1352,16 +1223,18 @@ int Shader_Init(Tcl_Interp *interp)
                imageSetFilterType,
                NULL, NULL);
 
-  /* Add default shader path based on executable location */
+  /* stim2's shipped shaders, beside the executable: the system directory,
+     searched after whatever the user's list holds */
 #ifdef __APPLE__
   Tcl_Eval(interp,
-	   "shaderAddPath [file join [file dirname [info nameofexecutable]] .. Resources shaders]"
+	   "shaderSystemPath [file normalize [file join [file dirname [info nameofexecutable]] .. Resources shaders]]"
 	   );
 #else
   Tcl_Eval(interp,
-	   "shaderAddPath [file join [file dirname [info nameofexecutable]] shaders]"
+	   "shaderSystemPath [file normalize [file join [file dirname [info nameofexecutable]] shaders]]"
 	   );
 #endif  
+  Tcl_ResetResult(interp);
   
   return TCL_OK;
 }

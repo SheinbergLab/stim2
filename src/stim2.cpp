@@ -43,7 +43,7 @@
 #include "framelog.h"
 #include "mirror.h"
 #include "overlay.h"
-#include "gazewin.h"
+#include "postpass.h"
 #include "latedraw.h"
 #include "WebSocketServer.h"
 #include "TclCompletion.h"
@@ -199,7 +199,7 @@ static inline double stimClockNow(void)
   return glfwGetTime();
 }
 
-extern "C" double gazewinStimClock(void) { return stimClockNow(); }
+extern "C" double stimClockSeconds(void) { return stimClockNow(); }   /* postpass.h */
 
 void updateTimes(void);
 static void frameClockHold(void)
@@ -1976,10 +1976,10 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
       // and, like glFinish, only proved GPU completion -- not the flip.
       swapsyncAfterSwap();
     }
-    /* gazewin's latency record: the flip that showed its pass */
-    if (gazewinFlipPending()) {
+    /* the post passes' latency records: the flip that showed them */
+    if (postpassFlipPending()) {
       double f = swapsyncLastFlipTime();
-      gazewinNoteFlip(f > 0.0 ? f : glfwGetTime(), swapsyncLastFlipWallUs());
+      postpassNoteFlip(f > 0.0 ? f : glfwGetTime(), swapsyncLastFlipWallUs());
     }
     /* stepFrame's flip time: the clock reads it from here on, as the rig's
        clock read the flip once its swap wait returned */
@@ -2138,17 +2138,30 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
     scene_valid = true;
   }
 
-  /* gazewin (gazewin.h): the pass over the finished scene, before the
-     overlay so annotations stay on top and frameRepaint's saved scene is
-     what the subject saw.  Off: one flag test. */
-  void gazeStage(void)
+  /* The post passes (postpass.h): modules' full-screen passes over the
+     finished scene, before the overlay so annotations stay on top and
+     frameRepaint's saved scene is what the subject saw.  None wanted: one
+     test. */
+  stim_postpass_frame_t postFrame(void)
   {
-    if (!gazewinWanted()) return;
-    gazewinStage(winWidth, winHeight, HALF_SCREEN_DEG_X, HALF_SCREEN_DEG_Y,
-                 drawFramebuffer(), drawnBuffer(), glfwGetTime());
+    stim_postpass_frame_t f;
+    f.w = winWidth; f.h = winHeight;
+    f.halfx = HALF_SCREEN_DEG_X; f.halfy = HALF_SCREEN_DEG_Y;
+    f.drawfb = drawFramebuffer(); f.drawnbuf = drawnBuffer();
+    f.now_s = glfwGetTime();
+    return f;
   }
-  bool gazeRepaint(void);
-  void gazeRepaintMaybe(int *late_wait_ms);
+  void postStage(void)
+  {
+    if (!postpassWanted()) return;
+    stim_postpass_frame_t f = postFrame();
+    if (postpassStage(&f)) {
+      glBindFramebuffer(GL_FRAMEBUFFER, drawFramebuffer());
+      glReadBuffer(drawnBuffer());
+    }
+  }
+  bool postRepaint(void);
+  void postRepaintMaybe(int *late_wait_ms);
 
   void overlayStage(void)
   {
@@ -2162,14 +2175,14 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
      SwapCount, frame record or frame scripts */
   bool frameRepaint(void)
   {
-    /* under gazewin the saved scene has the pass in it, at the gaze of its
-       frame: draw the pass again from gazewin's own copy of the scene, at
-       the gaze now (a mirror feeds it between rig frames).  That needs no
-       overlay; with one, it is kept as the scene for the next repaint. */
+    /* under a post pass the saved scene has the pass in it, as its frame
+       drew it: draw the passes again from their own copy of the scene, with
+       their inputs as they are now (a mirror feeds gazewin the gaze between
+       rig frames).  That needs no overlay; with one, it is kept as the
+       scene for the next repaint. */
     glBindVertexArray(vao);
-    if (gazewinWanted() &&
-        gazewinComposite(winWidth, winHeight, HALF_SCREEN_DEG_X, HALF_SCREEN_DEG_Y,
-                         drawFramebuffer(), glfwGetTime())) {
+    stim_postpass_frame_t pf = postFrame();
+    if (postpassWanted() && postpassComposite(&pf)) {
       glBindFramebuffer(GL_FRAMEBUFFER, drawFramebuffer());
       if (overlayCount()) sceneSave();
     }
@@ -2667,9 +2680,9 @@ proc screen_config {} {
       varname[p-dsstring] = '\0';
       Tcl_SetVar2(interp, "dsVals", varname, dsstring, TCL_GLOBAL_ONLY);
 
-      /* gazewin's source goes straight to C (gazewin.h); one flag test
-         when no source is named */
-      if (gazewinSourceSet()) gazewinMaybeSample(varname, dsstring, glfwGetTime());
+      /* a module's datapoint tap gets it straight in C (postpass.h); one
+         test when there are none */
+      if (postpassTapCount()) postpassTap(varname, dsstring, glfwGetTime());
 
       /* Dispatch callback if it exists */
       /*  callback should include a proc name that takes one argument */
@@ -4076,7 +4089,7 @@ void Application::updateDisplay(bool log_events)
     if (ClearBackground) {
       glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     }
-    gazeStage();                /* the gaze pass covers a blank screen too */
+    postStage();                /* the post passes cover a blank screen too */
     overlayStage();             /* annotations still show on a blank screen */
     captureFrameGrabs();
     sinkFrame();                /* like the grabs: before the imgui overlay */
@@ -4116,7 +4129,7 @@ void Application::updateDisplay(bool log_events)
     executePreScripts(g);
     drawGroup(g);
     executePostScripts(g);
-    gazeStage();                /* the gaze pass over the finished scene */
+    postStage();                /* the post passes over the finished scene */
     overlayStage();             /* annotations over the finished scene */
     captureFrameGrabs();
     sinkFrame();                /* like the grabs: before the imgui overlay */
@@ -4211,19 +4224,21 @@ void Application::updateDisplay(bool log_events)
   }
 }
 
-/* gazewin on a static display: a new gaze sample is shown by drawing the
-   pass again over the scene it saved -- no step, no frame scripts.  Unlike
+/* A post pass on a static display: a change in what it shows (gazewin: a
+   new gaze sample) is drawn by running the passes again over the scene the
+   first one saved -- no step, no frame scripts.  Unlike
    frameRepaint this is a real frame on the display, so it is counted like
    one: SwapCount, the stim/frame record (a replay then places the gaze
    samples that caused it), swap tags, grabs and the sink.  false if there
    is no saved scene of the window's size (the caller asks for a redraw). */
-bool Application::gazeRepaint(void)
+bool Application::postRepaint(void)
 {
   glBindVertexArray(vao);
   glBindFramebuffer(GL_FRAMEBUFFER, drawFramebuffer());
-  if (!gazewinComposite(winWidth, winHeight, HALF_SCREEN_DEG_X, HALF_SCREEN_DEG_Y,
-                        drawFramebuffer(), glfwGetTime()))
-    return false;
+  stim_postpass_frame_t pf = postFrame();
+  if (!postpassComposite(&pf)) return false;
+  glBindFramebuffer(GL_FRAMEBUFFER, drawFramebuffer());
+  glReadBuffer(drawnBuffer());
   overlayStage();
   captureFrameGrabs();
   sinkFrame();
@@ -4239,21 +4254,22 @@ bool Application::gazeRepaint(void)
   return true;
 }
 
-/* Main loop, a pass that drew nothing: repaint if the gaze pass would now
-   show something different, late in the refresh so the newest sample
-   makes the flip -- at lastFlip + period - budget, the budget being
-   `gazewin set -late`, or stimLateDraw's while that is on, else none
-   (repaint at once).  Not due: *late_wait_ms is when it could become due
-   by itself (the sample going stale), so the loop wakes for it. */
-void Application::gazeRepaintMaybe(int *late_wait_ms)
+/* Main loop, an iteration that drew nothing: repaint if a post pass would
+   now show something different, late in the refresh so the newest input
+   makes the flip -- at lastFlip + period - budget, the budget being the
+   passes' own (`gazewin set -late`), or stimLateDraw's while that is on,
+   else none (repaint at once).  Not due: *late_wait_ms is when one could
+   become due by itself (a gaze sample going stale), so the loop wakes for
+   it. */
+void Application::postRepaintMaybe(int *late_wait_ms)
 {
   double now = glfwGetTime();
   double wait_s = -1.0;
-  if (!gazewinRepaintDue(now, &wait_s)) {
+  if (!postpassRepaintDue(now, &wait_s)) {
     if (wait_s >= 0.0) *late_wait_ms = (int) std::ceil(wait_s * 1000.0);
     return;
   }
-  double budget = gazewinLateMs();
+  double budget = postpassLateMs();
   if (budget < 0.0) budget = latedraw.enabled ? latedraw.effective_ms : 0.0;
   double flip = swapsyncLastFlipTime();
   double period = latedrawPeriodMs(&latedraw, swapsyncLastRefreshMs());
@@ -4261,7 +4277,7 @@ void Application::gazeRepaintMaybe(int *late_wait_ms)
     double target = latedrawTarget(flip, period, budget);
     if (now < target) { *late_wait_ms = latedrawWaitMs(now, target); return; }
   }
-  if (!gazeRepaint()) redraw();
+  if (!postRepaint()) redraw();
 }
 
 /* Returns 1 if need to redisplay */
@@ -5044,9 +5060,9 @@ main(int argc, char *argv[]) {
         app.count_frame();
         app.lateDrawAccount(ldf);
       }
-      else if (gazewinWanted()) {
-        /* nothing to step: a static display under the gaze pass */
-        app.gazeRepaintMaybe(&late_wait_ms);
+      else if (postpassWanted()) {
+        /* nothing to step: a static display under a post pass */
+        app.postRepaintMaybe(&late_wait_ms);
       }
       frameClockRelease();
     }
