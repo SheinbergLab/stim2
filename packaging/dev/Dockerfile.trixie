@@ -1,8 +1,9 @@
 # A Debian 13 (trixie) build environment for stim2, matching the Linux
 # release workflow (.github/workflows/release_linux.yml): its apt deps, Tcl
 # 9 / GLFW / spine-c / box2d built from the pinned submodules, and dlsh's
-# released .debs.  For building a dev stim2 to try on a rig before tagging;
-# see packaging/dev/build-linux.sh.
+# released .debs.  For building a dev stim2 to try on a rig before tagging
+# (packaging/dev/build-linux.sh), and for running its tests headless on
+# Mesa's software renderer (packaging/dev/test-linux.sh).
 #
 #   docker build --platform linux/amd64 -f packaging/dev/Dockerfile.trixie \
 #       --build-arg STIM2_REF=$(git rev-parse HEAD) -t stim2-dev:trixie .
@@ -39,4 +40,11 @@ RUN v=${DLSH_VERSION}; \
     if [ "$v" = latest ]; then v=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | jq -r .tag_name); fi; \
     cd /tmp && for p in dg dlsh; do \
       wget -q https://github.com/SheinbergLab/dlsh/releases/download/$v/dlsh-${p}_${v}_amd64.deb \
-      && dpkg --install dlsh-${p}_${v}_amd64.deb; done && rm -f /tmp/*.deb
+      && dpkg --install dlsh-${p}_${v}_amd64.deb; done \
+    # ... and the dlsh interpreter of the same release, for what a rig has
+    # at run time: /usr/local/dlsh/dlsh.zip, which stim2 loads when it
+    # starts (the dl_ commands), and /usr/local/bin/dlsh.  It is not needed
+    # to build, only for test-linux.sh.  apt, for its dependencies.
+    && wget -q https://github.com/SheinbergLab/dlsh/releases/download/$v/dlsh-interp_${v}_amd64.deb \
+    && apt-get update && apt-get install -y ./dlsh-interp_${v}_amd64.deb \
+    && rm -rf /var/lib/apt/lists/* && rm -f /tmp/*.deb

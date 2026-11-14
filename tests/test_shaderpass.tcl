@@ -138,11 +138,18 @@ ck "sampler: not a sampler refused" [catch { shaderpass sampler ty which 3 }]
 ck "sampler: the scene refused" [catch { shaderpass sampler ty scene 3 }]
 shaderpass on ty
 stepFrame 5210; set f_mat [keep]              ;# mat3: red and blue swapped
-set pix [dl_char [dl_ilist 0 255 0 255]]
-set img [shaderImageCreate $pix 1 1]
-ck "sampler: takes a texture id" [expr {[shaderpass sampler ty lut [shaderImageID $img]] == [shaderImageID $img]}]
-shaderpass uniform ty which 1
-frameRepaint; set f_lut [keep]                ;# the texture, by repaint alone
+# a 1x1 green texture needs dlsh (a stim2 started without dlsh.zip has no
+# dl_ commands: that step is skipped, and said so)
+set ::have_dl [llength [info commands dl_ilist]]
+if { $::have_dl } {
+    set pix [dl_char [dl_ilist 0 255 0 255]]
+    set img [shaderImageCreate $pix 1 1]
+    ck "sampler: takes a texture id" [expr {[shaderpass sampler ty lut [shaderImageID $img]] == [shaderImageID $img]}]
+    shaderpass uniform ty which 1
+    frameRepaint; set f_lut [keep]            ;# the texture, by repaint alone
+} else {
+    note "SKIP sampler: a texture (no dlsh in this stim2)"
+}
 shaderpass uniform ty which 2
 shaderpass uniform ty pair {1 1} {0 0}
 frameRepaint; set f_arr [keep]                ;# a vec2 array
@@ -220,7 +227,7 @@ ck "noise: the same stim time gives the same field" [expr {[frame $f_n1b] eq [fr
 ck "noise: a later time gives another" [expr {[frame $f_n2] ne [frame $f_n1]}]
 
 ck "mat3 uniform: red shows blue ([px $f_mat 0 0])" [is $f_mat 0 0 {0 0 255}]
-ck "sampler: the texture's green ([px $f_lut 0 0])" [is $f_lut 0 0 {0 255 0}]
+if { $::have_dl } { ck "sampler: the texture's green ([px $f_lut 0 0])" [is $f_lut 0 0 {0 255 0}] }
 ck "vec2 array: yellow ([px $f_arr 0 0])" [is $f_arr 0 0 {255 255 0}]
 
 ck "chain order, priority 200: $order_after" [expr {$order_after eq "gazewin shader/inv"}]
