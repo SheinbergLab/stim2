@@ -131,6 +131,7 @@ What stim2 exports to a module for this:
 | `stimClockSeconds` | the stim clock: the real one live, the stepped one in a mirror or a replay render. Age inputs on this one and a render that runs faster or slower than real time behaves as the rig did |
 | `stimRealSeconds` | the real clock (`glfwGetTime`), for latency records |
 | `stimLogMessage` | stim2's log |
+| `stimFrameRecord` | a record of the frame being shown, for the data file: called from `flip`, it sends one int64 datapoint (the swap's `swapcount`, then up to seven values of the pass's own) to dserv on the frame log's stream. Nothing is sent while `stimFrameLog` is off. `gazewin` uses it for `stim/gazewin` |
 
 A module must not call GLFW itself: it would reach its own copy of the
 library, not stim2's. In `stimdlls/CMakeLists.txt`, `CORE_LIBS_ONLY` links

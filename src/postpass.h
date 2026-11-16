@@ -119,6 +119,16 @@ double stimRealSeconds(void);
 /* stim2's log (stderr and the console): level is "error", "warn", ... */
 void stimLogMessage(const char *level, const char *msg);
 
+/* A record of the frame being shown, for the data file: call it from a
+   pass's flip callback.  It goes to dserv on the frame log's stream
+   (stimFrameLog, see docs/stim-frame.md) as one int64 datapoint called
+   `name` (at most 40 characters): the swap's swapcount, as in its
+   stim/frame record, then the n values given (1..STIM_FRAME_RECORD_MAX).
+   Costs a copy; nothing is sent, and nothing kept, while the frame log is
+   off.  Returns 1 if the record was taken. */
+#define STIM_FRAME_RECORD_MAX 7
+int stimFrameRecord(const char *name, const long long *vals, int n);
+
 /* ---- for stim2.cpp ----------------------------------------------------- */
 
 int  postpassWanted(void);              /* any pass wanted */
@@ -128,6 +138,9 @@ int  postpassRepaintDue(double now_s, double *wait_s);
 double postpassLateMs(void);
 int  postpassFlipPending(void);
 void postpassNoteFlip(double flip_s, long long flip_wall_us);
+/* after a swap, with SwapCount as its stim/frame record has it: send the
+   records the flip callbacks left (stimFrameRecord) */
+void postpassFlushRecords(int swapcount);
 int  postpassTapCount(void);
 void postpassTap(const char *name, const char *line, double now_s);
 

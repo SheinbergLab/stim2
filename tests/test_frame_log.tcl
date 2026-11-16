@@ -52,6 +52,8 @@ proc msg_send {sock s} {
 set ::fields {frame swapcount flip_us ticks_us missed cmds_applied ds_dispatched eval_us}
 array set ::conn {}      ;# listener -> accepted channel ("" until accept)
 set ::frames {}          ;# decoded records, in arrival order
+set ::gazefields {swapcount flip_us sample_us arrival_to_flip_us state repaint x_udeg y_udeg}
+set ::gazerecs {}        ;# stim/gazewin records, in arrival order
 set ::badframes 0
 set ::eof 0
 
@@ -101,6 +103,11 @@ proc decode_frame {f} {
 	binary scan $data w8 vals
 	foreach k $::fields v $vals { dict set rec $k $v }
 	lappend ::frames $rec
+    } elseif {$varname eq "stim/gazewin" && $type == 16 && $len == 64} {
+	# a module's record on the same stream (stimFrameRecord)
+	binary scan $data w8 vals
+	foreach k $::gazefields v $vals { dict set rec $k $v }
+	lappend ::gazerecs $rec
     } else {
 	incr ::badframes
 	lappend ::frames $rec
@@ -243,6 +250,61 @@ if {[dict get $stats flipwall] > 0} {
 } else {
     check "flip_us is -1 where swapStats has no flip time" \
 	[expr {[dict get $last flip_us] == -1}] "got [dict get $last flip_us]"
+}
+
+# ---- a module's record: stim/gazewin ---------------------------------------
+# The gaze window's per-frame record (docs/gazewin.md) rides this stream:
+# one per frame the pass drew, saying which sample it was drawn from.
+if {[string match "!TCL_ERROR*" [msg_send $sock "gazewin status"]]} {
+    puts "SKIP stim/gazewin: no gazewin module in this stim2"
+} else {
+    msg_send $sock "gazewin reset; gazewin source test/gazerec; gazewin set -hold 0; gazewin on"
+    set ts 1700000000123456
+    msg_send $sock "gazewin datapoint test/gazerec 1 $ts 0 {1.5 -2.25}"
+    set nf [llength $::frames]
+    msg_send $sock "!redraw"
+    check "a gazewin frame gives a stim/gazewin record" \
+	[wait_until {[llength $::gazerecs] >= 1 && [llength $::frames] > $nf} 3000] \
+	"got [llength $::gazerecs]"
+    set g [lindex $::gazerecs end]
+    set f [lindex $::frames end]
+    if {$g ne ""} {
+	check "  its swapcount is the frame's" \
+	    [expr {[dict get $g swapcount] == [dict get $f swapcount]}] \
+	    "[dict get $g swapcount] vs [dict get $f swapcount]"
+	check "  its flip_us is the frame's" \
+	    [expr {[dict get $g flip_us] == [dict get $f flip_us]}]
+	check "  sample_us is the sample's dserv stamp" \
+	    [expr {[dict get $g sample_us] == $ts}] "got [dict get $g sample_us]"
+	check "  x and y in microdegrees" \
+	    [expr {[dict get $g x_udeg] == 1500000 && [dict get $g y_udeg] == -2250000}] \
+	    "[dict get $g x_udeg] [dict get $g y_udeg]"
+	check "  state 0 (drawn at the gaze), not a repaint" \
+	    [expr {[dict get $g state] == 0 && [dict get $g repaint] == 0}] \
+	    "[dict get $g state] [dict get $g repaint]"
+	set a [dict get $g arrival_to_flip_us]
+	check "  arrival_to_flip_us is positive and under 5 s" \
+	    [expr {$a > 0 && $a < 5000000}] "got $a"
+    }
+    # a fixed point: state 2, no sample stamp, no latency
+    msg_send $sock "gazewin point 3 4"
+    set ng [llength $::gazerecs]
+    msg_send $sock "!redraw"
+    wait_until {[llength $::gazerecs] > $ng} 3000
+    set g [lindex $::gazerecs end]
+    check "a fixed point: state 2, sample_us 0, arrival -1" \
+	[expr {[dict get $g state] == 2 && [dict get $g sample_us] == 0 &&
+	       [dict get $g arrival_to_flip_us] == -1 && [dict get $g x_udeg] == 3000000}] "got {$g}"
+    set st [msg_send $sock "stimFrameLog"]
+    check "status counts the named records" \
+	[expr {[dict exists $st named] && [dict get $st named] >= 2}] "got {$st}"
+    # off: frames again, no more records
+    msg_send $sock "gazewin reset"
+    set ng [llength $::gazerecs]; set nf [llength $::frames]
+    msg_send $sock "!redraw"
+    wait_until {[llength $::frames] > $nf} 2000
+    check "gazewin off: no more stim/gazewin records" [expr {[llength $::gazerecs] == $ng}]
+    check "no malformed frames with the named records" [expr {$::badframes == 0}] "$::badframes bad"
 }
 
 # ---- same host again: no restart, counts continue --------------------------------

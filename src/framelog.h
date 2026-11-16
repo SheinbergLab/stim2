@@ -52,6 +52,15 @@ void frameLogPush(int swapcount, long long flip_us, long long ticks_us,
                   long missed, long long cmds_applied,
                   long long ds_dispatched, long long eval_us);
 
+/* A module's record on the same stream (stimFrameRecord, postpass.h): one
+   DSERV_INT64 datapoint called `name` (at most FRAMELOG_NAME_MAX
+   characters) of n values (1..FRAMELOG_VALS_MAX).  Same rules as
+   frameLogPush: render thread, never blocks, dropped while no writer runs.
+   Not counted in `sent` or in stim/frame's frame numbers. */
+#define FRAMELOG_NAME_MAX 40
+#define FRAMELOG_VALS_MAX 8
+void frameLogPushNamed(const char *name, const long long *vals, int n);
+
 /* Start the writer toward host (optionally "host:port"; default port
    4620).  Already running toward the same target: no-op.  Running toward
    another: that writer is stopped and a new one started (counts reset).
@@ -66,8 +75,9 @@ void frameLogStop(void);
 typedef struct framelog_status_s {
   int enabled;            /* writer running */
   const char *host;       /* hostspec as given to the last start ("" if none) */
-  long long sent;         /* records written since the last start */
-  long long dropped;      /* records discarded since the last start:
+  long long sent;         /* stim/frame records written since the last start */
+  long long named;        /* named records written since the last start */
+  long long dropped;      /* records (of either kind) discarded since then:
                              ring full, no link, or write failure */
   int connected;          /* TCP link to dserv currently up */
 } framelog_status_t;

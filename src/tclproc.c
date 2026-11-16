@@ -480,7 +480,7 @@ static int setWindowTitleCmd(ClientData clientData, Tcl_Interp *interp,
  *   port).  With 1: connect (asynchronously) and start the writer; a
  *   different host restarts it.  With 0: stop and close.  Every form
  *   returns the current state as a dict
- *       enabled 0|1 host <h> sent <n> dropped <n> connected 0|1
+ *       enabled 0|1 host <h> sent <n> named <n> dropped <n> connected 0|1
  *   so the bare command doubles as ESS's capability probe (an older stim2
  *   answers "invalid command name").
  */
@@ -517,6 +517,8 @@ static int stimFrameLogCmd(ClientData clientData, Tcl_Interp *interp,
 		 Tcl_NewStringObj(st.host, -1));
   Tcl_DictObjPut(interp, d, Tcl_NewStringObj("sent", -1),
 		 Tcl_NewWideIntObj((Tcl_WideInt) st.sent));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("named", -1),
+		 Tcl_NewWideIntObj((Tcl_WideInt) st.named));
   Tcl_DictObjPut(interp, d, Tcl_NewStringObj("dropped", -1),
 		 Tcl_NewWideIntObj((Tcl_WideInt) st.dropped));
   Tcl_DictObjPut(interp, d, Tcl_NewStringObj("connected", -1),

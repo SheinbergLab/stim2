@@ -111,6 +111,39 @@ max}` in ms over the last 1024 passes:
 Neither includes the camera and tracker latency before dserv; measure the
 whole chain once with a photodiode.
 
+## The data file's record: `stim/gazewin`
+
+Status gives percentiles; the data file needs to know, frame by frame,
+which eye sample the window was drawn from. While the frame log is on
+(`stimFrameLog`, which ESS starts at configure, see
+[stim-frame.md](stim-frame.md)), every frame the pass drew sends one
+`stim/gazewin` datapoint to dserv on the same stream: eight int64 values.
+
+| # | field | meaning |
+|---|---|---|
+| 1 | `swapcount` | the swap that showed it: the `swapcount` of that swap's `stim/frame` record |
+| 2 | `flip_us` | its flip, the same value as that record's `flip_us` (-1 unknown) |
+| 3 | `sample_us` | dserv's stamp of the sample the window was drawn from: the timestamp of that sample's record of the source datapoint in the data file. 0: none (a fixed point, or no sample yet) |
+| 4 | `arrival_to_flip_us` | from that sample reaching stim2 to the flip, on stim2's own clock. -1: a fixed point or no sample |
+| 5 | `state` | 0 drawn at the gaze; 1 gaze lost (drawn as `-lost` says; the sample fields are the stale one's); 2 a fixed point |
+| 6 | `repaint` | 0 a frame of the scene; 1 a repaint of a static display |
+| 7 | `x_udeg` | where the window was drawn, degrees x 1e6 |
+| 8 | `y_udeg` | |
+
+ESS logs it with `stim/frame` (dserv's `stim_frame_log_match`). To read it
+and find each frame's eye sample (`dslog`, see dlsh's `docs/dslog.md`):
+
+    dslog::wideTypes 1
+    set gz [dslog::unpack $f stim/gazewin \
+        {swapcount flip_us sample_us arrival_to_flip_us state repaint x_udeg y_udeg}]
+
+`sample_us` equals the `timestamp` of one record of the source datapoint
+(`eyetracking/position`), so the join is exact, and `flip_us - sample_us`
+is that frame's delay from dserv's stamp to the flip. The camera's part
+comes before that stamp: join the same sample to the tracker's own frame
+record. A frame with the pass on and no record means the stream dropped it
+(`stimFrameLog` status: `dropped`).
+
 ## How it draws
 
 Each frame, after the scene: the drawn framebuffer is copied into a

@@ -17,7 +17,7 @@ on at configure; nothing changes for scripts that never ask for it.
 - `stimFrameLog host 0`: stop and close.
 - `stimFrameLog` (or any form) returns the state as a dict:
 
-      enabled 0|1 host <h> sent <n> dropped <n> connected 0|1
+      enabled 0|1 host <h> sent <n> named <n> dropped <n> connected 0|1
 
   `sent` and `dropped` count since the last start and survive a stop. The
   bare command is also the capability probe: an older stim2 answers
@@ -42,6 +42,16 @@ One `DSERV_INT64` (type 16) array of eight values, 64 bytes, timestamp 0
 A gap in `swapcount` between consecutive records means records were
 dropped (the stream was down or the queue overflowed); `dropped` in the
 status dict counts them.
+
+## Records from modules
+
+A loadable module can put its own per-frame record on this stream
+(`stimFrameRecord`, see [postpass.md](postpass.md)): a second int64
+datapoint, under the module's own name, whose first value is the
+`swapcount` of the swap it belongs to. It is sent right after that swap's
+`stim/frame` record. `stim/gazewin` ([gazewin.md](gazewin.md)) is the one
+so far. These are counted in the status dict's `named`, not in `sent`, and
+do not take a `frame` number; `dropped` counts both kinds.
 
 ## The frame clock (`eval_us`)
 

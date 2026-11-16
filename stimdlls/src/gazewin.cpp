@@ -140,6 +140,9 @@ long long stages = 0, composites = 0;
 bool flip_pending = false;
 Sample pass_sample;
 bool pass_lost = true;
+int pass_state = 0;               /* 0 the gaze, 1 gaze lost, 2 a fixed point */
+bool pass_repaint = false;        /* drawn by a static repaint, not a frame */
+bool in_composite = false;
 
 /* ---- GL ---------------------------------------------------------------- */
 
@@ -498,6 +501,8 @@ void draw_pass(int w, int h, float halfx, float halfy, GLuint drawfb, double now
   settings_dirty = false;
   pass_sample = gaze;
   pass_lost = lost || point_on;   /* a point has no latency to record */
+  pass_state = point_on ? 2 : (lost ? 1 : 0);
+  pass_repaint = in_composite;
   flip_pending = true;
 }
 
@@ -661,7 +666,9 @@ int pass_composite(void *, const stim_postpass_frame_t *f)
     make_levels(w, h);
     levels_ok = true;
   }
+  in_composite = true;
   draw_pass(w, h, f->halfx, f->halfy, f->drawfb, f->now_s);
+  in_composite = false;
   glBindFramebuffer(GL_FRAMEBUFFER, f->drawfb);
   composites++;
   return 1;
@@ -687,11 +694,32 @@ int pass_repaint_due(void *, double, double *wait_s)
   return 0;
 }
 
+/* The data file's record of a frame the pass drew, "stim/gazewin" (see
+   docs/gazewin.md): which sample the window was drawn from, so each
+   displayed frame can be joined to the eye record.  stim2 puts the swap's
+   swapcount first. */
+void frame_record(double flip_s, long long flip_wall_us)
+{
+  const Sample &g = pass_sample;
+  bool xy = g.have && g.valid;
+  long long v[7] = {
+    flip_wall_us > 0 ? flip_wall_us : -1,
+    (long long) g.ts_us,
+    g.have && pass_state != 2 ? llround((flip_s - g.arrival_s) * 1e6) : -1,
+    pass_state,
+    pass_repaint ? 1 : 0,
+    xy ? llround((double) g.x * 1e6) : 0,
+    xy ? llround((double) g.y * 1e6) : 0
+  };
+  stimFrameRecord("stim/gazewin", v, 7);
+}
+
 /* the flip that showed a pass: the latency records */
 void pass_flip(void *, double flip_s, long long flip_wall_us)
 {
   if (!flip_pending) return;
   flip_pending = false;
+  frame_record(flip_s, flip_wall_us);
   if (pass_lost || !pass_sample.have) return;
   arrival_to_flip.add((float) ((flip_s - pass_sample.arrival_s) * 1000.0));
   if (flip_wall_us > 0 && pass_sample.ts_us > 0)

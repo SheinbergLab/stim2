@@ -46,3 +46,4 @@ EXPORTS
 	stimClockSeconds
 	stimRealSeconds
 	stimLogMessage
+	stimFrameRecord

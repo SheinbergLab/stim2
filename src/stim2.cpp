@@ -4068,6 +4068,7 @@ static inline void frameLogSwap(long long ticks_us)
   frameLogPush(SwapCount, swapsyncLastFlipWallUs(), ticks_us,
                swapsyncMissedFrames(), FrameLogCmdsApplied,
                FrameLogDsDispatched, FrameEvalUs);
+  postpassFlushRecords(SwapCount);  /* the passes' records of this swap */
 }
 
 void Application::updateDisplay(bool log_events)

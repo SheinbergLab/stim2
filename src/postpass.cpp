@@ -13,6 +13,7 @@
 #include <GLFW/glfw3.h>
 
 #include "postpass.h"
+#include "framelog.h"
 
 void log_message(const char *level, const char *fmt, ...);   /* stim2.cpp, C++ */
 
@@ -30,6 +31,16 @@ std::vector<Tap> taps;
 /* a pass drew since the last flip was noted */
 bool flip_pending = false;
 std::vector<const stim_postpass_t *> drew;    /* the passes that did */
+
+/* stimFrameRecord: records waiting for their swap's swapcount */
+struct PendingRec {
+  char name[FRAMELOG_NAME_MAX + 1];
+  int n;
+  long long vals[STIM_FRAME_RECORD_MAX];
+};
+constexpr int PENDING_MAX = 16;
+PendingRec pending[PENDING_MAX];
+int npending = 0;
 
 inline bool want(const stim_postpass_t *p) { return p->wanted(p->data) != 0; }
 
@@ -96,7 +107,31 @@ void stimLogMessage(const char *level, const char *msg)
   log_message(level ? level : "info", "%s", msg ? msg : "");
 }
 
+int stimFrameRecord(const char *name, const long long *vals, int n)
+{
+  if (!frameLogEnabled()) return 0;
+  if (!name || !*name || strlen(name) > FRAMELOG_NAME_MAX) return 0;
+  if (!vals || n < 1 || n > STIM_FRAME_RECORD_MAX) return 0;
+  if (npending >= PENDING_MAX) return 0;
+  PendingRec &r = pending[npending++];
+  strcpy(r.name, name);
+  r.n = n;
+  memcpy(r.vals, vals, (size_t) n * sizeof(long long));
+  return 1;
+}
+
 /* ---- for stim2.cpp ----------------------------------------------------- */
+
+void postpassFlushRecords(int swapcount)
+{
+  for (int i = 0; i < npending; i++) {
+    long long v[1 + STIM_FRAME_RECORD_MAX];
+    v[0] = swapcount;
+    memcpy(v + 1, pending[i].vals, (size_t) pending[i].n * sizeof(long long));
+    frameLogPushNamed(pending[i].name, v, pending[i].n + 1);
+  }
+  npending = 0;
+}
 
 int postpassWanted(void)
 {

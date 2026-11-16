@@ -74,6 +74,11 @@ struct FrameRec {
   long long cmds_applied;
   long long ds_dispatched;
   long long eval_us;
+  /* a named record (frameLogPushNamed) instead: name[0] != 0, and the n
+     values are in vals */
+  char name[FRAMELOG_NAME_MAX + 1];
+  int n;
+  long long vals[FRAMELOG_VALS_MAX];
 };
 
 /* ---- single-producer / single-consumer ring --------------------------- */
@@ -122,6 +127,7 @@ std::atomic<bool> stop_req{false};
 std::atomic<bool> connected{false};
 std::atomic<long long> sent{0};
 std::atomic<long long> dropped{0};
+std::atomic<long long> named_sent{0}; /* frameLogPushNamed records written */
 
 std::mutex wake_mx;                   /* only for the condvar's timed wait */
 std::condition_variable wake_cv;
@@ -145,6 +151,25 @@ constexpr uint32_t DATALEN = NVALS * 8;
 constexpr size_t FRAME_BYTES = 128;
 constexpr size_t DATA_OFF = 1 + 2 + VARLEN + 8 + 4 + 4;   /* 29 */
 static_assert(DATA_OFF + DATALEN <= FRAME_BYTES, "frame overflow");
+/* a named record: 19 bytes of framing, the name, the values */
+static_assert(19 + FRAMELOG_NAME_MAX + FRAMELOG_VALS_MAX * 8 <= FRAME_BYTES,
+              "named record overflow");
+
+/* A whole frame for a named record. */
+void pack_named(unsigned char *buf, const FrameRec &r)
+{
+  memset(buf, 0, FRAME_BYTES);
+  uint16_t varlen = (uint16_t) strlen(r.name);
+  uint32_t datalen = (uint32_t) r.n * 8;
+  uint64_t ts = 0;
+  buf[0] = '>';
+  memcpy(buf + 1, &varlen, 2);
+  memcpy(buf + 3, r.name, varlen);
+  memcpy(buf + 3 + varlen, &ts, 8);
+  memcpy(buf + 11 + varlen, &DSERV_INT64_TYPE, 4);
+  memcpy(buf + 15 + varlen, &datalen, 4);
+  memcpy(buf + 19 + varlen, r.vals, datalen);
+}
 
 void pack_header(unsigned char *buf)
 {
@@ -314,6 +339,17 @@ void writer_main(std::string h, int p)
         dropped.fetch_add(1, std::memory_order_relaxed);
         continue;
       }
+      if (r.name[0]) {            /* a named record: not a frame */
+        unsigned char nf[FRAME_BYTES];
+        pack_named(nf, r);
+        if (send_all(sock, nf, FRAME_BYTES)) {
+          named_sent.fetch_add(1, std::memory_order_relaxed);
+        } else {
+          dropped.fetch_add(1, std::memory_order_relaxed);
+          drop_link();
+        }
+        continue;
+      }
       long long vals[NVALS] = {
         sent.load(std::memory_order_relaxed) + 1,   /* frame: 1-based */
         r.swapcount, r.flip_us, r.ticks_us, r.missed,
@@ -412,11 +448,30 @@ void frameLogPush(int swapcount, long long flip_us, long long ticks_us,
   r.cmds_applied = cmds_applied;
   r.ds_dispatched = ds_dispatched;
   r.eval_us = eval_us;
+  r.name[0] = 0;
+  r.n = 0;
   if (!ring_push(r)) {
     dropped.fetch_add(1, std::memory_order_relaxed);
     return;
   }
   wake_cv.notify_one();       /* no lock: never blocks the render thread */
+}
+
+void frameLogPushNamed(const char *name, const long long *vals, int n)
+{
+  if (!enabled.load(std::memory_order_relaxed)) return;
+  if (!name || !*name || !vals || n < 1 || n > FRAMELOG_VALS_MAX) return;
+  size_t len = strlen(name);
+  if (len > FRAMELOG_NAME_MAX) return;
+  FrameRec r;
+  memcpy(r.name, name, len + 1);
+  r.n = n;
+  memcpy(r.vals, vals, (size_t) n * 8);
+  if (!ring_push(r)) {
+    dropped.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+  wake_cv.notify_one();
 }
 
 int frameLogStart(const char *spec, const char **err)
@@ -432,6 +487,7 @@ int frameLogStart(const char *spec, const char **err)
 
   host = h; port = p; hostspec = spec;
   sent.store(0, std::memory_order_relaxed);
+  named_sent.store(0, std::memory_order_relaxed);
   dropped.store(0, std::memory_order_relaxed);
   connected.store(false, std::memory_order_relaxed);
   ring_reset();
@@ -457,6 +513,7 @@ void frameLogStatus(framelog_status_t *s)
   s->enabled = writer ? 1 : 0;
   s->host = hostspec.c_str();
   s->sent = sent.load(std::memory_order_relaxed);
+  s->named = named_sent.load(std::memory_order_relaxed);
   s->dropped = dropped.load(std::memory_order_relaxed);
   s->connected = connected.load(std::memory_order_relaxed) ? 1 : 0;
 }
