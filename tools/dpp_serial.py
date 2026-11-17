@@ -80,6 +80,14 @@ def find_port():
     c = sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/serial/by-id/*CRS*") +
                glob.glob("/dev/serial/by-id/*Bits*") + glob.glob("/dev/serial/by-id/*Display*") +
                glob.glob("/dev/cu.usbmodem*"))
+    # a by-id name and its ttyACM are one device: keep the first of each
+    seen, uniq = set(), []
+    for path in c:
+        real = os.path.realpath(path)
+        if real not in seen:
+            seen.add(real)
+            uniq.append(path)
+    c = uniq
     if not c:
         sys.exit("no serial port found: name one with -p")
     if len(c) > 1:
@@ -210,7 +218,9 @@ def cmd_status(p, a):
     t0 = None
     for line in raw.split("\r"):
         v = line.strip("\n\x00 ").split(";")
-        if len(v) < 14 or v[0] != "#sample":
+        # "#sample" in PsychoPy's driver; this firmware (2015) echoes the
+        # command's own "$" on its replies, so take either
+        if len(v) < 14 or v[0].lstrip("#$").lower() != "sample":
             continue
         try:
             t = float(v[2])
@@ -231,7 +241,7 @@ def cmd_status(p, a):
     print("%d status samples in %.1f s, %d changes of the inputs%s" %
           (n, a.seconds, changes, "" if changes <= a.max else " (first %d shown)" % a.max))
     if n == 0:
-        print("no status lines: the reply was %r" % raw[:200])
+        print("no status lines parsed: the reply began %r" % raw[:300])
 
 
 def cmd_video(p, a):
