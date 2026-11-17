@@ -21,6 +21,11 @@
  *     display is repainted until the idle packet has followed a pulse, and
  *     `tlock off` draws one last idle packet before the pass goes quiet.
  *
+ * Toggle mode uses the same fact the other way round: each frame drawn
+ * flips an output's level for the whole frame, so an edge on that output
+ * is a new frame reaching the panel and a refresh stim2 missed is an edge
+ * that does not come.
+ *
  * State is plain statics: the render thread is the only one that reads or
  * writes it (Tcl commands and the draw run there).
  */
@@ -84,18 +89,26 @@ struct Pulse {
   long long serial = 0;       /* which `tlock pulse` call */
 } pulse;
 
+/* toggle mode: these bits change level on every frame drawn */
+int toggle_bits = 0;
+bool toggle_high = false;     /* the level the last frame drawn carried */
+long long n_toggles = 0;      /* frames drawn in toggle mode, from 1 */
+
 /* what the last packet drawn was, which is what the device now plays */
 enum { SENT_NONE = 0, SENT_IDLE = 1, SENT_PULSE = 2 };
 int sent = SENT_NONE;
 long long sent_serial = 0;
+int sent_base = 0;            /* its output word outside a pulse */
 bool settings_dirty = true;   /* the idle packet as drawn is out of date */
 
 /* the frame just drawn, until its flip is known */
 struct Drawn {
   bool pending = false;
-  bool record = false;        /* a pulse frame worth a stim/tlock record */
+  bool record = false;        /* a frame worth a stim/tlock record */
   int bits = 0, on_slot = 0, dur_slots = 0;
   long long serial = 0;
+  int base = 0;               /* the output word outside the pulse */
+  long long toggle_n = 0;     /* its count in toggle mode, else 0 */
 } drawn;
 long long recorded_serial = 0;  /* an until-stopped pulse is recorded once */
 
@@ -190,16 +203,25 @@ void blit(const stim_postpass_frame_t *f)
 
 /* ---- the packets -------------------------------------------------------- */
 
-std::vector<uint8_t> idle_packet()
+/* the output word outside a pulse: the idle word, with the toggle bits at
+   the given level while toggle mode is on */
+int base_word(bool high)
 {
-  return tlock::encode(nullptr, cfg.nslots, (uint16_t) cfg.mask, (uint8_t) cfg.command,
-                       (uint16_t) cfg.idle);
+  if (!toggle_bits) return cfg.idle;
+  return high ? (cfg.idle | toggle_bits) : (cfg.idle & ~toggle_bits);
 }
 
-std::vector<uint8_t> pulse_packet()
+std::vector<uint8_t> idle_packet(int base)
 {
-  return tlock::encode_pulse(cfg.nslots, (uint16_t) pulse.bits, pulse.on_slot, pulse.dur_slots,
-                             (uint16_t) cfg.idle, (uint16_t) cfg.mask, (uint8_t) cfg.command);
+  return tlock::encode(nullptr, cfg.nslots, (uint16_t) cfg.mask, (uint8_t) cfg.command,
+                       (uint16_t) base);
+}
+
+/* the pulse's bits over the base word, for the pulse's slots */
+std::vector<uint8_t> pulse_packet(int base)
+{
+  return tlock::encode_pulse(cfg.nslots, (uint16_t) (base | pulse.bits), pulse.on_slot, pulse.dur_slots,
+                             (uint16_t) base, (uint16_t) cfg.mask, (uint8_t) cfg.command);
 }
 
 /* a pulse is waiting for a frame to carry it */
@@ -224,16 +246,27 @@ int pass_stage(void *, const stim_postpass_frame_t *f)
   }
 
   bool is_pulse = pulse_due();
-  if (!upload(is_pulse ? pulse_packet() : idle_packet())) return 0;
+  /* toggle mode: this frame carries the other level.  The last packet of
+     a closing pass leaves every output at the idle word. */
+  bool toggling = state == ON && toggle_bits != 0;
+  bool high = toggling ? !toggle_high : false;
+  int base = state == ON ? base_word(high) : cfg.idle;
+  if (!upload(is_pulse ? pulse_packet(base) : idle_packet(base))) return 0;
   blit(f);
   n_frames++;
+  toggle_high = high;
+  sent_base = base;
 
   drawn.pending = true;
-  drawn.record = false;
+  drawn.record = toggling;      /* every toggle frame: its edge has a swap */
+  drawn.bits = drawn.on_slot = drawn.dur_slots = 0;
+  drawn.serial = 0;
+  drawn.base = base;
+  drawn.toggle_n = toggling ? ++n_toggles : 0;
   if (is_pulse) {
     n_pulse_frames++;
     /* every frame of a counted pulse; an until-stopped one only once */
-    drawn.record = pulse.frames_left > 0 || recorded_serial != pulse.serial;
+    if (pulse.frames_left > 0 || recorded_serial != pulse.serial) drawn.record = true;
     recorded_serial = pulse.serial;
     drawn.bits = pulse.bits;
     drawn.on_slot = pulse.on_slot;
@@ -254,7 +287,8 @@ int pass_stage(void *, const stim_postpass_frame_t *f)
 /* A static display.  The device plays what it was last sent, so a repaint
    is due only while that is not what it should now be playing: a pulse not
    yet drawn, a counted pulse with frames to go (each refresh carries one),
-   or the idle packet owed after a pulse or a changed setting. */
+   or the idle packet owed after a pulse or a changed setting.  Toggle mode
+   asks for none: it marks the frames others cause. */
 int pass_repaint_due(void *, double, double *wait_s)
 {
   *wait_s = -1.0;
@@ -267,19 +301,22 @@ int pass_repaint_due(void *, double, double *wait_s)
   return sent != SENT_IDLE || settings_dirty;
 }
 
-/* the flip that showed a packet: when it was, and the pulse's record for
+/* the flip that showed a packet: when it was, and the frame's record for
    the data file (stim/tlock: after the swapcount stim2 puts first, the flip
-   on the wall clock, the bits, the pulse's start and length in 100 us
-   slots, and which `tlock pulse` call it was) */
+   on the wall clock, the pulse's bits, start and length in 100 us slots
+   and which `tlock pulse` call it was (all 0 on a frame with no pulse),
+   the output word outside the pulse, and the frame's count in toggle
+   mode) */
 void pass_flip(void *, double flip_s, long long flip_wall_us)
 {
   if (!drawn.pending) return;
   drawn.pending = false;
   if (!drawn.record) return;
-  last_pulse_flip_s = flip_s;
-  last_pulse_flip_wall_us = flip_wall_us > 0 ? flip_wall_us : -1;
-  long long v[5] = { last_pulse_flip_wall_us, drawn.bits, drawn.on_slot, drawn.dur_slots, drawn.serial };
-  stimFrameRecord("stim/tlock", v, 5);
+  long long wall = flip_wall_us > 0 ? flip_wall_us : -1;
+  if (drawn.serial) { last_pulse_flip_s = flip_s; last_pulse_flip_wall_us = wall; }
+  long long v[7] = { wall, drawn.bits, drawn.on_slot, drawn.dur_slots, drawn.serial,
+                     drawn.base, drawn.toggle_n };
+  stimFrameRecord("stim/tlock", v, 7);
 }
 
 /* off, leaving the device idle: if it may be playing a pulse, one more
@@ -289,7 +326,8 @@ void turn_off()
   pulse.armed = false;
   pulse.frames_left = 0;
   if (state == OFF) return;
-  if (sent == SENT_PULSE) { state = CLOSING; redraw(); }
+  /* a pulse, or a toggle left high, would play on */
+  if (sent == SENT_PULSE || (sent == SENT_IDLE && sent_base != cfg.idle)) { state = CLOSING; redraw(); }
   else state = OFF;
 }
 
@@ -298,6 +336,8 @@ void turn_off()
 void pass_reset(void *, Tcl_Interp *)
 {
   turn_off();
+  toggle_bits = 0;
+  toggle_high = false;
   if (state == OFF) { cfg = Settings(); settings_dirty = true; }
   warned_nofit = false;
 }
@@ -316,7 +356,7 @@ stim_postpass_t pass = {
 const char *USAGE =
   "tlock on | off | "
   "set ?-row r? ?-x x? ?-slots n? ?-mask m? ?-command c? ?-idle word? | "
-  "pulse bits ?-on ms? ?-dur ms? ?-frames n|always? | stop | "
+  "pulse bits ?-on ms? ?-dur ms? ?-frames n|always? | stop | toggle ?bits? | "
   "packet ?idle|pulse? | status | reset";
 
 Tcl_Obj *settings_dict()
@@ -448,6 +488,9 @@ Tcl_Obj *status_dict()
   put("armed", Tcl_NewIntObj(pulse.armed ? 1 : 0));
   put("frames_left", Tcl_NewIntObj(pulse.armed ? pulse.frames_left : 0));
   put("sent", Tcl_NewStringObj(sent == SENT_PULSE ? "pulse" : sent == SENT_IDLE ? "idle" : "none", -1));
+  put("toggle", Tcl_NewIntObj(toggle_bits));
+  put("toggle_high", Tcl_NewIntObj(toggle_high ? 1 : 0));
+  put("toggles", Tcl_NewWideIntObj(n_toggles));
   put("pulses", Tcl_NewWideIntObj(n_pulses));
   put("frames", Tcl_NewWideIntObj(n_frames));
   put("pulse_frames", Tcl_NewWideIntObj(n_pulse_frames));
@@ -488,6 +531,21 @@ int tlockCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
     pulse.frames_left = 0;
     return TCL_OK;
   }
+  /* toggle ?BITS?: these outputs change level on every frame drawn (0:
+     off, and the next frame puts them back at the idle word) */
+  if (sub == "toggle" && objc <= 3) {
+    if (objc == 3) {
+      int bits;
+      if (get_range(interp, objv[2], "toggle bits", 0, 0xFFFF, &bits) != TCL_OK) return TCL_ERROR;
+      if (bits != toggle_bits) {
+        toggle_bits = bits;
+        toggle_high = false;
+        settings_dirty = true;  /* a static display: one frame says so */
+      }
+    }
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(toggle_bits));
+    return TCL_OK;
+  }
   if (sub == "reset" && objc == 2) {
     pass_reset(nullptr, interp);
     return TCL_OK;
@@ -497,13 +555,15 @@ int tlockCmd(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
   if (sub == "packet" && objc <= 3) {
     std::string which = objc == 3 ? Tcl_GetString(objv[2]) : (pulse_due() ? "pulse" : "idle");
     std::vector<uint8_t> px;
-    if (which == "idle") px = idle_packet();
+    /* as the next frame would carry it: in toggle mode, the other level */
+    int base = state == ON && toggle_bits ? base_word(!toggle_high) : base_word(false);
+    if (which == "idle") px = idle_packet(base);
     else if (which == "pulse") {
       if (!pulse.armed) {
         Tcl_SetObjResult(interp, Tcl_NewStringObj("tlock packet: no pulse is armed", -1));
         return TCL_ERROR;
       }
-      px = pulse_packet();
+      px = pulse_packet(base);
     }
     else {
       Tcl_SetObjResult(interp, Tcl_NewStringObj("tlock packet ?idle|pulse?", -1));

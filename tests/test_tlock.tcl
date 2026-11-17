@@ -6,7 +6,7 @@
 # Checks the command's argument errors, that the row drawn is the packet
 # byte for byte and nothing else on the frame changes, a pulse on one
 # frame, on a number of frames and until stopped, the idle packet that
-# follows each, a moved row, a packet too wide for the frame, `tlock off`
+# follows each, toggle mode, a moved row, a packet too wide for the frame, `tlock off`
 # leaving the device idle, and `postpass reset`.
 # Needs the tlock and polygon stimdlls.  What a Display++ does with the
 # packet needs the monitor: docs/tlock.md, "Bringing it up on a rig".
@@ -128,6 +128,40 @@ if { $too_wide } {
     note "SKIP a packet too wide for the frame (this one is $W wide)"
 }
 
+# toggle mode: the level changes on every frame drawn
+ck "toggle is off to start" [expr {[tlock toggle] == 0 && [st toggle] == 0}]
+ck "17 toggle bits refused" [catch { tlock toggle 0x10000 }]
+ck "toggle returns its bits" [expr {[tlock toggle 0x0800] == 0x0800}]
+set p_hi [tlock packet idle]
+ck "  the next frame is high: every slot carries the bit" [expr {[lrange $p_hi 39 41] eq {8 8 0} &&
+    [lrange $p_hi 537 539] eq {91 8 0}}]
+set f_t1 [step]; set hi1 [st toggle_high]
+set p_lo [tlock packet idle]
+set f_t2 [step]; set hi2 [st toggle_high]
+set f_t3 [step]
+ck "three frames: high, low, high" [expr {$hi1 == 1 && $hi2 == 0 && [st toggle_high] == 1 && [st toggles] == 3}]
+ck "  the low packet is the idle one" [expr {$p_lo eq $idle}]
+tlock pulse 0x0001 -dur 1                     ;# a pulse over the toggle: this frame is low
+set p_tp [tlock packet]
+set f_tp [step]
+tlock pulse 0x0001 -dur 1                     ;# and this one high
+set p_tph [tlock packet]
+set f_tph [step]
+ck "a pulse over the high level keeps the toggle bit in every slot" [expr {
+    [lrange $p_tph 39 41] eq {8 8 1} && [lrange $p_tph [expr {(13 + 2*10) * 3}] [expr {(13 + 2*10) * 3 + 2}]] eq {18 8 0}}]
+tlock toggle 0
+set f_toff [step]
+ck "toggle 0: off, the level low" [expr {[st toggle] == 0 && [st toggle_high] == 0}]
+tlock toggle 0x0800
+set f_t4 [step]                               ;# high
+tlock off
+ck "off with the toggle high: closing" [expr {[st state] in {closing off}}]
+set f_tclose [step]
+ck "  then off" [expr {[st state] eq "off"}]
+tlock toggle 0
+tlock on
+step
+
 # off after a pulse: one idle packet first
 tlock pulse 0x0400
 set f_last [step]
@@ -189,6 +223,12 @@ ck "  and only there" [only_row $f_moved 0 10]
 if { $too_wide } {
     ck "too wide: the frame is byte-identical to the scene" [expr {[frame $f_wide] eq [frame $f_plain]}]
 }
+ck "toggle: the frames carry high, low, high" [expr {[row $f_t1 2] eq $p_hi && [row $f_t2 2] eq $idle &&
+    [row $f_t3 2] eq $p_hi && $p_hi ne $idle}]
+ck "  and nothing else changed" [only_row $f_t1 2]
+ck "a pulse on a low toggle frame, then on a high one" [expr {[row $f_tp 2] eq $p_tp && [row $f_tph 2] eq $p_tph}]
+ck "toggle 0: the next frame is the idle packet" [expr {[row $f_toff 2] eq $idle}]
+ck "off with the toggle high: one idle packet first" [expr {[row $f_t4 2] eq $p_hi && [row $f_tclose 2] eq $idle}]
 ck "off after a pulse: the next frame carries the idle packet" [expr {[row $f_closing 2] eq $idle}]
 ck "  and the one after is byte-identical to the scene" [expr {[frame $f_offnow] eq [frame $f_plain]}]
 ck "before the reset: row 5" [expr {[row $f_pre_reset 5] eq $idle}]

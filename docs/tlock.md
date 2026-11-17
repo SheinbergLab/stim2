@@ -33,6 +33,7 @@ here: see "Bringing it up on a rig".
     tlock set ?-row r? ?-x x? ?-slots n? ?-mask m? ?-command c? ?-idle word?
     tlock pulse bits ?-on ms? ?-dur ms? ?-frames n|always?
     tlock stop
+    tlock toggle ?bits?
     tlock packet ?idle|pulse?
     tlock status
     tlock reset
@@ -47,6 +48,7 @@ here: see "Bringing it up on a rig".
   Call it in the same script as the command that shows the stimulus, so
   both land on the same frame.
 - `tlock stop`: disarm; the next frame carries the idle packet.
+- `tlock toggle bits`: toggle mode, below. `tlock toggle 0` ends it.
 - `tlock off`: stop drawing. If the last packet sent was a pulse, one more
   frame carries the idle packet first (`state closing` in the status).
 - `tlock set` with no arguments returns the settings.
@@ -70,6 +72,31 @@ dserv's settings gear. ESS then sends `tlock on` at every system load,
 after the prelude, so stim scripts only call `tlock pulse`. On a rig
 that has not set it the pass stays off, and a script shared between rigs
 can test `[dict get [tlock status] on]` before arming a pulse.
+
+## Toggle mode: an edge for every frame
+
+    tlock toggle 0x0400
+
+Each frame stim2 draws then flips those outputs: high for one whole frame,
+low for the next. The monitor repeats a packet until a new one arrives, so
+the level changes only when a new frame reaches the panel:
+
+- every edge on the output is a new frame, one refresh after its flip;
+- a refresh stim2 missed is an edge that does not come;
+- on a static display under a gaze window (`gazewin`,
+  [gazewin.md](gazewin.md)), every repaint a gaze sample caused is an
+  edge. `gazewin` draws first (priority 100) and the packet goes over its
+  result, on a frame and on a repaint alike.
+
+Toggle mode asks for no frames of its own: a static display with nothing
+changing stays as it is, and the level with it. Each toggle frame sends a
+`stim/tlock` record, so each edge has a `swapcount`: with `stim/gazewin`
+for the same swap, that is the eye sample, the flip and the frame's
+arrival at the panel, per frame. The digital input must stamp both
+edges.
+
+A pulse can run at the same time on other bits. `tlock off` and
+`tlock toggle 0` leave the outputs at the idle word.
 
 ## What the monitor does with a packet
 
@@ -128,21 +155,23 @@ The subject may see the row: 508 pixels at the top left, mostly black.
 ## The record: `stim/tlock`
 
 With the frame log on (`stimFrameLog`, [stim-frame.md](stim-frame.md); ESS
-turns it on and logs this datapoint), each frame that carries a pulse
-sends one int64 datapoint:
+turns it on and logs this datapoint), each frame that carries a pulse, and
+every frame in toggle mode, sends one int64 datapoint:
 
 | # | field | |
 |---|---|---|
 | 1 | `swapcount` | of the swap that showed the packet, as in its `stim/frame` record |
 | 2 | `flip_us` | that flip, CLOCK_REALTIME microseconds; -1 if the swap sync cannot time flips |
-| 3 | `bits` | the pulse's output word |
+| 3 | `bits` | the pulse's output word; 0 on a frame with no pulse |
 | 4 | `on` | its start, in 0.1 ms slots |
 | 5 | `dur` | its length, in slots |
-| 6 | `serial` | which `tlock pulse` call |
+| 6 | `serial` | which `tlock pulse` call; 0 with no pulse |
+| 7 | `base` | the output word outside the pulse: the idle word, with the toggle bits at this frame's level |
+| 8 | `toggle` | the frame's count in toggle mode, from 1; 0 when toggle mode is off |
 
 A pulse with `-frames n` sends one record per frame; `-frames always`
-sends one, for its first frame. The outputs change one refresh after
-`flip_us`, plus `on`.
+sends one, for its first frame (in toggle mode, every frame). The outputs
+change one refresh after `flip_us`, plus `on` for a pulse.
 
 ## Static displays
 
@@ -169,7 +198,8 @@ since the monitor repeats the packet by itself.
 
 `tests/test_tlock.tcl` runs inside stim2, headless or windowed: the
 command, the packet's layout, the row on the frame byte for byte and
-nothing else changed, pulses on one frame, several and always, a packet
+nothing else changed, pulses on one frame, several and always, toggle
+mode, a packet
 too wide for the frame, `tlock off` and `postpass reset`.
 `tests/tlock_packet_check.cpp` checks the encoder against Psychtoolbox's
 without a display: `ctest --test-dir build -R tlock`.
