@@ -256,6 +256,15 @@ add_stim_module(shaderpass
     SOURCES ${SRC_DIR}/shaderpass.cpp
 )
 
+# tlock: frame-locked triggers from a CRS Display++ (the T-Lock digital-
+# output packet as a row of pixels, docs/tlock.md).  A post pass like
+# gazewin: GL and stim2's exports only
+add_stim_module(tlock
+    NO_STIMUTILS
+    CORE_LIBS_ONLY
+    SOURCES ${SRC_DIR}/tlock.cpp ${APP_DIR}/glad.c
+)
+
 # Shader module with image support
 add_stim_module(shader
     SOURCES ${SRC_DIR}/shader.c

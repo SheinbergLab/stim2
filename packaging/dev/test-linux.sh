@@ -35,7 +35,7 @@ docker run --rm --platform linux/amd64 $DOCKER_ARGS \
     stim2="/usr/local/stim2/stim2 --headless -w 320 -h 180 --port-base 5610"
 
     # run inside stim2, after the config a rig starts it with
-    inproc="test_frame_grab test_headless_step test_dynlist_numeric test_gazewin test_gazewin_step test_shaderpass test_shader_fragment_only"
+    inproc="test_frame_grab test_headless_step test_dynlist_numeric test_gazewin test_gazewin_step test_shaderpass test_shader_fragment_only test_tlock"
     # plain tclsh clients of a running stim2: host msgport ?dsport?
     clients="test_gazewin_client test_ack_header"
     # plain tclsh, no stim2

@@ -211,6 +211,12 @@ chain: noise, a colour matrix (swizzle, invert, grey), or your own, alone
 or combined with the gaze window in either order.
 See [docs/shaderpass.md](docs/shaderpass.md).
 
+`tlock` draws the CRS T-Lock packet into one row of each frame, so a
+Display++ (or a Bits#) drives its trigger output from its own frame
+timing: a hardware edge for measuring the delay from the flip to the
+monitor and from the monitor to the light.
+See [docs/tlock.md](docs/tlock.md).
+
 ## Linux Systemd Service
 
 For dedicated stimulus presentation systems (e.g., Raspberry Pi, embedded Linux), stim2 can run as a systemd service using [Cage](https://github.com/cage-kiosk/cage) as a minimal Wayland compositor.

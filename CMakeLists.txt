@@ -225,6 +225,13 @@ add_executable(latedraw_check tests/latedraw_check.cpp src/latedraw.cpp)
 target_include_directories(latedraw_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME latedraw_check COMMAND latedraw_check)
 
+# ... and of the CRS T-Lock packet the tlock stimdll draws (docs/tlock.md),
+# against Psychtoolbox's encoder:
+#     ctest --test-dir build -R tlock
+add_executable(tlock_packet_check tests/tlock_packet_check.cpp)
+target_include_directories(tlock_packet_check PRIVATE ${CMAKE_SOURCE_DIR}/stimdlls/src)
+add_test(NAME tlock_packet_check COMMAND tlock_packet_check)
+
 # The vendored imgui (1.84-era) zeroes its own structs with memset inside
 # inline constructors; clang 17+ flags that (-Wnontrivial-memcall) in every
 # unit that includes imgui.h. Upstream cast it away years later, and the

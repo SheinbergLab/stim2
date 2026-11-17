@@ -1,0 +1,169 @@
+# `tlock`: frame-locked triggers from a CRS Display++
+
+A Display++ (like the Bits# inside it, and the older Bits++) watches its
+video input for an unlock key: eight pixels of fixed colours. What follows
+the key on that row is loaded into the monitor's digital outputs, the
+DB25 lines and the trigger-out BNC, which the monitor then drives from its
+own frame timing. CRS calls this T-Lock.
+
+`tlock` draws that row. The result is a hardware edge at a fixed time
+after a chosen frame reaches the panel, with no software between the
+frame and the edge. Recorded on a dserv digital input, it splits the
+delay from stim2's flip to the light into two parts:
+
+| from | to | measures |
+|---|---|---|
+| `flip_us` in `stim/frame` | the trigger edge | the video link and the monitor's input stage |
+| the trigger edge | a photodiode edge | the panel |
+
+It is a loadable module on stim2's post-pass chain
+([postpass.md](postpass.md)) at priority 950, after every other pass: the
+row must reach the monitor exactly as written. Off by default, at the cost
+of a flag test.
+
+**Not yet run against a monitor.** The packet is Psychtoolbox's, byte for
+byte, and the pass is tested for what it draws. What a Display++ does with
+it is from the Psychtoolbox and PsychoPy drivers, not from a measurement
+here: see "Bringing it up on a rig".
+
+## Commands
+
+    tlock on
+    tlock off
+    tlock set ?-row r? ?-x x? ?-slots n? ?-mask m? ?-command c? ?-idle word?
+    tlock pulse bits ?-on ms? ?-dur ms? ?-frames n|always?
+    tlock stop
+    tlock packet ?idle|pulse?
+    tlock status
+    tlock reset
+
+- `tlock on`: every frame from now carries a packet. With no pulse armed
+  it is the idle packet: every output at `-idle` (all low).
+- `tlock pulse bits`: the next frame drawn carries `bits` (a 16-bit word,
+  one bit per output) high from `-on` ms into the frame (default 0) for
+  `-dur` ms (default 1), in steps of 0.1 ms. `-frames n` puts it on the
+  next n frames; `-frames always` on every frame until `tlock stop` or
+  another `tlock pulse`. Returns the pulse's serial number, from 1.
+  Call it in the same script as the command that shows the stimulus, so
+  both land on the same frame.
+- `tlock stop`: disarm; the next frame carries the idle packet.
+- `tlock off`: stop drawing. If the last packet sent was a pulse, one more
+  frame carries the idle packet first (`state closing` in the status).
+- `tlock set` with no arguments returns the settings.
+
+| setting | default | |
+|---|---|---|
+| `-row` | 2 | the row the packet is drawn on, from the top. Psychtoolbox's default |
+| `-x` | 0 | its first pixel. Even: the device reads pixel pairs |
+| `-slots` | 248 | 0.1 ms output slots in a packet, 1 to 248. The packet is 12 + 2 x slots pixels wide (508) |
+| `-mask` | 0xFFFF | the output bits a packet may change |
+| `-command` | 0 | the packet's command byte |
+| `-idle` | 0 | the output word outside a pulse |
+
+`tlock packet` returns the row as it would be drawn, R G B per pixel, for
+checking against another encoder. `postpass reset`, which every script
+load runs (`stim::prelude`), turns the pass off and restores the defaults:
+a stim script that wants triggers says `tlock on` itself.
+
+## What the monitor does with a packet
+
+From the Psychtoolbox (`BitsPlusPlus.m`, `BitsPlusDIO2Matrix.m`) and
+PsychoPy (`psychopy_crs/bits.py`) drivers:
+
+- **One frame late.** A packet acts on the frame after the one it is
+  drawn in. The offset is fixed, so it subtracts out; and the frame that
+  carries the packet is the one whose `swapcount` the record has.
+- **It repeats.** The monitor plays its last packet again on every frame
+  until another replaces it. This is why the pass draws a packet on every
+  frame while it is on, and why `tlock off` sends an idle packet first.
+  If stim2 misses a refresh right after a pulse frame, the pulse plays
+  twice: `missed` in `stim/frame` shows it.
+- **Slots are 0.1 ms** from the start of the frame. At 120 Hz a frame is
+  83 slots; the later slots of the default 248 go unused. PsychoPy sends
+  `1 + 10000/Hz` slots (84 at 120 Hz); `-slots 84` makes the packet 180
+  pixels instead of 508.
+- **Bits.** Bits 0 to 9 are the DB25's digital outputs. The trigger-out
+  BNC is a higher bit; which one was not confirmed from these sources
+  (bit 10 is likely). Find it once with `tlock pulse 0xFFFF` and a scope.
+
+## The packet
+
+One row of pixels, R G B:
+
+| pixel | R | G | B |
+|---|---|---|---|
+| 0 to 7 | the unlock key: 69 33 56, 40 230 208, 19 190 102, 119 84 207, 52 12 192, 233 108 172, 41 201 80, 183 124 221 |||
+| 8 | 0 | 0 | pairs - 1 (slots + 1) |
+| 9 | 6 | command | 2 (the digital outputs) |
+| 11 | 7 | mask high byte | mask low byte |
+| 13 + 2i | 8 + i | slot i high byte | slot i low byte |
+
+Every other pixel of the packet is black. The encoder is
+`stimdlls/src/tlock_packet.h`.
+
+## The display path
+
+The monitor finds the key only if every byte arrives as written:
+
+- the monitor's native resolution, no scaling by the GPU or a compositor;
+- an identity gamma ramp on the GPU (stim2 loads none; check nothing else
+  has);
+- no dithering by the GPU driver, 8 bits per channel, full-range RGB;
+- the monitor in a video mode (Bits++, the standard colour mode, is the
+  one this was written for), not its status screen or mass-storage mode.
+
+The row is drawn before the overlay, so an overlay drawn over it breaks
+the packet. A frame grab, a `frameSink` movie and a mirror's frames
+include the row.
+
+The subject may see the row: 508 pixels at the top left, mostly black.
+`-slots 84` shortens it.
+
+## The record: `stim/tlock`
+
+With the frame log on (`stimFrameLog`, [stim-frame.md](stim-frame.md); ESS
+turns it on and logs this datapoint), each frame that carries a pulse
+sends one int64 datapoint:
+
+| # | field | |
+|---|---|---|
+| 1 | `swapcount` | of the swap that showed the packet, as in its `stim/frame` record |
+| 2 | `flip_us` | that flip, CLOCK_REALTIME microseconds; -1 if the swap sync cannot time flips |
+| 3 | `bits` | the pulse's output word |
+| 4 | `on` | its start, in 0.1 ms slots |
+| 5 | `dur` | its length, in slots |
+| 6 | `serial` | which `tlock pulse` call |
+
+A pulse with `-frames n` sends one record per frame; `-frames always`
+sends one, for its first frame. The outputs change one refresh after
+`flip_us`, plus `on`.
+
+## Static displays
+
+A pulse armed while nothing is animating makes the main loop draw the
+scene again ([postpass.md](postpass.md), "Static displays"), without a
+step or frame scripts when another pass can repaint it. The redraws stop
+once the idle packet has followed the pulse. `-frames always` costs one,
+since the monitor repeats the packet by itself.
+
+## Bringing it up on a rig
+
+1. `tlock on`, then `tlock pulse 0xFFFF -dur 2 -frames always`, with a
+   scope on the BNC: a 2 ms pulse every refresh says the monitor reads the
+   packet. Nothing: check the display path above, then try `-slots 84`
+   and `-row 0`.
+2. Narrow `bits` to the one that drives the BNC.
+3. `tlock pulse <bit>` (one frame): one pulse, not a train. A train means
+   the idle packet is not arriving.
+4. Wire the BNC to a dserv digital input and compare its edge with
+   `stim/tlock`'s `flip_us`: the difference should be one refresh plus a
+   constant, with jitter well under a millisecond.
+
+## Tests
+
+`tests/test_tlock.tcl` runs inside stim2, headless or windowed: the
+command, the packet's layout, the row on the frame byte for byte and
+nothing else changed, pulses on one frame, several and always, a packet
+too wide for the frame, `tlock off` and `postpass reset`.
+`tests/tlock_packet_check.cpp` checks the encoder against Psychtoolbox's
+without a display: `ctest --test-dir build -R tlock`.

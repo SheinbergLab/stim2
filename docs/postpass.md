@@ -44,7 +44,7 @@ the others: it copies what it finds and draws.
 |---|---|
 | 100 | a pass that selects or degrades the scene (`gazewin`) |
 | 100 to 900 | a pass that should apply to that result (noise, a colour transform; `shaderpass` defaults to 200) |
-| 900 and up | a display encoding that must come last |
+| 900 and up | a display encoding that must come last (`tlock`, [tlock.md](tlock.md), is 950) |
 
 On a repaint, the first wanted pass draws again from the scene it kept
 (`composite`), and the later ones are staged again over its new output,
