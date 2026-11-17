@@ -65,6 +65,12 @@ checking against another encoder. `postpass reset`, which every script
 load runs (`stim::prelude`), turns the pass off and restores the defaults:
 a stim script that wants triggers says `tlock on` itself.
 
+Under ESS a rig says it once instead: the setting `ess display_tlock` in
+dserv's settings gear. ESS then sends `tlock on` at every system load,
+after the prelude, so stim scripts only call `tlock pulse`. On a rig
+that has not set it the pass stays off, and a script shared between rigs
+can test `[dict get [tlock status] on]` before arming a pulse.
+
 ## What the monitor does with a packet
 
 From the Psychtoolbox (`BitsPlusPlus.m`, `BitsPlusDIO2Matrix.m`) and
