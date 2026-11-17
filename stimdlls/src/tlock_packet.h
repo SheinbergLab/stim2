@@ -26,6 +26,7 @@
 #define TLOCK_PACKET_H
 
 #include <vector>
+#include <cstddef>
 #include <cstdint>
 
 namespace tlock {
@@ -49,13 +50,13 @@ inline std::vector<uint8_t> encode(const uint16_t *slots, int nslots,
 {
   std::vector<uint8_t> px;
   if (nslots < 1 || nslots > MAX_SLOTS) return px;
-  px.assign((size_t) packet_width(nslots) * 4, 0);
+  px.assign((std::size_t) packet_width(nslots) * 4, 0);
   auto set = [&](int i, int r, int g, int b) {
-    px[(size_t) i * 4 + 0] = (uint8_t) r;
-    px[(size_t) i * 4 + 1] = (uint8_t) g;
-    px[(size_t) i * 4 + 2] = (uint8_t) b;
+    px[(std::size_t) i * 4 + 0] = (uint8_t) r;
+    px[(std::size_t) i * 4 + 1] = (uint8_t) g;
+    px[(std::size_t) i * 4 + 2] = (uint8_t) b;
   };
-  for (int i = 0; i < packet_width(nslots); i++) px[(size_t) i * 4 + 3] = 255;
+  for (int i = 0; i < packet_width(nslots); i++) px[(std::size_t) i * 4 + 3] = 255;
   for (int i = 0; i < 8; i++) set(i, UNLOCK_KEY[i][0], UNLOCK_KEY[i][1], UNLOCK_KEY[i][2]);
   set(8, 0, 0, nslots + 1);                       /* pairs - 1 */
   set(9, 6, command, 2);
