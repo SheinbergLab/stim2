@@ -203,6 +203,20 @@ since the monitor repeats the packet by itself.
    `stim/tlock`'s `flip_us`: the difference should be one refresh plus a
    constant, with jitter well under a millisecond.
 
+## Checking over the monitor's serial port
+
+`tools/dpp_serial.py` talks to the Display++ over its USB serial port
+(Python, standard library only). It cannot read the monitor's digital
+outputs, but it answers two questions without a scope:
+
+- `dpp_serial.py scan`, then `dpp_serial.py line 2`: the pixels of a
+  video row as the monitor received them, with the packet decoded. An
+  intact packet says the display path changed nothing. The monitor goes
+  to its status screen to answer; `dpp_serial.py video` puts it back.
+- `dpp_serial.py status 2`: the monitor's inputs (trigger in, DIN 0 to 9)
+  with its own timestamps. With an output looped back to an input, this
+  shows a pulse or a toggle arriving.
+
 ## Tests
 
 `tests/test_tlock.tcl` runs inside stim2, headless or windowed: the
