@@ -76,6 +76,10 @@ after the prelude, so stim scripts only call `tlock pulse`. On a rig
 that has not set it the pass stays off, and a script shared between rigs
 can test `[dict get [tlock status] on]` before arming a pulse.
 
+`tlock toggle` in the same section turns toggle mode on at every load
+too: a bit mask (`0x0001` for DOUT 0), 0 for off. With both set, every
+session on the rig marks its frames with nothing in the stim script.
+
 The rig also names the digital input the trigger output is wired to:
 `tlock din`, the label of the extio DI line (or of a group
 holding it). ESS then logs that line's edges in the data file beside
@@ -208,6 +212,22 @@ scene again ([postpass.md](postpass.md), "Static displays"), without a
 step or frame scripts when another pass can repaint it. The redraws stop
 once the idle packet has followed the pulse. `-frames always` costs one,
 since the monitor repeats the packet by itself.
+
+## Measured on a rig
+
+A Display++ (firmware 24/06/2015) at 1920x1080, 120 Hz, in Bits++ mode,
+2026-11-17:
+
+- the monitor reads the packet with the defaults (row 2, x 0, 248 slots):
+  the row goes black;
+- DOUT 0 (`0x0001`) on the DB25 pulses and toggles as asked, at close to
+  5 V: a 3.3 V input needs a divider;
+- in toggle mode a dynamic stimulus gives an edge per refresh, and a
+  display the graphics card can only draw at half rate gives an edge
+  every other refresh.
+
+Not yet measured: the trigger-out BNC and its bit, and the edge times
+against `flip_us`.
 
 ## Bringing it up on a rig
 
