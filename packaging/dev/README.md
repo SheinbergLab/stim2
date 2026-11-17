@@ -72,7 +72,7 @@ exits non-zero if any test fails, errors or times out. It runs:
 - inside stim2, after `config/linux.cfg` as a rig's service starts it:
   `test_frame_grab`, `test_headless_step`, `test_dynlist_numeric`,
   `test_gazewin`, `test_gazewin_step`, `test_shaderpass`,
-  `test_shader_fragment_only`;
+  `test_shader_fragment_only`, `test_tlock`;
 - as `tclsh` clients of a stim2 it starts: `test_gazewin_client`,
   `test_ack_header`;
 - in plain `tclsh`: `test_stimess`.
