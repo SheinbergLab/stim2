@@ -73,6 +73,13 @@ after the prelude, so stim scripts only call `tlock pulse`. On a rig
 that has not set it the pass stays off, and a script shared between rigs
 can test `[dict get [tlock status] on]` before arming a pulse.
 
+The rig also names the digital input the trigger output is wired to:
+`ess display_tlock_din`, the label of the extio DI line (or of a group
+holding it). ESS then logs that line's edges in the data file beside
+`stim/tlock`, and `ess/display_tlock_din` says which datapoint they are.
+Use a plain DI line for toggle mode: a chord group is settled by the
+box's firmware, and edges one refresh apart may not survive that.
+
 ## Toggle mode: an edge for every frame
 
     tlock toggle 0x0400
