@@ -21,10 +21,13 @@ It is a loadable module on stim2's post-pass chain
 row must reach the monitor exactly as written. Off by default, at the cost
 of a flag test.
 
-**Not yet run against a monitor.** The packet is Psychtoolbox's, byte for
-byte, and the pass is tested for what it draws. What a Display++ does with
-it is from the Psychtoolbox and PsychoPy drivers, not from a measurement
-here: see "Bringing it up on a rig".
+**Not yet measured on a monitor.** The packet is Psychtoolbox's, byte for
+byte, and agrees with the Bits# Technical Manual (R07, chapter 12, on the
+monitor's own USB disk under `Documentation`): the unlock key, the length
+byte (addresses assigned, minus 1), the command at address 6, the mask at
+7 and the 100 microsecond slots from address 8. The pass is tested for
+what it draws. What the outputs do with it is still to be seen on a
+scope: see "Bringing it up on a rig".
 
 ## Commands
 
@@ -84,7 +87,7 @@ box's firmware, and edges one refresh apart may not survive that.
 
 ## Toggle mode: an edge for every frame
 
-    tlock toggle 0x0400
+    tlock toggle 0x4000
 
 Each frame stim2 draws then flips those outputs: high for one whole frame,
 low for the next. The monitor repeats a packet until a new one arrives, so
@@ -124,9 +127,24 @@ PsychoPy (`psychopy_crs/bits.py`) drivers:
   83 slots; the later slots of the default 248 go unused. PsychoPy sends
   `1 + 10000/Hz` slots (84 at 120 Hz); `-slots 84` makes the packet 180
   pixels instead of 508.
-- **Bits.** Bits 0 to 9 are the DB25's digital outputs. The trigger-out
-  BNC is a higher bit; which one was not confirmed from these sources
-  (bit 10 is likely). Find it once with `tlock pulse 0xFFFF` and a scope.
+- **Bits.** Bits 0 to 9 are the DB25's digital outputs (DOUT 0 to 9).
+  The trigger-out BNC is most likely `0x4000`: the Bits# Technical Manual
+  (R07, chapter 12) gives it as decimal 16384 and as 64 in the green
+  (high) byte, though one sentence there calls it "the 16th bit", which
+  would be `0x8000`. `tlock pulse 0xC000` drives both; narrow it once
+  with a scope. Bits 10 to 13 are ignored.
+- **Levels.** The manual calls the outputs TTL-compatible: low is 0 to
+  0.4 V, high is 2.6 to 5 V. Measure the high level before wiring one to
+  a 3.3 V input.
+- **The row is blanked.** A packet that starts at the far-left pixel has
+  its whole row shown black by the monitor, so the subject sees a black
+  line, not the packet. A black row 2 over a lit background is the
+  quickest sign that the monitor read the packet.
+- **Slots past the frame.** The manual says to define enough slots to
+  fill the frame (`round(10000/Hz)`, 83 at 120 Hz) and, of Psychtoolbox's
+  fixed 248, to leave the unused ones at 0. The idle and toggle packets
+  here fill every slot with the level, so if a held level shows glitches
+  at the frame boundary, try `tlock set -slots 84`.
 
 ## The packet
 
@@ -158,8 +176,9 @@ The row is drawn before the overlay, so an overlay drawn over it breaks
 the packet. A frame grab, a `frameSink` movie and a mirror's frames
 include the row.
 
-The subject may see the row: 508 pixels at the top left, mostly black.
-`-slots 84` shortens it.
+The subject sees that row as a black line across the screen (the monitor
+blanks it). The manual suggests a black strip drawn over the top rows if
+the line appearing and disappearing matters.
 
 ## The record: `stim/tlock`
 
@@ -192,9 +211,9 @@ since the monitor repeats the packet by itself.
 
 ## Bringing it up on a rig
 
-1. `tlock on`, then `tlock pulse 0xFFFF -dur 2 -frames always`, with a
-   scope on the BNC: a 2 ms pulse every refresh says the monitor reads the
-   packet. Nothing: check the display path above, then try `-slots 84`
+1. `tlock on` over a lit background: row 2 going black says the monitor
+   read the packet. Then `tlock pulse 0xFFFF -dur 2 -frames always`, with
+   a scope on the BNC: a 2 ms pulse every refresh. Nothing: check the display path above, then try `-slots 84`
    and `-row 0`.
 2. Narrow `bits` to the one that drives the BNC.
 3. `tlock pulse <bit>` (one frame): one pulse, not a train. A train means
@@ -208,6 +227,12 @@ since the monitor repeats the packet by itself.
 `tools/dpp_serial.py` talks to the Display++ over its USB serial port
 (Python, standard library only). It cannot read the monitor's digital
 outputs, but it answers two questions without a scope:
+
+The monitor ships with its USB port as a disk (`USB_MSD`), not a serial
+port: `lsusb -v` shows one Mass Storage interface and there is no
+`/dev/ttyACM*`. Serial needs `USB_MSD="OFF"` and `USB_CDC="ON"` in
+`Firmware/Config.xml` on that disk, then a power cycle (the manual's
+installation chapter). Keep a copy of the file first.
 
 - `dpp_serial.py scan`, then `dpp_serial.py line 2`: the pixels of a
   video row as the monitor received them, with the packet decoded. An
