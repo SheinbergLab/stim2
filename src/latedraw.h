@@ -13,9 +13,22 @@
  * and until then the main loop keeps running normally (commands answered,
  * datapoints applied) without drawing.  The budget is the time the
  * step+draw+submit AND the GPU's tail after the submit need before the
- * vblank; the user's value is a floor and the effective budget adapts upward
- * on a late frame (missed vblank or a flip interval over 1.5 periods) and
- * decays back toward the floor after long clean runs.
+ * vblank.  The user's value is a floor.  The effective budget is
+ *
+ *     max(floor, work + margin), at most period - 1 ms
+ *
+ * where work is what frames on this machine, with this scene, have lately
+ * taken (draw + GPU tail, measured every frame) and margin is the time the
+ * swap needs between the GPU finishing and the vblank.  So the budget finds
+ * its own level on each system: nobody tunes a floor per rig, and a floor
+ * that is lower than the machine can do costs nothing.
+ *
+ * It was not always so.  The first rule raised the budget by half (or to
+ * twice the work) on any late frame and took 5 s to give back each 0.25 ms.
+ * On a rig whose frames needed 4.3 ms that held a 3 ms floor between 5 and
+ * 7 ms for whole sessions: the budget sank until a frame missed near 3.9 ms,
+ * jumped to the 7.33 ms cap and spent a minute coming down, over and over
+ * (docs/late-draw.md, "How the rule was arrived at").
  *
  * Two costs the CPU submit time cannot see are handled separately:
  *
@@ -49,10 +62,14 @@ extern "C" {
 
 #define LATEDRAW_DRAW_RING 256      /* draw/gpu-time samples kept for stats */
 #define LATEDRAW_FLIP_RING 16       /* flip intervals kept for the period */
-#define LATEDRAW_CLEAN_RUN 600      /* clean frames per 0.25 ms decay step */
-#define LATEDRAW_DECAY_MS 0.25
-#define LATEDRAW_RAISE_FACTOR 1.5
-#define LATEDRAW_DRAW_FACTOR 2.0
+#define LATEDRAW_MIN_SAMPLES 32     /* frames measured before work is believed */
+#define LATEDRAW_WORK_RANK 5        /* work = the 5th largest of the ring (~98%) */
+#define LATEDRAW_MARGIN_MS 1.0      /* GPU done to vblank: the starting margin */
+#define LATEDRAW_MARGIN_STEP_MS 0.25/* added when a frame within plan is late */
+#define LATEDRAW_EXCESS_MS 0.75     /* work this far over plan: not the margin's */
+#define LATEDRAW_EXCESS_RUN 30      /* two such within this many frames: a step */
+#define LATEDRAW_ENV_DECAY_MS 0.25  /* the work envelope gives back this much */
+#define LATEDRAW_ENV_DECAY_FRAMES 600 /* ... per this many frames (5 s at 120 Hz) */
 #define LATEDRAW_CAP_MARGIN_MS 1.0  /* effective <= period - this */
 #define LATEDRAW_LATE_INTERVAL 1.5  /* flip interval > this * period = late */
 #define LATEDRAW_BLAMELESS_SLACK_MS 2.5  /* a late frame that was ready this
@@ -62,15 +79,20 @@ extern "C" {
 typedef struct latedraw_state_s {
   int enabled;
   double floor_ms;                  /* the user's budget */
-  double effective_ms;              /* current adaptive budget (>= floor) */
+  double effective_ms;              /* current budget (>= floor, <= cap) */
+  double env_ms;                    /* work envelope: follows the ring's high
+                                       quantile up at once, down slowly */
+  double margin_ms;                 /* GPU done to vblank; only grows */
+  long last_excess_draw;            /* draws at the last over-plan late frame */
 
   long draws;                       /* frames drawn under late-draw */
   long late;                        /* of those, scheduled ones detected late */
-  long clean_run;                   /* consecutive non-late scheduled frames */
   long warmups;                     /* frames drawn at once (not deferred) */
   long warmup_late;                 /* of those, detected late */
   long late_blameless;              /* scheduled, late, but ready in time:
                                        counted, the budget left alone */
+  long late_excess;                 /* of late: the frame's own work ran over
+                                       plan (a stall, or a heavier scene) */
 
   double draw_ring[LATEDRAW_DRAW_RING];   /* ms, CPU: step to swap submit */
   int draw_n, draw_i;
@@ -102,15 +124,20 @@ int latedrawWaitMs(double now_s, double target_s);
    frame is drawn at once instead of deferred. */
 int latedrawIsWarmup(long swapcount, long governed_swapcount);
 
-/* The adaptation rules, as pure functions of their inputs: */
-/* late frame:  max(effective * 1.5, work * 2), where work is the CPU draw
-   time plus the GPU tail, capped at period - 1 ms and never below the
-   floor (when the floor itself exceeds the cap, the cap wins: such a
-   budget means "no deferral" anyway). */
-double latedrawRaise(double effective_ms, double work_ms, double floor_ms,
-                     double period_ms);
-/* 600 clean frames:  effective - 0.25 ms, never below the floor. */
-double latedrawLower(double effective_ms, double floor_ms);
+/* Work the scheduler plans for: the LATEDRAW_WORK_RANK-th largest
+   draw + GPU tail among the ring's frames (the largest when it holds fewer
+   than that; 0 when empty).  A high quantile, not the maximum, so a single
+   stalled frame does not move it, while a scene that got heavier does
+   within a few frames. */
+double latedrawWorkMs(const latedraw_state_t *s);
+
+/* The budget for the state as it stands:
+     fewer than LATEDRAW_MIN_SAMPLES frames measured -> the cap
+       (period - 1 ms): nothing is known about this scene yet;
+     else env + margin, at least the floor, at most the cap
+       (a floor above the cap: the cap wins, as "no deferral" would).
+   Unknown period (<= 0): the floor. */
+double latedrawBudgetMs(const latedraw_state_t *s, double period_ms);
 
 /* Late-frame test for the swap just completed: the display's missed-frame
    counter advanced, or the flip interval exceeded 1.5 periods.  A zero or
@@ -118,26 +145,41 @@ double latedrawLower(double effective_ms, double floor_ms);
 int latedrawIsLate(long missed_before, long missed_after,
                    double flip_interval_ms, double period_ms);
 
-/* Account for one frame drawn under late-draw: records draw_ms and gpu_ms,
-   counts it, applies the raise/decay rules.  A warm-up frame (warmup != 0)
-   is counted in warmups / warmup_late and recorded in the rings, but it
-   neither raises the budget nor touches the clean run.  Returns 1 if the
-   frame counted as late (of either kind). */
+/* Account for one frame drawn under late-draw, slack unknown: see
+   latedrawOnFrameSlack. */
 int latedrawOnFrame(latedraw_state_t *s, double draw_ms, double gpu_ms,
                     int late, int warmup, double period_ms);
 
-/* The same, told how early the frame was ready: slack_ms is the time from
-   the GPU finishing the frame (or the swap submit, without GPU timing) to
-   the refresh it was aimed at; negative = not known, treated as 0.
+/* Account for one frame: record draw_ms and gpu_ms, count it, and set
+   effective_ms for the next.  slack_ms is the time from the GPU finishing
+   the frame (or the swap submit, without GPU timing) to the refresh it was
+   aimed at; negative = not known or finished after it.
 
-   A late frame with slack_ms >= LATEDRAW_BLAMELESS_SLACK_MS was finished
-   well before its refresh and missed it anyway: a scheduling hiccup, the
-   display server, the driver.  A larger budget would not have saved it, so
-   the budget is not raised.  It is counted in late_blameless (not in late)
-   and it does restart the clean run, so the budget does not decay through
-   a patch of them.  Measured on a rig (2026-11-17): frames drawn in 2.3 ms
-   with a 6 ms budget still ran long about once in 15 s, and each one cost
-   a minute of budget at the cap.  Returns 1 for a late frame of any kind. */
+   Every frame: the work envelope follows latedrawWorkMs() up at once and
+   comes down LATEDRAW_ENV_DECAY_MS per LATEDRAW_ENV_DECAY_FRAMES frames, so
+   a display that alternates light and heavy stretches (a gaze window on for
+   part of each trial) keeps the heavy stretch's budget across the light one.
+
+   A late scheduled frame is one of three things:
+   - ready in time (slack_ms >= LATEDRAW_BLAMELESS_SLACK_MS): the render
+     thread was held off, or the display server or driver took the time.
+     Counted in late_blameless; nothing changes.
+   - its own work ran more than LATEDRAW_EXCESS_MS over the envelope: a
+     stall, or the first frame of a heavier scene.  Counted in late and
+     late_excess.  One such frame changes nothing (no budget short of the
+     stall's own length would have saved it); a second within
+     LATEDRAW_EXCESS_RUN frames is a step in the load, and the envelope is
+     lifted to it at once instead of waiting for the quantile.
+   - neither: the work was as planned and the frame still missed, so the
+     margin is too small for this machine's swap path.  Counted in late; the
+     margin grows by LATEDRAW_MARGIN_STEP_MS and stays there (it is reset
+     only by latedrawInit: probing downward would cost a missed frame each
+     time it found the edge).
+   A late frame before LATEDRAW_MIN_SAMPLES frames are in is counted and
+   teaches nothing.  A warm-up frame is counted in warmups / warmup_late and
+   recorded in the rings, and changes neither envelope nor margin beyond
+   what its measurements do through the ring.  Returns 1 for a late frame of
+   any kind. */
 int latedrawOnFrameSlack(latedraw_state_t *s, double draw_ms, double gpu_ms,
                          int late, int warmup, double period_ms,
                          double slack_ms);

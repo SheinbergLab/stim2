@@ -14,6 +14,8 @@ void latedrawInit(latedraw_state_t *s, double budget_ms)
   if (budget_ms < 0.0) budget_ms = 0.0;
   s->floor_ms = budget_ms;
   s->effective_ms = budget_ms;
+  s->margin_ms = LATEDRAW_MARGIN_MS;
+  s->last_excess_draw = -1000000;
 }
 
 double latedrawTarget(double last_flip_s, double period_ms, double budget_ms)
@@ -40,22 +42,26 @@ static double cap_ms(double period_ms)
   return cap > 0.0 ? cap : 0.0;
 }
 
-double latedrawRaise(double effective_ms, double work_ms, double floor_ms,
-                     double period_ms)
+double latedrawWorkMs(const latedraw_state_t *s)
 {
-  double v = std::max(effective_ms * LATEDRAW_RAISE_FACTOR,
-                      work_ms * LATEDRAW_DRAW_FACTOR);
+  int n = s->draw_n;
+  if (n <= 0) return 0.0;
+  double tmp[LATEDRAW_DRAW_RING];
+  for (int i = 0; i < n; i++) tmp[i] = s->draw_ring[i] + s->gpu_ring[i];
+  int k = n < LATEDRAW_WORK_RANK ? 0 : LATEDRAW_WORK_RANK - 1;   /* from the top */
+  std::nth_element(tmp, tmp + k, tmp + n, [](double a, double b) { return a > b; });
+  return tmp[k];
+}
+
+double latedrawBudgetMs(const latedraw_state_t *s, double period_ms)
+{
+  if (period_ms <= 0.0) return s->floor_ms;
   double cap = cap_ms(period_ms);
-  double lo = std::min(floor_ms, cap);       /* floor above cap: cap wins */
+  double lo = std::min(s->floor_ms, cap);    /* floor above cap: cap wins */
+  double v = s->draw_n < LATEDRAW_MIN_SAMPLES ? cap : s->env_ms + s->margin_ms;
   if (v > cap) v = cap;
   if (v < lo) v = lo;
   return v;
-}
-
-double latedrawLower(double effective_ms, double floor_ms)
-{
-  double v = effective_ms - LATEDRAW_DECAY_MS;
-  return v < floor_ms ? floor_ms : v;
 }
 
 int latedrawIsLate(long missed_before, long missed_after,
@@ -86,40 +92,47 @@ int latedrawOnFrameSlack(latedraw_state_t *s, double draw_ms, double gpu_ms,
                          double slack_ms)
 {
   if (gpu_ms < 0.0) gpu_ms = 0.0;
+  int primed = s->draw_n >= LATEDRAW_MIN_SAMPLES;
+  double planned = s->env_ms;                 /* before this frame is in */
+  double work = draw_ms + gpu_ms;
+
   ring_push(s->draw_ring, &s->draw_n, &s->draw_i, draw_ms);
   ring_push(s->gpu_ring, &s->gpu_n, &s->gpu_i, gpu_ms);
   s->draws++;
 
+  /* the envelope: up with the quantile at once, down slowly */
+  double q = latedrawWorkMs(s);
+  double e = s->env_ms - LATEDRAW_ENV_DECAY_MS / LATEDRAW_ENV_DECAY_FRAMES;
+  s->env_ms = q > e ? q : e;
+
   if (warmup) {
     /* Drawn at once with the whole period ahead: a slip here is the
-       scene's first-frame cost, which no budget could have bought back.
-       Count it, leave the adaptation alone. */
+       scene's first-frame cost, which no budget could have bought back. */
     s->warmups++;
     if (late) s->warmup_late++;
-    return late ? 1 : 0;
   }
-
-  if (late && slack_ms >= LATEDRAW_BLAMELESS_SLACK_MS) {
-    /* ready well before its refresh and late all the same: not the
-       budget's doing, so not the budget's to fix */
+  else if (late && slack_ms >= LATEDRAW_BLAMELESS_SLACK_MS) {
+    /* ready well before its refresh and late all the same */
     s->late_blameless++;
-    s->clean_run = 0;
-    return 1;
   }
-
-  if (late) {
+  else if (late) {
     s->late++;
-    s->clean_run = 0;
-    s->effective_ms = latedrawRaise(s->effective_ms, draw_ms + gpu_ms,
-                                    s->floor_ms, period_ms);
-    return 1;
+    if (!primed) {
+      /* nothing believed about this scene yet: nothing to learn from it */
+    }
+    else if (work > planned + LATEDRAW_EXCESS_MS) {
+      s->late_excess++;
+      if (s->draws - s->last_excess_draw <= LATEDRAW_EXCESS_RUN && work > s->env_ms)
+        s->env_ms = work;                     /* a step in the load */
+      s->last_excess_draw = s->draws;
+    }
+    else {
+      s->margin_ms += LATEDRAW_MARGIN_STEP_MS;
+    }
   }
 
-  if (++s->clean_run >= LATEDRAW_CLEAN_RUN) {
-    s->clean_run = 0;
-    s->effective_ms = latedrawLower(s->effective_ms, s->floor_ms);
-  }
-  return 0;
+  s->effective_ms = latedrawBudgetMs(s, period_ms);
+  return late ? 1 : 0;
 }
 
 void latedrawNoteFlipInterval(latedraw_state_t *s, double interval_ms)

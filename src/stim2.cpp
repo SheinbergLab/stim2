@@ -1626,6 +1626,7 @@ public:
     double slack_ms = f.warmup || f.period_ms <= 0.0 ? -1.0
       : (f.flip0 + f.period_ms / 1000.0 - ready) * 1000.0;
     long blameless0 = latedraw.late_blameless;
+    long excess0 = latedraw.late_excess;
     latedrawOnFrameSlack(&latedraw, draw_ms, gpu_ms, late, f.warmup ? 1 : 0,
                          period, slack_ms);
     latedraw_governed_swap = (long) SwapCount;
@@ -1643,7 +1644,8 @@ public:
       v[5] = slack_ms < 0.0 && f.warmup ? -1 : llround(slack_ms * 1000.0);
       v[6] = llround(interval_ms * 1000.0);
       v[7] = (late ? 1 : 0) | (f.warmup ? 2 : 0)
-        | (latedraw.late_blameless != blameless0 ? 4 : 0);
+        | (latedraw.late_blameless != blameless0 ? 4 : 0)
+        | (latedraw.late_excess != excess0 ? 8 : 0);
       frameLogPushNamed("stim/latedraw", v, 8);
     }
   }
@@ -3469,6 +3471,9 @@ void stimLateDrawStatus(latedraw_status_t *st)
   st->warmups = s->warmups;
   st->warmup_late = s->warmup_late;
   st->late_blameless = s->late_blameless;
+  st->late_excess = s->late_excess;
+  st->work_ms = s->env_ms;
+  st->margin_ms = s->margin_ms;
   st->draw_ms_med = latedrawDrawMedianMs(s);
   st->draw_ms_max = latedrawDrawMaxMs(s);
   st->gpu_ms_med = latedrawGpuMedianMs(s);

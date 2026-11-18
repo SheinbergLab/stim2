@@ -536,6 +536,7 @@ static int stimFrameLogCmd(ClientData clientData, Tcl_Interp *interp,
  *   floor; 0 disables; no argument reports.  Every form returns the state
  *       enabled 0|1 budget_ms <floor> effective_ms <adaptive> period_ms <p>
  *       draws <n> late <n> warmups <n> warmup_late <n> late_blameless <n>
+ *       late_excess <n> work_ms <x> margin_ms <x>
  *       draw_ms_med <x> draw_ms_max <x> gpu_ms_med <x> gpu_ms_max <x>
  *       gpu_timed 0|1
  *   (draw_ms_* and gpu_ms_* over the last 256 governed draws; warmups are
@@ -594,6 +595,12 @@ static int stimLateDrawCmd(ClientData clientData, Tcl_Interp *interp,
 		 Tcl_NewLongObj(st.warmup_late));
   Tcl_DictObjPut(interp, d, Tcl_NewStringObj("late_blameless", -1),
 		 Tcl_NewLongObj(st.late_blameless));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("late_excess", -1),
+		 Tcl_NewLongObj(st.late_excess));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("work_ms", -1),
+		 Tcl_NewDoubleObj(st.work_ms));
+  Tcl_DictObjPut(interp, d, Tcl_NewStringObj("margin_ms", -1),
+		 Tcl_NewDoubleObj(st.margin_ms));
   Tcl_DictObjPut(interp, d, Tcl_NewStringObj("draw_ms_med", -1),
 		 Tcl_NewDoubleObj(st.draw_ms_med));
   Tcl_DictObjPut(interp, d, Tcl_NewStringObj("draw_ms_max", -1),

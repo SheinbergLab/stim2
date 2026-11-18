@@ -56,7 +56,7 @@ proc msg_send {sock s} {
     return [expr {$n ? [read $sock $n] : ""}]
 }
 
-set ::keys {enabled budget_ms effective_ms period_ms draws late draw_ms_med draw_ms_max late_blameless}
+set ::keys {enabled budget_ms effective_ms period_ms draws late draw_ms_med draw_ms_max late_blameless late_excess work_ms margin_ms}
 proc is_status {st} {
     if {[catch {dict size $st}]} { return 0 }
     foreach k $::keys { if {![dict exists $st $k]} { return 0 } }

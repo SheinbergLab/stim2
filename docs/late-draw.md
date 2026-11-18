@@ -42,6 +42,7 @@ the display is dynamic, and a flip time and period are known.
 
       enabled 0|1 budget_ms <floor> effective_ms <adaptive> period_ms <p>
       draws <n> late <n> warmups <n> warmup_late <n> late_blameless <n>
+      late_excess <n> work_ms <x> margin_ms <x>
       draw_ms_med <x> draw_ms_max <x> gpu_ms_med <x> gpu_ms_max <x>
       gpu_timed 0|1
 
@@ -97,55 +98,71 @@ scheduled normally against `effective_ms`.
 
 ## Adaptation rule
 
-The budget the user gives is a floor. The effective budget is what is
-actually scheduled against:
+The budget the user gives is a floor. The budget actually scheduled
+against is
 
-- After each governed swap, a frame is late when `swapsyncMissedFrames()`
-  advanced since the previous swap, or the flip interval exceeded 1.5
-  periods. On a late scheduled frame the effective budget is raised to
-  `max(effective * 1.5, (draw_time + gpu_tail) * 2)`, capped at
-  `period - 1 ms`, and the frame counted in `late`. A late warm-up frame
-  only increments `warmup_late`.
-- A late scheduled frame that was **ready in time** does not raise the
-  budget. Ready in time means the GPU had finished it (or, without GPU
-  timing, the swap had been submitted) at least 2.5 ms before the refresh
-  it was aimed at. Such a frame missed its refresh for a reason a larger
-  budget would not have changed: the render thread was held off, the
-  display server or the driver took the time. It is counted in
-  `late_blameless`, not `late`, and it restarts the clean run below, so
-  the budget does not decay through a patch of them.
-- Every 600 consecutive non-late scheduled frames (5 s at 120 Hz) the
-  effective budget is lowered by 0.25 ms, never below the floor. Warm-up
-  frames neither extend nor reset that run.
+    effective = max(floor, work + margin)      at most period - 1 ms
 
-`gpu_tail` is measured with a GL fence placed between the draw commands
-and `glfwSwapBuffers`: after the swap call returns, the render thread
-waits for the GPU to pass the fence and stamps the clock. The flip cannot
-precede GPU completion and the thread is about to block in the swap wait
-for that flip anyway, so the measurement is free; it is bounded at
-100 ms so a stuck driver cannot hang the loop, and a context without
-`glFenceSync` (ES2) just reports a tail of 0 and `gpu_timed 0`. The
-result is that a scene which is cheap to submit but expensive to render
-raises the budget by what it actually needs, instead of by the CPU time
-alone.
+and stim2 finds `work` and `margin` for the machine and the scene it is
+running, so a floor does not have to be tuned per rig. A floor lower than
+the machine can do is simply not reached.
 
-So a miss can never cascade: the first late frame at least halves the
-remaining slack, and a budget that proves too small walks back up until
-misses stop, then slowly decays toward the floor. The pure arithmetic is
-in `src/latedraw.cpp` and unit checked by `tests/latedraw_check.cpp`
-(`ctest --test-dir build -R latedraw`), which needs no display.
+- **work** is what frames have lately taken: draw time plus GPU tail,
+  measured on every governed frame. It is the 5th largest of the last 256
+  frames (about the 98th percentile), so one stalled frame does not move
+  it and a scene that got heavier does within a few frames. It follows
+  that figure up at once and comes down 0.25 ms per 600 frames (5 s at
+  120 Hz), so a display that is heavy for part of each trial (a gaze
+  window that is on only during the stimulus) keeps the heavy part's
+  budget through the light part.
+- **margin** is the time the swap needs between the GPU finishing and the
+  vblank. It starts at 1 ms.
+- Until 32 frames have been measured since enable, the budget is the cap:
+  nothing is known about the scene yet.
 
-Nothing in the scheduler is shared with the timer thread; all of its
-state is plain data on the render thread.
+After each governed swap a frame is late when `swapsyncMissedFrames()`
+advanced or the flip interval exceeded 1.5 periods. A late scheduled
+frame is one of three things:
 
-Why the ready-in-time rule: on a 120 Hz rig (2026-11-17) frames that took
-2.3 ms to draw, scheduled with a 6 to 7 ms budget, still ran long about
-once every 15 to 50 s. Each raised the budget by half, and at 0.25 ms per
-5 s it took about a minute to come back, so a 3 ms floor ran at 5 to 7 ms
-for whole sessions. The same sessions showed a real limit too: frames
-began to slip when the budget decayed to about 3.9 ms, 1.6 ms more than
-the measured work. Those have less than 2.5 ms of slack and still raise
-the budget.
+- **Ready in time**: the GPU had finished it (or, without GPU timing, the
+  swap had been submitted) at least 2.5 ms before the refresh it was
+  aimed at. The render thread was held off, or the display server or the
+  driver took the time. Counted in `late_blameless`; nothing changes.
+- **Over plan**: its own work ran more than 0.75 ms over `work`. A stall,
+  or the first frame of a heavier scene. Counted in `late` and
+  `late_excess`. One such frame changes nothing, since only a budget as
+  long as the stall would have saved it. A second within 30 frames is a
+  step in the load, and `work` is lifted to it at once.
+- **Neither**: the work was as planned and the frame still missed, so the
+  margin is too short for this machine's swap path. Counted in `late`,
+  and the margin grows by 0.25 ms. It does not come back down until
+  late-draw is enabled again: looking for the edge again would cost a
+  missed frame each time it was found.
+
+A late warm-up frame only increments `warmup_late`. `stimLateDraw`
+reports `work_ms`, `margin_ms` and `late_excess` with the rest.
+
+### How the rule was arrived at
+
+The first rule raised the budget to `max(effective * 1.5, work * 2)` on
+any late frame and lowered it 0.25 ms per 600 clean frames. On a 120 Hz
+rig, 2026-11-17, with a 3 ms floor and frames that needed about 4.3 ms
+(draw 0.6, GPU tail 2.6 with a gaze window, 0.45 ms to the vblank):
+
+- the budget sank until a frame missed near 3.9 ms, jumped to the 7.33 ms
+  cap, and took a minute to come back, over and over: a median of 5.6 to
+  6.6 ms across sessions;
+- stray late frames with 3 ms of slack, about one per 15 s until a second
+  real-time process and unpinned cores were dealt with, each did the
+  same;
+- GPU stalls of 5 to 6 ms on single frames, a few a minute, each did the
+  same;
+- a 2011 workstation and a 2024 one sat at the same budget, because the
+  rule, not the hardware, set it.
+
+Replaying the per-frame records of three of those sessions through the
+rule above gives a steady 4.6 to 4.9 ms, with the stalls each costing the
+one frame they would cost anyway.
 
 ## The record: `stim/latedraw`
 
@@ -162,7 +179,7 @@ each frame the scheduler governed sends one int64 datapoint beside its
 | 5 | `gpu_us` | from that return until the GPU passed the fence; -1 if not timed |
 | 6 | `slack_us` | from the GPU finishing (or the submit) to the refresh aimed at; negative if it finished after. -1 on a warm-up |
 | 7 | `interval_us` | the flip interval this frame ended |
-| 8 | `flags` | 1 late, 2 warm-up, 4 late but ready in time (budget not raised) |
+| 8 | `flags` | 1 late, 2 warm-up, 4 late but ready in time, 8 late with its own work over plan |
 
 `budget = wake_late + draw + gpu + slack` for a scheduled frame. A late
 frame with a large `wake_late_us` lost its time before it started (the
@@ -224,9 +241,14 @@ on direct X11 flips.
    just after the flips again and done-to-flip returns to a period.
 
 If `missed` advances or flip intervals show doubles with late-draw on,
-read `draw_ms_max` and `gpu_ms_max` and raise the floor to at least twice
-their sum. The adaptation will already have done so for the session
-(`effective_ms`), but the floor is what survives a re-enable. A double
+read the status: `late_excess` counts frames whose own work ran long (a
+stall, which no budget fixes short of its length; `gpu_ms_max` shows how
+long), `late_blameless` frames that were ready and missed anyway (look at
+what else runs at real-time priority, and at core pinning), and a
+`margin_ms` above 1 says the swap path on this machine needs more than
+1 ms after the GPU is done. The floor does not need raising for any of
+these: `effective_ms` is already where the measurements put it. The
+`stim/latedraw` records in the data file give the same per frame. A double
 interval at the second frame of a trial with `late` unchanged and
 `warmup_late` advanced is the warm-up case: the scene's first frame cost
 more than a period, which a budget cannot fix; look at what `nexttrial`

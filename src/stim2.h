@@ -201,6 +201,9 @@ typedef struct latedraw_status_s {
   long draws, late;
   long warmups, warmup_late; /* frames drawn at once after a foreign swap */
   long late_blameless;       /* late though ready in time: budget not raised */
+  long late_excess;          /* of late: the frame's own work ran over plan */
+  double work_ms;            /* work the budget plans for (envelope) */
+  double margin_ms;          /* GPU done to vblank, as learned */
   double draw_ms_med, draw_ms_max;
   double gpu_ms_med, gpu_ms_max;  /* GPU tail after the submit (fence) */
   int gpu_timed;           /* 1 when the GL fence is available and used */

@@ -59,29 +59,6 @@ int main(void)
     check("past the target -> no wait", latedrawWaitMs(1.0, 0.5) == 0);
   }
 
-  /* ---- raise ----------------------------------------------------------- */
-  {
-    /* effective 3, draw 1: 1.5*3 = 4.5 beats 2*1 = 2 */
-    double v = latedrawRaise(3.0, 1.0, 3.0, P);
-    check("late frame raises to effective*1.5 when that dominates",
-          near(v, 4.5), v, 4.5);
-    /* effective 3, draw 4: 2*4 = 8 beats 4.5, but cap is P-1 = 7.333 */
-    v = latedrawRaise(3.0, 4.0, 3.0, P);
-    check("late frame raises to draw*2 when that dominates, capped at period-1",
-          near(v, P - 1.0), v, P - 1.0);
-    v = latedrawRaise(3.0, 2.5, 3.0, P);
-    check("draw*2 = 5 > effective*1.5 = 4.5 -> 5", near(v, 5.0), v, 5.0);
-    /* never above the cap even from a huge effective */
-    v = latedrawRaise(100.0, 100.0, 3.0, P);
-    check("raise never exceeds period - 1 ms", near(v, P - 1.0), v, P - 1.0);
-    /* never below the floor */
-    v = latedrawRaise(0.1, 0.05, 3.0, P);
-    check("raise never goes below the floor", near(v, 3.0), v, 3.0);
-    /* floor above the cap: cap wins */
-    v = latedrawRaise(20.0, 1.0, 20.0, P);
-    check("floor above period-1: result is the cap", near(v, P - 1.0), v, P - 1.0);
-  }
-
   /* ---- warm-up detection ----------------------------------------------- */
   {
     check("nothing governed yet (-1) -> warm-up", latedrawIsWarmup(100, -1) == 1);
@@ -89,16 +66,6 @@ int main(void)
           latedrawIsWarmup(100, 100) == 0);
     check("swap count moved since (foreign swap) -> warm-up",
           latedrawIsWarmup(101, 100) == 1);
-  }
-
-  /* ---- lower ----------------------------------------------------------- */
-  {
-    double v = latedrawLower(4.5, 3.0);
-    check("decay step lowers by 0.25 ms", near(v, 4.25), v, 4.25);
-    v = latedrawLower(3.1, 3.0);
-    check("decay never goes below the floor", near(v, 3.0), v, 3.0);
-    v = latedrawLower(3.0, 3.0);
-    check("decay at the floor stays at the floor", near(v, 3.0), v, 3.0);
   }
 
   /* ---- late detection -------------------------------------------------- */
@@ -126,106 +93,111 @@ int main(void)
     check("refresh period wins when known",
           near(latedrawPeriodMs(&s, P), P));
 
-    /* a late frame with draw 1 ms, no gpu tail: 3 -> 4.5 */
-    int late = latedrawOnFrame(&s, 1.0, 0.0, 1, 0, P);
-    check("late frame counted", late == 1 && s.late == 1 && s.draws == 1);
-    check("late frame raised effective to 4.5", near(s.effective_ms, 4.5),
-          s.effective_ms, 4.5);
-    check("late frame reset the clean run", s.clean_run == 0);
-
-    /* 599 clean frames: no change yet */
-    for (int i = 0; i < LATEDRAW_CLEAN_RUN - 1; i++) latedrawOnFrame(&s, 1.0, 0.0, 0, 0, P);
-    check("599 clean frames: effective unchanged", near(s.effective_ms, 4.5),
-          s.effective_ms, 4.5);
-    /* the 600th: -0.25 */
+    /* nothing measured yet: the budget is the cap, whatever the floor */
     latedrawOnFrame(&s, 1.0, 0.0, 0, 0, P);
-    check("600th clean frame lowers by 0.25 ms", near(s.effective_ms, 4.25),
-          s.effective_ms, 4.25);
-    check("clean run restarts after a decay step", s.clean_run == 0);
-    /* 600 more x 6 -> would be 2.75 but floors at 3.0 */
-    for (int k = 0; k < 6; k++)
-      for (int i = 0; i < LATEDRAW_CLEAN_RUN; i++) latedrawOnFrame(&s, 1.0, 0.0, 0, 0, P);
-    check("repeated decay never goes below the floor", near(s.effective_ms, 3.0),
-          s.effective_ms, 3.0);
+    check("first frames: budget at the cap", near(s.effective_ms, P - 1.0), s.effective_ms, P - 1.0);
+    int l0 = latedrawOnFrame(&s, 1.0, 0.0, 1, 0, P);
+    check("a late frame before the scene is known is counted", l0 == 1 && s.late == 1);
+    check("... and teaches nothing", near(s.margin_ms, LATEDRAW_MARGIN_MS) && s.late_excess == 0);
+    for (int i = 2; i < LATEDRAW_MIN_SAMPLES; i++) latedrawOnFrame(&s, 1.0, 0.0, 0, 0, P);
+    /* 32 frames of 1 ms work in: work 1.0 + margin 1.0 = 2.0, under the 3 ms floor */
+    check("cheap frames: the floor holds", near(s.effective_ms, 3.0), s.effective_ms, 3.0);
+    check("work is the ring's high quantile", near(latedrawWorkMs(&s), 1.0), latedrawWorkMs(&s), 1.0);
 
-    /* a late frame mid-run resets the clean run */
-    for (int i = 0; i < 100; i++) latedrawOnFrame(&s, 1.0, 0.0, 0, 0, P);
-    latedrawOnFrame(&s, 1.0, 0.0, 1, 0, P);
-    check("late frame mid-run resets the clean run", s.clean_run == 0);
-    check("late count is 2", s.late == 2);
-
-    /* repeated late frames climb geometrically but stop at the cap */
-    for (int i = 0; i < 20; i++) latedrawOnFrame(&s, 1.0, 0.0, 1, 0, P);
-    check("many late frames saturate at period - 1 ms",
-          near(s.effective_ms, P - 1.0), s.effective_ms, P - 1.0);
-
-    /* the GPU tail counts as work: draw 0.8 + gpu 2.0 = 2.8, x2 = 5.6 beats
-       1.5 x 3 = 4.5 -- the measured office-box case (CPU under 1 ms, slip
-       anyway) now raises by the right amount */
+    /* the rig: draw 0.6 + gpu 2.6, a few frames to 3.6: budget 4.6, and it stays */
     latedraw_state_t g;
     latedrawInit(&g, 3.0);
-    latedrawOnFrame(&g, 0.8, 2.0, 1, 0, P);
-    check("late frame raises on draw + gpu tail (2 x 2.8 = 5.6)",
-          near(g.effective_ms, 5.6), g.effective_ms, 5.6);
-    check("gpu ring records the tail", near(latedrawGpuMaxMs(&g), 2.0),
-          latedrawGpuMaxMs(&g), 2.0);
-    latedrawOnFrame(&g, 0.8, -1.0, 0, 0, P);
-    check("negative gpu tail (unmeasured) is recorded as 0",
-          near(latedrawGpuMedianMs(&g), 1.0), latedrawGpuMedianMs(&g), 1.0);
+    for (int i = 0; i < 300; i++)
+      latedrawOnFrameSlack(&g, 0.6, (i % 40 == 0) ? 3.0 : 2.6, 0, 0, P, 1.2);
+    check("budget = high-quantile work + margin (3.6 + 1.0)", near(g.effective_ms, 4.6), g.effective_ms, 4.6);
+    double held = g.effective_ms;
+    for (int i = 0; i < 3000; i++)
+      latedrawOnFrameSlack(&g, 0.6, (i % 40 == 0) ? 3.0 : 2.6, 0, 0, P, 1.2);
+    check("... and holds there: no decay toward a floor it cannot meet",
+          near(g.effective_ms, held), g.effective_ms, held);
+    check("gpu ring records the tail", near(latedrawGpuMaxMs(&g), 3.0), latedrawGpuMaxMs(&g), 3.0);
+
+    /* one stalled frame (gpu 5 ms): late, counted, and nothing moves */
+    int ls = latedrawOnFrameSlack(&g, 0.9, 5.0, 1, 0, P, -0.1);
+    check("a stall is late and counted as over plan", ls == 1 && g.late == 1 && g.late_excess == 1);
+    check("a single stall leaves the budget alone", near(g.effective_ms, held), g.effective_ms, held);
+    check("... and the margin", near(g.margin_ms, LATEDRAW_MARGIN_MS));
+    for (int i = 0; i < 300; i++) latedrawOnFrameSlack(&g, 0.6, 2.6, 0, 0, P, 1.2);
+    check("stalls minutes apart never add up", near(g.effective_ms, held, 0.3), g.effective_ms, held);
+
+    /* a heavier scene (the blur comes on): two late frames, then it fits */
+    latedrawOnFrameSlack(&g, 0.6, 4.4, 1, 0, P, -0.3);
+    latedrawOnFrameSlack(&g, 0.6, 4.4, 1, 0, P, -0.3);
+    check("second over-plan frame in a row lifts the plan at once (5.0 + 1.0)",
+          near(g.effective_ms, 6.0), g.effective_ms, 6.0);
+    check("... without touching the margin", near(g.margin_ms, LATEDRAW_MARGIN_MS));
+    for (int i = 0; i < 20; i++) latedrawOnFrameSlack(&g, 0.6, 4.4, 0, 0, P, 1.0);
+    check("and the quantile carries it from there", near(g.effective_ms, 6.0), g.effective_ms, 6.0);
+
+    /* back to the lighter scene: the plan comes down slowly, 0.25 ms per 600 frames */
+    for (int i = 0; i < 256; i++) latedrawOnFrameSlack(&g, 0.6, 2.6, 0, 0, P, 2.0);
+    check("while the heavy frames are still in the ring, nothing is given back",
+          near(g.effective_ms, 6.0, 0.01), g.effective_ms, 6.0);
+    for (int i = 0; i < 600; i++) latedrawOnFrameSlack(&g, 0.6, 2.6, 0, 0, P, 2.0);
+    check("then 600 lighter frames give back 0.25 ms", near(g.effective_ms, 5.75, 0.02), g.effective_ms, 5.75);
+    for (int i = 0; i < 6000; i++) latedrawOnFrameSlack(&g, 0.6, 2.6, 0, 0, P, 2.0);
+    check("... and it settles on the lighter scene's work, not below",
+          near(g.effective_ms, 4.2), g.effective_ms, 4.2);
+
+    /* work as planned and late anyway, with little slack: the margin was short */
+    latedraw_state_t m;
+    latedrawInit(&m, 3.0);
+    for (int i = 0; i < 300; i++) latedrawOnFrameSlack(&m, 0.6, 2.6, 0, 0, P, 1.0);
+    check("planned 3.2 + 1.0", near(m.effective_ms, 4.2), m.effective_ms, 4.2);
+    latedrawOnFrameSlack(&m, 0.6, 2.7, 1, 0, P, 0.4);
+    check("late within plan: margin grows by 0.25", near(m.margin_ms, 1.25), m.margin_ms, 1.25);
+    check("... counted in late, not as over plan", m.late == 1 && m.late_excess == 0);
+    for (int i = 0; i < 6000; i++) latedrawOnFrameSlack(&m, 0.6, 2.6, 0, 0, P, 1.2);
+    check("the margin does not come back down", near(m.margin_ms, 1.25), m.margin_ms, 1.25);
+    for (int i = 0; i < 40; i++) latedrawOnFrameSlack(&m, 0.6, 2.6, 1, 0, P, 0.1);
+    check("a machine that keeps missing ends at the cap", near(m.effective_ms, P - 1.0), m.effective_ms, P - 1.0);
+    latedrawOnFrame(&m, 0.6, -1.0, 0, 0, P);
+    check("negative gpu tail (unmeasured) is recorded as 0", latedrawGpuMaxMs(&m) < 3.0);
+
+    /* ready in time and late all the same: counted apart, nothing learned */
+    latedraw_state_t b;
+    latedrawInit(&b, 3.0);
+    for (int i = 0; i < 300; i++) latedrawOnFrameSlack(&b, 0.6, 2.6, 0, 0, P, 3.0);
+    double be = b.effective_ms;
+    int bl = latedrawOnFrameSlack(&b, 0.6, 2.6, 1, 0, P, 3.7);
+    check("late with 3.7 ms of slack reports late", bl == 1);
+    check("... is counted in late_blameless, not late", b.late_blameless == 1 && b.late == 0);
+    check("... moves neither budget nor margin", near(b.effective_ms, be) && near(b.margin_ms, LATEDRAW_MARGIN_MS));
+    latedrawOnFrameSlack(&b, 0.6, 2.6, 1, 0, P, LATEDRAW_BLAMELESS_SLACK_MS);
+    check("slack exactly at the threshold is blameless", b.late_blameless == 2 && b.late == 0);
+    latedrawOnFrameSlack(&b, 0.6, 2.6, 1, 0, P, -1.0);
+    check("unknown slack is the budget's", b.late == 1 && near(b.margin_ms, 1.25));
+
+    /* a floor the machine can meet is honoured; one above the cap is the cap */
+    latedraw_state_t f5;
+    latedrawInit(&f5, 5.0);
+    for (int i = 0; i < 300; i++) latedrawOnFrameSlack(&f5, 0.6, 2.6, 0, 0, P, 1.8);
+    check("floor 5 ms over work 3.2 + 1.0: the floor", near(f5.effective_ms, 5.0), f5.effective_ms, 5.0);
+    latedrawInit(&f5, 20.0);
+    for (int i = 0; i < 300; i++) latedrawOnFrameSlack(&f5, 0.6, 2.6, 0, 0, P, 1.8);
+    check("floor above the cap: the cap", near(f5.effective_ms, P - 1.0), f5.effective_ms, P - 1.0);
+    check("unknown period: the floor", near(latedrawBudgetMs(&f5, 0.0), 20.0));
 
     /* warm-up frames: counted, recorded, never adapt */
     latedraw_state_t w;
     latedrawInit(&w, 3.0);
-    for (int i = 0; i < 10; i++) latedrawOnFrame(&w, 1.0, 0.0, 0, 0, P);
-    int wl = latedrawOnFrame(&w, 0.9, 6.0, 1, 1, P);
+    for (int i = 0; i < 300; i++) latedrawOnFrameSlack(&w, 0.6, 2.6, 0, 0, P, 1.0);
+    double we = w.effective_ms;
+    int wl = latedrawOnFrameSlack(&w, 0.9, 6.0, 1, 1, P, -1.0);
     check("late warm-up frame reports late", wl == 1);
-    check("late warm-up frame counted in warmups / warmup_late",
-          w.warmups == 1 && w.warmup_late == 1);
-    check("late warm-up frame not counted in late", w.late == 0);
-    check("late warm-up frame does not raise the budget", near(w.effective_ms, 3.0),
-          w.effective_ms, 3.0);
-    check("late warm-up frame does not reset the clean run", w.clean_run == 10);
-    check("warm-up frame still counts as a draw", w.draws == 11);
-    check("warm-up gpu tail still lands in the ring", near(latedrawGpuMaxMs(&w), 6.0),
-          latedrawGpuMaxMs(&w), 6.0);
-    latedrawOnFrame(&w, 0.9, 0.0, 0, 1, P);
-    check("clean warm-up frame counted in warmups only",
-          w.warmups == 2 && w.warmup_late == 1 && w.clean_run == 10);
-
-    /* a late frame that was ready in time: counted apart, budget untouched */
-    latedraw_state_t b;
-    latedrawInit(&b, 3.0);
-    for (int i = 0; i < 10; i++) latedrawOnFrameSlack(&b, 0.6, 1.7, 0, 0, P, 3.0);
-    int bl = latedrawOnFrameSlack(&b, 0.6, 1.7, 1, 0, P, 3.7);
-    check("late with 3.7 ms of slack reports late", bl == 1);
-    check("... is counted in late_blameless, not late", b.late_blameless == 1 && b.late == 0);
-    check("... does not raise the budget", near(b.effective_ms, 3.0), b.effective_ms, 3.0);
-    check("... restarts the clean run", b.clean_run == 0);
-    latedrawOnFrameSlack(&b, 0.6, 1.7, 1, 0, P, LATEDRAW_BLAMELESS_SLACK_MS);
-    check("slack exactly at the threshold is blameless", b.late_blameless == 2 && b.late == 0);
-    latedrawOnFrameSlack(&b, 0.6, 1.7, 1, 0, P, 1.6);
-    check("late with 1.6 ms of slack is the budget's: counted in late", b.late == 1 && b.late_blameless == 2);
-    check("... and raises the budget (max(3*1.5, 2.3*2) = 4.6)", near(b.effective_ms, 4.6), b.effective_ms, 4.6);
-    double e0 = b.effective_ms;
-    latedrawOnFrameSlack(&b, 0.6, 1.7, 1, 0, P, -1.0);
-    check("unknown slack is treated as the budget's", b.late == 2 && b.effective_ms > e0);
-    e0 = b.effective_ms;
-    latedrawOnFrameSlack(&b, 0.6, 1.7, 1, 0, P, -0.4);
-    check("ready after the refresh (negative slack): the budget's", b.late == 3 && b.effective_ms >= e0);
-    long bw = b.warmup_late;
-    latedrawOnFrameSlack(&b, 0.6, 1.7, 1, 1, P, 5.0);
-    check("a late warm-up is still a warm-up, whatever its slack",
-          b.warmup_late == bw + 1 && b.late_blameless == 2);
-    /* blameless frames do not let the budget decay through them */
-    latedraw_state_t d;
-    latedrawInit(&d, 3.0);
-    latedrawOnFrameSlack(&d, 0.6, 1.7, 1, 0, P, 1.0);          /* raised to 4.6 */
-    for (int i = 0; i < LATEDRAW_CLEAN_RUN - 1; i++) latedrawOnFrameSlack(&d, 0.6, 1.7, 0, 0, P, 3.0);
-    latedrawOnFrameSlack(&d, 0.6, 1.7, 1, 0, P, 4.0);          /* blameless */
-    latedrawOnFrameSlack(&d, 0.6, 1.7, 0, 0, P, 3.0);
-    check("a blameless late frame holds the decay off", near(d.effective_ms, 4.6), d.effective_ms, 4.6);
-    check("the old entry point is the same rule with slack unknown",
-          latedrawOnFrame(&d, 0.6, 1.7, 1, 0, P) == 1 && d.late == 2);
+    check("late warm-up frame counted in warmups / warmup_late", w.warmups == 1 && w.warmup_late == 1);
+    check("late warm-up frame not counted in late", w.late == 0 && w.late_excess == 0);
+    check("late warm-up frame moves neither budget nor margin",
+          near(w.effective_ms, we) && near(w.margin_ms, LATEDRAW_MARGIN_MS));
+    check("warm-up frame still counts as a draw", w.draws == 301);
+    check("warm-up gpu tail still lands in the ring", near(latedrawGpuMaxMs(&w), 6.0), latedrawGpuMaxMs(&w), 6.0);
+    latedrawOnFrameSlack(&w, 0.9, 2.6, 0, 1, P, -1.0);
+    check("clean warm-up frame counted in warmups only", w.warmups == 2 && w.warmup_late == 1);
 
     /* draws counter and ring statistics */
     latedraw_state_t r;
