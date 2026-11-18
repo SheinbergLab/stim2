@@ -41,7 +41,7 @@ the display is dynamic, and a flip time and period are known.
 - `stimLateDraw`: status. Every form returns
 
       enabled 0|1 budget_ms <floor> effective_ms <adaptive> period_ms <p>
-      draws <n> late <n> warmups <n> warmup_late <n>
+      draws <n> late <n> warmups <n> warmup_late <n> late_blameless <n>
       draw_ms_med <x> draw_ms_max <x> gpu_ms_med <x> gpu_ms_max <x>
       gpu_timed 0|1
 
@@ -106,6 +106,14 @@ actually scheduled against:
   `max(effective * 1.5, (draw_time + gpu_tail) * 2)`, capped at
   `period - 1 ms`, and the frame counted in `late`. A late warm-up frame
   only increments `warmup_late`.
+- A late scheduled frame that was **ready in time** does not raise the
+  budget. Ready in time means the GPU had finished it (or, without GPU
+  timing, the swap had been submitted) at least 2.5 ms before the refresh
+  it was aimed at. Such a frame missed its refresh for a reason a larger
+  budget would not have changed: the render thread was held off, the
+  display server or the driver took the time. It is counted in
+  `late_blameless`, not `late`, and it restarts the clean run below, so
+  the budget does not decay through a patch of them.
 - Every 600 consecutive non-late scheduled frames (5 s at 120 Hz) the
   effective budget is lowered by 0.25 ms, never below the floor. Warm-up
   frames neither extend nor reset that run.
@@ -129,6 +137,37 @@ in `src/latedraw.cpp` and unit checked by `tests/latedraw_check.cpp`
 
 Nothing in the scheduler is shared with the timer thread; all of its
 state is plain data on the render thread.
+
+Why the ready-in-time rule: on a 120 Hz rig (2026-11-17) frames that took
+2.3 ms to draw, scheduled with a 6 to 7 ms budget, still ran long about
+once every 15 to 50 s. Each raised the budget by half, and at 0.25 ms per
+5 s it took about a minute to come back, so a 3 ms floor ran at 5 to 7 ms
+for whole sessions. The same sessions showed a real limit too: frames
+began to slip when the budget decayed to about 3.9 ms, 1.6 ms more than
+the measured work. Those have less than 2.5 ms of slack and still raise
+the budget.
+
+## The record: `stim/latedraw`
+
+With the frame log on (`stimFrameLog`, [stim-frame.md](stim-frame.md)),
+each frame the scheduler governed sends one int64 datapoint beside its
+`stim/frame` record, saying where the frame's time went:
+
+| # | field | |
+|---|---|---|
+| 1 | `swapcount` | of the swap, as in its `stim/frame` record |
+| 2 | `effective_us` | the budget the frame was scheduled with |
+| 3 | `wake_late_us` | step start minus the scheduled start (`flip + period - budget`): how late the loop got to it. -1 on a warm-up |
+| 4 | `draw_us` | step start to the return of `glfwSwapBuffers` (the step, the frame scripts and the draw calls) |
+| 5 | `gpu_us` | from that return until the GPU passed the fence; -1 if not timed |
+| 6 | `slack_us` | from the GPU finishing (or the submit) to the refresh aimed at; negative if it finished after. -1 on a warm-up |
+| 7 | `interval_us` | the flip interval this frame ended |
+| 8 | `flags` | 1 late, 2 warm-up, 4 late but ready in time (budget not raised) |
+
+`budget = wake_late + draw + gpu + slack` for a scheduled frame. A late
+frame with a large `wake_late_us` lost its time before it started (the
+loop was busy, or the thread was not run); one with a large `slack_us`
+lost it after the GPU was done, in the swap's path to the display.
 
 ## What stays the same
 

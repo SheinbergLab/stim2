@@ -77,6 +77,14 @@ static void ring_push(double *ring, int *n, int *i, double v)
 int latedrawOnFrame(latedraw_state_t *s, double draw_ms, double gpu_ms,
                     int late, int warmup, double period_ms)
 {
+  return latedrawOnFrameSlack(s, draw_ms, gpu_ms, late, warmup, period_ms,
+                              -1.0);
+}
+
+int latedrawOnFrameSlack(latedraw_state_t *s, double draw_ms, double gpu_ms,
+                         int late, int warmup, double period_ms,
+                         double slack_ms)
+{
   if (gpu_ms < 0.0) gpu_ms = 0.0;
   ring_push(s->draw_ring, &s->draw_n, &s->draw_i, draw_ms);
   ring_push(s->gpu_ring, &s->gpu_n, &s->gpu_i, gpu_ms);
@@ -89,6 +97,14 @@ int latedrawOnFrame(latedraw_state_t *s, double draw_ms, double gpu_ms,
     s->warmups++;
     if (late) s->warmup_late++;
     return late ? 1 : 0;
+  }
+
+  if (late && slack_ms >= LATEDRAW_BLAMELESS_SLACK_MS) {
+    /* ready well before its refresh and late all the same: not the
+       budget's doing, so not the budget's to fix */
+    s->late_blameless++;
+    s->clean_run = 0;
+    return 1;
   }
 
   if (late) {

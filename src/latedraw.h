@@ -55,6 +55,9 @@ extern "C" {
 #define LATEDRAW_DRAW_FACTOR 2.0
 #define LATEDRAW_CAP_MARGIN_MS 1.0  /* effective <= period - this */
 #define LATEDRAW_LATE_INTERVAL 1.5  /* flip interval > this * period = late */
+#define LATEDRAW_BLAMELESS_SLACK_MS 2.5  /* a late frame that was ready this
+                                           long before its refresh was not
+                                           late for want of budget */
 
 typedef struct latedraw_state_s {
   int enabled;
@@ -66,6 +69,8 @@ typedef struct latedraw_state_s {
   long clean_run;                   /* consecutive non-late scheduled frames */
   long warmups;                     /* frames drawn at once (not deferred) */
   long warmup_late;                 /* of those, detected late */
+  long late_blameless;              /* scheduled, late, but ready in time:
+                                       counted, the budget left alone */
 
   double draw_ring[LATEDRAW_DRAW_RING];   /* ms, CPU: step to swap submit */
   int draw_n, draw_i;
@@ -120,6 +125,22 @@ int latedrawIsLate(long missed_before, long missed_after,
    frame counted as late (of either kind). */
 int latedrawOnFrame(latedraw_state_t *s, double draw_ms, double gpu_ms,
                     int late, int warmup, double period_ms);
+
+/* The same, told how early the frame was ready: slack_ms is the time from
+   the GPU finishing the frame (or the swap submit, without GPU timing) to
+   the refresh it was aimed at; negative = not known, treated as 0.
+
+   A late frame with slack_ms >= LATEDRAW_BLAMELESS_SLACK_MS was finished
+   well before its refresh and missed it anyway: a scheduling hiccup, the
+   display server, the driver.  A larger budget would not have saved it, so
+   the budget is not raised.  It is counted in late_blameless (not in late)
+   and it does restart the clean run, so the budget does not decay through
+   a patch of them.  Measured on a rig (2026-11-17): frames drawn in 2.3 ms
+   with a 6 ms budget still ran long about once in 15 s, and each one cost
+   a minute of budget at the cap.  Returns 1 for a late frame of any kind. */
+int latedrawOnFrameSlack(latedraw_state_t *s, double draw_ms, double gpu_ms,
+                         int late, int warmup, double period_ms,
+                         double slack_ms);
 
 /* Remember a flip interval (ms) for the period fallback; ignores <= 0. */
 void latedrawNoteFlipInterval(latedraw_state_t *s, double interval_ms);

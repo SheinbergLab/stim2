@@ -1528,6 +1528,9 @@ public:
     bool warmup = false;
     double t0 = 0.0;          /* clock just before the object step */
     double flip0 = 0.0;       /* flip the target was computed from */
+    double target = 0.0;      /* when the step was to start; 0 on a warm-up */
+    double period_ms = 0.0;   /* the period it was scheduled against */
+    double effective_ms = 0.0;/* the budget it was scheduled with */
     long missed0 = 0;         /* swapsyncMissedFrames() before the draw */
   };
 
@@ -1548,14 +1551,18 @@ public:
     if (period <= 0.0) return false;               /* dormant: no period */
     double now = glfwGetTime();
     bool warmup = latedrawIsWarmup((long) SwapCount, latedraw_governed_swap) != 0;
+    double target = 0.0;
     if (!warmup) {
-      double target = latedrawTarget(flip, period, latedraw.effective_ms);
+      target = latedrawTarget(flip, period, latedraw.effective_ms);
       if (now < target) {
         *wait_ms = latedrawWaitMs(now, target);
         return true;
       }
     }
     f->active = true;
+    f->target = target;
+    f->period_ms = period;
+    f->effective_ms = latedraw.effective_ms;
     f->warmup = warmup;
     f->t0 = now;
     f->flip0 = flip;
@@ -1610,9 +1617,35 @@ public:
       ? (latedraw_gpu_done - latedraw_swap_submit) * 1000.0 : 0.0;
     int late = latedrawIsLate(f.missed0, swapsyncMissedFrames(),
                               interval_ms, period);
-    latedrawOnFrame(&latedraw, draw_ms, gpu_ms, late, f.warmup ? 1 : 0,
-                    period);
+    /* How early the frame was ready for the refresh it was aimed at (one
+       period after the flip it was scheduled from): from the GPU passing
+       the fence, or the swap submit when the tail was not timed.  Not
+       known on a warm-up, which was aimed at no particular refresh. */
+    double ready = latedraw_gpu_done > latedraw_swap_submit
+      ? latedraw_gpu_done : latedraw_swap_submit;
+    double slack_ms = f.warmup || f.period_ms <= 0.0 ? -1.0
+      : (f.flip0 + f.period_ms / 1000.0 - ready) * 1000.0;
+    long blameless0 = latedraw.late_blameless;
+    latedrawOnFrameSlack(&latedraw, draw_ms, gpu_ms, late, f.warmup ? 1 : 0,
+                         period, slack_ms);
     latedraw_governed_swap = (long) SwapCount;
+
+    /* stim/latedraw, beside this swap's stim/frame record (frame log on):
+       where the frame's time went.  See docs/late-draw.md. */
+    {
+      long long v[8];
+      v[0] = (long long) SwapCount;
+      v[1] = llround(f.effective_ms * 1000.0);
+      v[2] = f.warmup ? -1 : llround((f.t0 - f.target) * 1e6);
+      v[3] = llround(draw_ms * 1000.0);
+      v[4] = latedraw_gpu_done > latedraw_swap_submit
+        ? llround(gpu_ms * 1000.0) : -1;
+      v[5] = slack_ms < 0.0 && f.warmup ? -1 : llround(slack_ms * 1000.0);
+      v[6] = llround(interval_ms * 1000.0);
+      v[7] = (late ? 1 : 0) | (f.warmup ? 2 : 0)
+        | (latedraw.late_blameless != blameless0 ? 4 : 0);
+      frameLogPushNamed("stim/latedraw", v, 8);
+    }
   }
 
   
@@ -3435,6 +3468,7 @@ void stimLateDrawStatus(latedraw_status_t *st)
   st->late = s->late;
   st->warmups = s->warmups;
   st->warmup_late = s->warmup_late;
+  st->late_blameless = s->late_blameless;
   st->draw_ms_med = latedrawDrawMedianMs(s);
   st->draw_ms_max = latedrawDrawMaxMs(s);
   st->gpu_ms_med = latedrawGpuMedianMs(s);

@@ -192,6 +192,41 @@ int main(void)
     check("clean warm-up frame counted in warmups only",
           w.warmups == 2 && w.warmup_late == 1 && w.clean_run == 10);
 
+    /* a late frame that was ready in time: counted apart, budget untouched */
+    latedraw_state_t b;
+    latedrawInit(&b, 3.0);
+    for (int i = 0; i < 10; i++) latedrawOnFrameSlack(&b, 0.6, 1.7, 0, 0, P, 3.0);
+    int bl = latedrawOnFrameSlack(&b, 0.6, 1.7, 1, 0, P, 3.7);
+    check("late with 3.7 ms of slack reports late", bl == 1);
+    check("... is counted in late_blameless, not late", b.late_blameless == 1 && b.late == 0);
+    check("... does not raise the budget", near(b.effective_ms, 3.0), b.effective_ms, 3.0);
+    check("... restarts the clean run", b.clean_run == 0);
+    latedrawOnFrameSlack(&b, 0.6, 1.7, 1, 0, P, LATEDRAW_BLAMELESS_SLACK_MS);
+    check("slack exactly at the threshold is blameless", b.late_blameless == 2 && b.late == 0);
+    latedrawOnFrameSlack(&b, 0.6, 1.7, 1, 0, P, 1.6);
+    check("late with 1.6 ms of slack is the budget's: counted in late", b.late == 1 && b.late_blameless == 2);
+    check("... and raises the budget (max(3*1.5, 2.3*2) = 4.6)", near(b.effective_ms, 4.6), b.effective_ms, 4.6);
+    double e0 = b.effective_ms;
+    latedrawOnFrameSlack(&b, 0.6, 1.7, 1, 0, P, -1.0);
+    check("unknown slack is treated as the budget's", b.late == 2 && b.effective_ms > e0);
+    e0 = b.effective_ms;
+    latedrawOnFrameSlack(&b, 0.6, 1.7, 1, 0, P, -0.4);
+    check("ready after the refresh (negative slack): the budget's", b.late == 3 && b.effective_ms >= e0);
+    long bw = b.warmup_late;
+    latedrawOnFrameSlack(&b, 0.6, 1.7, 1, 1, P, 5.0);
+    check("a late warm-up is still a warm-up, whatever its slack",
+          b.warmup_late == bw + 1 && b.late_blameless == 2);
+    /* blameless frames do not let the budget decay through them */
+    latedraw_state_t d;
+    latedrawInit(&d, 3.0);
+    latedrawOnFrameSlack(&d, 0.6, 1.7, 1, 0, P, 1.0);          /* raised to 4.6 */
+    for (int i = 0; i < LATEDRAW_CLEAN_RUN - 1; i++) latedrawOnFrameSlack(&d, 0.6, 1.7, 0, 0, P, 3.0);
+    latedrawOnFrameSlack(&d, 0.6, 1.7, 1, 0, P, 4.0);          /* blameless */
+    latedrawOnFrameSlack(&d, 0.6, 1.7, 0, 0, P, 3.0);
+    check("a blameless late frame holds the decay off", near(d.effective_ms, 4.6), d.effective_ms, 4.6);
+    check("the old entry point is the same rule with slack unknown",
+          latedrawOnFrame(&d, 0.6, 1.7, 1, 0, P) == 1 && d.late == 2);
+
     /* draws counter and ring statistics */
     latedraw_state_t r;
     latedrawInit(&r, 2.0);

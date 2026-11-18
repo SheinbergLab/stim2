@@ -53,6 +53,9 @@ datapoint, under the module's own name, whose first value is the
 so far. These are counted in the status dict's `named`, not in `sent`, and
 do not take a `frame` number; `dropped` counts both kinds.
 
+stim2 itself sends one more on this stream: `stim/latedraw`, for each
+frame the draw-late scheduler governed ([late-draw.md](late-draw.md)).
+
 ## The frame clock (`eval_us`)
 
 From the start of a frame's update to its swap, the stim clock holds at one
