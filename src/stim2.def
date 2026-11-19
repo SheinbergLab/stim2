@@ -47,3 +47,6 @@ EXPORTS
 	stimRealSeconds
 	stimLogMessage
 	stimFrameRecord
+	stimSwapTagCount
+	stimSwapTag
+	stimPostpassRepeating

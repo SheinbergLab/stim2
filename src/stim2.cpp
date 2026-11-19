@@ -200,6 +200,7 @@ static inline double stimClockNow(void)
 }
 
 extern "C" double stimClockSeconds(void) { return stimClockNow(); }   /* postpass.h */
+static bool post_repeating = false;   /* frameRepaint is running the passes */
 
 void updateTimes(void);
 static void frameClockHold(void)
@@ -2217,7 +2218,16 @@ void update_websocket_status(double fps_val, int frame_val, int elapsed_val, con
        scene for the next repaint. */
     glBindVertexArray(vao);
     stim_postpass_frame_t pf = postFrame();
-    if (postpassWanted() && postpassComposite(&pf)) {
+    struct Repeating {
+      Repeating() { post_repeating = true; }
+      ~Repeating() { post_repeating = false; }
+    };
+    bool composited;
+    {
+      Repeating r;
+      composited = postpassWanted() && postpassComposite(&pf);
+    }
+    if (composited) {
       glBindFramebuffer(GL_FRAMEBUFFER, drawFramebuffer());
       if (overlayCount()) sceneSave();
     }
@@ -2860,6 +2870,16 @@ void swapTagAdd(const char *payload)
 {
   app.swap_tags.push_back(payload ? payload : "");
 }
+
+/* postpass.h: the tags the frame being drawn will deliver, and whether
+   frameRepaint is showing the last frame again */
+extern "C" int stimSwapTagCount(void) { return (int) app.swap_tags.size(); }
+extern "C" const char *stimSwapTag(int i)
+{
+  if (i < 0 || i >= (int) app.swap_tags.size()) return nullptr;
+  return app.swap_tags[i].c_str();
+}
+extern "C" int stimPostpassRepeating(void) { return post_repeating ? 1 : 0; }
 
 void swapTagCallbackSet(const char *proc)
 {

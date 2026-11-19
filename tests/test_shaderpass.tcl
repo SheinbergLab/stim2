@@ -17,6 +17,15 @@
 set ::log {}
 proc note { s } { lappend ::log $s }
 proc ck { label cond } { note "[expr {$cond ? {OK  } : {FAIL}}] $label" }
+# the chain's passes this test makes, in order (other loaded modules --
+# tlock, photopatch -- register passes of their own)
+proc chain {} {
+    lmap d [postpass list] {
+        set n [dict get $d name]
+        if { $n ne "gazewin" && ![string match shader/* $n] } continue
+        set n
+    }
+}
 proc finish {} {
     catch { postpass reset }
     puts [join $::log \n]
@@ -176,13 +185,13 @@ proc inverter { priority } {
     shaderpass on inv
 }
 inverter 200
-set order_after [lmap d [postpass list] { dict get $d name }]
+set order_after [chain]
 feed -6 0
 stepFrame 5300; set f_c1 [keep]               ;# window then invert
 feed 6 0
 frameRepaint; set f_c2 [keep]                 ;# repaint: gazewin composited, invert staged again
 inverter 50
-set order_before [lmap d [postpass list] { dict get $d name }]
+set order_before [chain]
 stepFrame 5310; set f_c3 [keep]               ;# invert then window
 
 # --- reset -------------------------------------------------------------------
@@ -190,7 +199,7 @@ shaderpass create extra
 postpass reset
 ck "postpass reset: every shaderpass deleted" [expr {[shaderpass] eq ""}]
 ck "  and gazewin off" [expr {[dict get [gazewin] on] == 0}]
-ck "  the chain keeps gazewin only" [expr {[lmap d [postpass list] { dict get $d name }] eq "gazewin"}]
+ck "  the chain keeps gazewin only" [expr {[chain] eq "gazewin"}]
 stepFrame 5320; set f_reset [keep]
 
 frameSink close

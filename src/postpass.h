@@ -129,6 +129,18 @@ void stimLogMessage(const char *level, const char *msg);
 #define STIM_FRAME_RECORD_MAX 7
 int stimFrameRecord(const char *name, const long long *vals, int n);
 
+/* The swap tags (`swapTag`) the frame being drawn will deliver after its
+   swap: how many, and the i'th payload (NULL out of range).  Read them in
+   stage: a pass that marks tagged frames knows which frame is one. */
+int stimSwapTagCount(void);
+const char *stimSwapTag(int i);
+
+/* 1 while frameRepaint runs the passes: the display shows the last frame
+   again (a mirror's gaze between rig frames, the stepped imgui panel), not
+   a new one -- no SwapCount, no swap tags, no flip callback.  A pass that
+   changes something per frame draws what it drew last. */
+int stimPostpassRepeating(void);
+
 /* ---- for stim2.cpp ----------------------------------------------------- */
 
 int  postpassWanted(void);              /* any pass wanted */

@@ -44,7 +44,7 @@ the others: it copies what it finds and draws.
 |---|---|
 | 100 | a pass that selects or degrades the scene (`gazewin`) |
 | 100 to 900 | a pass that should apply to that result (noise, a colour transform; `shaderpass` defaults to 200) |
-| 900 and up | a display encoding that must come last (`tlock`, [tlock.md](tlock.md), is 950) |
+| 900 and up | a display encoding that must come last (`photopatch`, [photopatch.md](photopatch.md), is 940; `tlock`, [tlock.md](tlock.md), is 950) |
 
 On a repaint, the first wanted pass draws again from the scene it kept
 (`composite`), and the later ones are staged again over its new output,
@@ -132,6 +132,8 @@ What stim2 exports to a module for this:
 | `stimRealSeconds` | the real clock (`glfwGetTime`), for latency records |
 | `stimLogMessage` | stim2's log |
 | `stimFrameRecord` | a record of the frame being shown, for the data file: called from `flip`, it sends one int64 datapoint (the swap's `swapcount`, then up to seven values of the pass's own) to dserv on the frame log's stream. Nothing is sent while `stimFrameLog` is off. `gazewin` uses it for `stim/gazewin` |
+| `stimSwapTagCount`, `stimSwapTag` | the swap tags (`swapTag`) the frame being drawn will deliver after its swap: read them in `stage`. `photopatch` flips on the matching ones |
+| `stimPostpassRepeating` | 1 while `frameRepaint` runs the passes: the last frame shown again, not a new one (no swapcount, no swap tags, no `flip`). A pass that changes something per frame (`photopatch`, toggle modes) draws what it drew last |
 
 A module must not call GLFW itself: it would reach its own copy of the
 library, not stim2's. In `stimdlls/CMakeLists.txt`, `CORE_LIBS_ONLY` links

@@ -265,6 +265,15 @@ add_stim_module(tlock
     SOURCES ${SRC_DIR}/tlock.cpp ${APP_DIR}/glad.c
 )
 
+# photopatch: a square in a corner that changes between a dark and a light
+# level on tagged frames, for a photodiode (docs/photopatch.md).  A post
+# pass like tlock: GL and stim2's exports only
+add_stim_module(photopatch
+    NO_STIMUTILS
+    CORE_LIBS_ONLY
+    SOURCES ${SRC_DIR}/photopatch.cpp ${APP_DIR}/glad.c
+)
+
 # Shader module with image support
 add_stim_module(shader
     SOURCES ${SRC_DIR}/shader.c

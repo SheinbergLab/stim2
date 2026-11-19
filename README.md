@@ -217,6 +217,13 @@ timing: a hardware edge for measuring the delay from the flip to the
 monitor and from the monitor to the light.
 See [docs/tlock.md](docs/tlock.md).
 
+`photopatch` draws a square in a corner that changes between dark and
+light on chosen frames (those carrying a matching swap tag, every frame,
+or on command), for a photodiode taped over it: the light edge that dserv's
+`photo` processor times, paired with the frame that caused it. Off by
+default and at every script load.
+See [docs/photopatch.md](docs/photopatch.md).
+
 ## Linux Systemd Service
 
 For dedicated stimulus presentation systems (e.g., Raspberry Pi, embedded Linux), stim2 can run as a systemd service using [Cage](https://github.com/cage-kiosk/cage) as a minimal Wayland compositor.
