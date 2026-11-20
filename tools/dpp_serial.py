@@ -7,6 +7,7 @@ to check stim2's tlock pass (docs/tlock.md) without a scope.
     dpp_serial.py scan                 which of rows 0..7 holds a T-Lock key
     dpp_serial.py line ROW [NPIX]      one video row as the monitor received it
     dpp_serial.py status [SECONDS]     log the monitor's INPUTS; print changes
+    dpp_serial.py sweep                every code 0..255 through the display path
     dpp_serial.py video                back to Bits++ video mode
     dpp_serial.py raw '$Command'       send anything, print the reply
 
@@ -22,6 +23,17 @@ What the serial port can and cannot show:
     stim2 and the monitor changed a byte.  The packet is decoded and
     printed.  NOTE: the monitor switches to its status screen to answer;
     `video` puts it back.
+  - `sweep` drives stim2 too (its message port, localhost:4612 by default):
+    it arms a T-Lock pulse whose slot pixels carry the code under test,
+    G = v and B = 255 - v, for every v, reads the row back each time and
+    reports every code that arrived changed, per channel.  The slot
+    pixels' red bytes are their addresses, 8 up to 7 + slots, so red is
+    covered from 8 up.  A code that comes back as several values at
+    different x positions is dithering.  stim2's tlock state is saved and
+    restored; if something else changes it mid-sweep (an ESS system load
+    runs `postpass reset`), the sweep stops and leaves it alone.  Run it
+    with the rig idle: it takes a few minutes.  Exit status 0: every code
+    exact; 1: codes altered; 2: the sweep could not finish.
   - The monitor does NOT report its digital OUTPUTS over serial.  `status`
     logs its INPUTS (trigger in, DIN 0..9) with the monitor's own
     timestamps.  So to see a tlock pulse or toggle arrive, loop an output
@@ -32,9 +44,13 @@ The commands and reply formats are from PsychoPy's psychopy_crs/bits.py.
 Standard library only.  Run against a Display++ (firmware 24/06/2015).
 """
 import argparse
+import collections
 import glob
 import os
+import re
 import select
+import socket
+import struct
 import sys
 import termios
 import time
@@ -287,6 +303,142 @@ def cmd_status(p, a):
         print("no status lines parsed: the reply began %r" % raw[:300])
 
 
+class Stim2:
+    """stim2's framed message port: 4-byte big-endian length, then text."""
+
+    def __init__(self, host, port):
+        self.s = socket.create_connection((host, port), timeout=10)
+
+    def __call__(self, cmd):
+        b = cmd.encode()
+        self.s.sendall(struct.pack(">I", len(b)) + b)
+        n = struct.unpack(">I", self._read(4))[0]
+        r = self._read(n).decode("latin-1")
+        if r.startswith("!TCL_ERROR"):
+            raise RuntimeError("stim2: %s: %s" % (cmd, r))
+        return r
+
+    def _read(self, n):
+        d = b""
+        while len(d) < n:
+            x = self.s.recv(n - len(d))
+            if not x:
+                raise RuntimeError("stim2 closed the connection")
+            d += x
+        return d
+
+
+def tlock_state(stim):
+    """(on, toggle bits, row, x, slots) from `tlock status` and `tlock set`."""
+    st = stim("tlock status")
+    on = int(re.match(r"on (\d+)", st).group(1))
+    toggle = int(re.search(r"(?:^| )toggle (\d+)", st).group(1))
+    s = dict(re.findall(r"-(\w+) (\S+)", stim("tlock set")))
+    return on, toggle, int(s["row"]), int(s["x"]), int(s["slots"])
+
+
+def cmd_sweep(p, a):
+    try:
+        stim = Stim2(a.host, a.stim_port)
+        on0, toggle0, row, x, slots = tlock_state(stim)
+    except (OSError, RuntimeError) as e:
+        print("cannot reach stim2's tlock at %s:%d: %s" % (a.host, a.stim_port, e))
+        return 2
+    npix = x + 12 + 2 * slots
+    tol = 4                       # how far a code may move and still count as "arrived"
+    vs = list(range(0, 256, a.step))
+    if vs[-1] != 255:
+        vs.append(255)
+    seen = {c: collections.defaultdict(collections.Counter) for c in "RGB"}
+    print("sweeping %d codes through row %d (monitor line %d), %d slots, %.1f s settle"
+          % (len(vs), row, row + LINE_BASE, slots, a.settle))
+    print("the monitor goes to its status screen; it is put back in video mode after")
+    result, why = 0, ""
+    restore = True
+    quiet(p)
+    try:
+        stim("tlock toggle 0")
+        stim("tlock on")
+        for n, v in enumerate(vs):
+            g, b = v, 255 - v
+            stim("tlock pulse 0x%04X -on 0 -dur %.1f -frames always" % (g << 8 | b, slots / 10.0))
+            deadline = time.time() + a.settle + 3.0
+            time.sleep(a.settle)
+            while True:
+                px = video_line(p, row, npix)
+                at = near_key_at(px[x:]) if px else -1
+                if at >= 0:
+                    pk = px[x + at:]
+                    sl = [pk[13 + 2 * i] for i in range(slots) if 13 + 2 * i < len(pk)]
+                    arrived = sum(1 for (_, rg, rb) in sl if abs(rg - g) <= tol and abs(rb - b) <= tol)
+                    if arrived * 2 > len(sl):
+                        break
+                if time.time() > deadline:
+                    break
+                time.sleep(0.25)
+            if at < 0:
+                result, why = 2, "no T-Lock packet on the row at code %d" % v
+                break
+            if arrived * 2 <= len(sl):
+                result, why = 2, "the pulse for code %d never showed on the row" % v
+                break
+            for i, (rr, rg, rb) in enumerate(sl):
+                seen["R"][8 + i][rr] += 1
+                seen["G"][g][rg] += 1
+                seen["B"][b][rb] += 1
+            if n % 16 == 15:
+                o, t = tlock_state(stim)[:2]
+                if (o, t) != (1, 0):
+                    result, why = 2, ("stim2's tlock changed under the sweep (on %d, toggle %d): "
+                                      "a system load? left as it is now" % (o, t))
+                    restore = False
+                    break
+                print("  %d of %d codes" % (n + 1, len(vs)), file=sys.stderr)
+    except (OSError, RuntimeError) as e:
+        result, why = 2, str(e)
+    finally:
+        if restore:
+            # a system load between checks shows first as a missing packet:
+            # whatever set tlock since then owns it now
+            try:
+                o, t = tlock_state(stim)[:2]
+                if (o, t) != (1, 0):
+                    restore = False
+                    print("stim2's tlock changed under the sweep (on %d, toggle %d): left as it is now" % (o, t))
+            except (OSError, RuntimeError):
+                pass
+        if restore:
+            try:
+                stim("tlock stop")
+                stim("tlock toggle %d" % toggle0)
+                stim("tlock on" if on0 else "tlock off")
+            except (OSError, RuntimeError) as e:
+                print("could not restore tlock (on %d, toggle 0x%04X): %s" % (on0, toggle0, e))
+        quiet(p)
+        p.send("$BitsPlusPlus")
+    if result == 2:
+        print("sweep stopped: %s" % why)
+        return 2
+    altered = dithered = 0
+    for c in "RGB":
+        for code in sorted(seen[c]):
+            got = seen[c][code]
+            if set(got) != {code}:
+                altered += 1
+                dithered += len(got) > 1
+                print("  %s %3d -> %s" % (c, code, ", ".join(
+                    "%d x%d" % (k, m) for k, m in sorted(got.items()))))
+    rcodes = sorted(seen["R"])
+    span = "R %d..%d, G and B %s" % (rcodes[0], rcodes[-1],
+                                     "0..255" if a.step == 1 else "every %dth code" % a.step)
+    if altered == 0:
+        print("every code arrived exactly (%s, at %d x positions each)" % (span, slots))
+        return 0
+    print("%d codes altered (%s); %d of them came back as more than one value at different"
+          " x positions: dithering" % (altered, span, dithered))
+    return 1
+
+
 def cmd_video(p, a):
     quiet(p)
     p.send("$BitsPlusPlus")
@@ -312,6 +464,12 @@ def main():
     s.add_argument("seconds", type=float, nargs="?", default=2.0)
     s.add_argument("--max", type=int, default=40, help="changes to print")
     s.set_defaults(fn=cmd_status)
+    s = sub.add_parser("sweep")
+    s.add_argument("--host", default="127.0.0.1", help="stim2's host (default: this one)")
+    s.add_argument("--stim-port", type=int, default=4612, help="stim2's message port")
+    s.add_argument("--settle", type=float, default=0.5, help="seconds from a pulse to its read")
+    s.add_argument("--step", type=int, default=1, help="test every Nth code (quicker, less complete)")
+    s.set_defaults(fn=cmd_sweep)
     sub.add_parser("video").set_defaults(fn=cmd_video)
     s = sub.add_parser("raw")
     s.add_argument("command")
@@ -319,7 +477,8 @@ def main():
     s.set_defaults(fn=cmd_raw)
     a = ap.parse_args()
     p = Port(a.port or find_port())
-    a.fn(p, a)
+    rc = a.fn(p, a)
+    sys.exit(rc if isinstance(rc, int) else 0)
 
 
 if __name__ == "__main__":

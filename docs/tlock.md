@@ -266,6 +266,15 @@ installation chapter). Keep a copy of the file first.
   video row as the monitor received them, with the packet decoded. An
   intact packet says the display path changed nothing. The monitor goes
   to its status screen to answer; `dpp_serial.py video` puts it back.
+- `dpp_serial.py sweep`, on the stim2 host with the rig idle: every code
+  0 to 255 through the display path, per channel. It arms pulses whose
+  slot pixels carry the code (G = v, B = 255 - v; R is the slot address,
+  8 and up), reads the row back each time, and lists each code that
+  arrived changed; one that comes back as several values at different x
+  positions is dithering. A few minutes; exit status 0 when every code
+  is exact. It saves and restores stim2's tlock state, and stops without
+  touching it if an ESS system load changes it mid-sweep. Run it on a new
+  rig, a new graphics card, driver or kernel, and after an OS upgrade.
 - `dpp_serial.py status 2`: the monitor's inputs (trigger in, DIN 0 to 9)
   with its own timestamps. With an output looped back to an input, this
   shows a pulse or a toggle arriving.
