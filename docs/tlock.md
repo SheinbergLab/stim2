@@ -173,6 +173,14 @@ The monitor finds the key only if every byte arrives as written:
 - an identity gamma ramp on the GPU (stim2 loads none; check nothing else
   has);
 - no dithering by the GPU driver, 8 bits per channel, full-range RGB;
+  on AMD cards from before Display Core Next (Polaris, RX 4xx/5xx, and
+  older) the amdgpu driver's default display code does not pass pixels
+  through: measured on an RX 560D, 2026-11-20, codes from about 40 up
+  arrived off by one, differently at different x positions (dithering on
+  a pipeline that is not quite identity), and the key's last pixel came
+  back 184,124,222. The kernel option `amdgpu.dc=0` (the older display
+  code: a `dither` output property, off by default) fixed it, every code
+  0 to 255 in every channel arriving exactly;
 - the monitor in a video mode (Bits++, the standard colour mode, is the
   one this was written for), not its status screen or mass-storage mode.
 

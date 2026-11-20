@@ -10,6 +10,10 @@ to check stim2's tlock pass (docs/tlock.md) without a scope.
     dpp_serial.py video                back to Bits++ video mode
     dpp_serial.py raw '$Command'       send anything, print the reply
 
+ROW is stim2's row, as `tlock set -row` takes it: 0 is the top of the
+screen.  The monitor numbers its video lines from 1 ($GetVideoLine for line
+0 gets no answer; stim2's row 2 is the monitor's line 3), so the tool adds 1.
+
 What the serial port can and cannot show:
 
   - `line` / `scan` ask the monitor for the pixels of a video row
@@ -25,7 +29,7 @@ What the serial port can and cannot show:
     on the DB25) and run `status` while stim2 pulses.
 
 The commands and reply formats are from PsychoPy's psychopy_crs/bits.py.
-Standard library only.  Not yet run against a monitor.
+Standard library only.  Run against a Display++ (firmware 24/06/2015).
 """
 import argparse
 import glob
@@ -37,6 +41,9 @@ import time
 
 KEY = [(69, 33, 56), (40, 230, 208), (19, 190, 102), (119, 84, 207),
        (52, 12, 192), (233, 108, 172), (41, 201, 80), (183, 124, 221)]
+
+# $GetVideoLine counts lines from 1 at the top; stim2 counts rows from 0.
+LINE_BASE = 1
 
 
 class Port:
@@ -101,11 +108,11 @@ def quiet(p):
 
 
 def video_line(p, row, npix, timeout=5.0):
-    """npix (r, g, b) tuples of video row `row`, or [] if the monitor did
-    not answer in full."""
+    """npix (r, g, b) tuples of stim2 row `row` (0 = top), or [] if the
+    monitor did not answer in full."""
     for _ in range(5):
         p.read(0.05)
-        p.send("$GetVideoLine=[%d, %d]" % (row, npix))
+        p.send("$GetVideoLine=[%d, %d]" % (row + LINE_BASE, npix))
         raw = p.read(timeout, until=lambda b: b.count(b";") >= npix * 3 + 1).decode("latin-1")
         vals = raw.split(";")[1:-1]
         try:
@@ -125,14 +132,38 @@ def key_at(px):
     return -1
 
 
-def decode(px, at):
+def near_key_at(px, tol=4, need=6):
+    """Index of something close to the unlock key -- at least `need` of its
+    8 pixels within `tol` of the key in every channel -- or -1.  A key that
+    arrives like this was drawn, then altered on the way (dithering, a
+    gamma ramp that is not quite identity, limited-range RGB)."""
+    for i in range(0, len(px) - 7):
+        near = sum(1 for k in range(8)
+                   if max(abs(px[i + k][c] - KEY[k][c]) for c in range(3)) <= tol)
+        if near >= need:
+            return i
+    return -1
+
+
+def key_errors(px, at):
+    """(key pixel index, sent, received) for each key pixel that differs."""
+    return [(k, KEY[k], px[at + k]) for k in range(8) if px[at + k] != KEY[k]]
+
+
+def decode(px, at, intact=True):
     """Print the T-Lock digital-output packet that starts at pixel `at`."""
     p = px[at:]
     if len(p) < 13:
         print("  key found at pixel %d, but too few pixels read to decode" % at)
         return
     pairs = p[8][2] + 1
-    print("  unlock key at pixel %d: intact" % at)
+    if intact:
+        print("  unlock key at pixel %d: intact" % at)
+    else:
+        print("  unlock key at pixel %d: DAMAGED, the monitor will not unlock" % at)
+        for k, sent, got in key_errors(px, at):
+            print("    key pixel %d: drew %d,%d,%d, received %d,%d,%d" % ((k,) + sent + got))
+        print("  the rest, decoded as if the key were intact:")
     print("  pixel 8: %s  -> %d address/value pairs (%d slots)" % (p[8], pairs, pairs - 2))
     print("  pixel 9: %s  -> address %d, command %d, group %d%s" %
           (p[9], p[9][0], p[9][1], p[9][2], "" if (p[9][0], p[9][2]) == (6, 2) else "   UNEXPECTED (want 6, x, 2)"))
@@ -161,7 +192,7 @@ def decode(px, at):
             start = j
     for s, n, w in runs:
         print("    slots %3d..%3d (%5.1f ms from %4.1f ms): 0x%04X" % (s, s + n - 1, n / 10.0, s / 10.0, w))
-    if bad == 0 and odd == 0:
+    if intact and bad == 0 and odd == 0:
         print("  the packet is intact: the display path changed nothing")
     else:
         print("  the packet is DAMAGED: look at dithering, gamma, scaling, colour range")
@@ -175,37 +206,49 @@ def cmd_info(p, a):
 
 def cmd_line(p, a):
     quiet(p)
+    if a.row < 0:
+        sys.exit("ROW is stim2's row, from 0 at the top")
     px = video_line(p, a.row, a.npix)
     if not px:
-        sys.exit("no answer to $GetVideoLine for row %d" % a.row)
-    print("row %d, %d pixels (the monitor is now on its status screen: `video` to go back)" % (a.row, len(px)))
+        sys.exit("no answer to $GetVideoLine for row %d (monitor line %d)" % (a.row, a.row + LINE_BASE))
+    print("row %d (monitor line %d), %d pixels (the monitor is now on its status screen: `video` to go back)"
+          % (a.row, a.row + LINE_BASE, len(px)))
     at = key_at(px)
-    if at < 0:
+    if at >= 0:
+        decode(px, at)
+    elif near_key_at(px) >= 0:
+        print("  the key arrived with small errors: something in the display path alters pixels")
+        decode(px, near_key_at(px), intact=False)
+    else:
         print("  no unlock key on this row.  First 16 pixels:")
         print("  " + " ".join("%d,%d,%d" % t for t in px[:16]))
-        near = sum(1 for i in range(8) if i < len(px) and max(abs(px[i][c] - KEY[i][c]) for c in range(3)) <= 4)
-        if near >= 6:
-            print("  ...which is the key with small errors: something in the display path alters pixels")
-    else:
-        decode(px, at)
     if a.dump:
         print(" ".join("%d %d %d" % t for t in px))
 
 
 def cmd_scan(p, a):
     quiet(p)
-    found = False
+    found = damaged = False
     for row in range(0, 8):
         px = video_line(p, row, 24)
         if not px:
             print("row %d: no answer" % row)
             continue
-        at = key_at(px)
-        print("row %d: %s" % (row, "T-Lock key at pixel %d" % at if at >= 0 else
-                              " ".join("%d,%d,%d" % t for t in px[:6]) + " ..."))
+        at, near = key_at(px), near_key_at(px)
+        if at >= 0:
+            print("row %d: T-Lock key at pixel %d" % (row, at))
+        elif near >= 0:
+            bad = key_errors(px, near)
+            print("row %d: T-Lock key at pixel %d, DAMAGED (%d of 8 key pixels altered)" % (row, near, len(bad)))
+        else:
+            print("row %d: %s ..." % (row, " ".join("%d,%d,%d" % t for t in px[:6])))
         found = found or at >= 0
+        damaged = damaged or (at < 0 and near >= 0)
     print("(the monitor is now on its status screen: `video` to go back)")
-    if not found:
+    if damaged:
+        print("a key that arrives altered was drawn but changed on the way: `line ROW` shows how;"
+              " look at dithering, gamma, scaling, colour range")
+    elif not found:
         print("no key on rows 0..7: is `tlock on` set, and was a frame drawn since?")
 
 
