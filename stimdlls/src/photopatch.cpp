@@ -9,10 +9,12 @@
  * stim/photopatch record, so an edge pairs with the frame that caused it.
  *
  * Which frames change it (the mode):
- *   tags    a frame that delivers a swap tag (`swapTag`) matching one of the
- *           patterns (default `*`, every tagged frame).  The stim's own frame
- *           markers -- the frames ESS already times -- then flip it, with no
- *           change to the protocol.
+ *   marked  a frame something is timing: one that releases the reply of a
+ *           swap-acked ('!') command -- the way ESS changes the display and
+ *           learns which swap did it -- or delivers a swap tag (`swapTag`,
+ *           a change the stim made by itself).  Every system then drives the
+ *           patch with no change to it, and each edge pairs with a frame
+ *           that has a swapcount on both sides.
  *   toggle  every frame: each new frame reaching the panel is an edge, and a
  *           refresh stim2 missed is one that does not come.  A static
  *           display is repainted on every refresh while it is on.
@@ -68,8 +70,8 @@ void log_message(const char *level, const char *fmt, ...)
 
 /* ---- settings ----------------------------------------------------------- */
 
-enum Mode { TAGS = 0, TOGGLE = 1, MANUAL = 2 };
-const char *mode_name(int m) { return m == TOGGLE ? "toggle" : m == MANUAL ? "manual" : "tags"; }
+enum Mode { MARKED = 0, TOGGLE = 1, MANUAL = 2 };
+const char *mode_name(int m) { return m == TOGGLE ? "toggle" : m == MANUAL ? "manual" : "marked"; }
 
 enum Corner { TL = 0, TR = 1, BL = 2, BR = 3 };
 const char *corner_name(int c)
@@ -79,13 +81,12 @@ const char *corner_name(int c)
 }
 
 struct Settings {
-  int mode = TAGS;
+  int mode = MARKED;
   int corner = TR;
   int size = 60;                /* pixels, square */
   int inset = 0;                /* pixels from both edges of the corner */
   float dark[3] = { 0.f, 0.f, 0.f };
   float light[3] = { 1.f, 1.f, 1.f };
-  std::vector<std::string> match = { "*" };   /* tags mode: any matches */
 } cfg;
 
 /* ---- state -------------------------------------------------------------- */
@@ -102,11 +103,12 @@ struct Drawn {
   bool record = false;
   int level = 0;
   long long serial = 0;
-  int ntags = 0;                /* matching tags it delivers */
-  int why = 0;                  /* 1 first, 2 tag, 3 toggle, 4 flip */
+  int ntags = 0;                /* swap tags it delivers */
+  int why = 0;                  /* 1 first, 2 marked, 3 toggle, 4 flip */
+  int nacks = 0;                /* '!' replies it releases */
 } drawn;
 
-long long n_frames = 0, n_changes = 0, n_tagged = 0, n_repeats = 0, n_nofit = 0;
+long long n_frames = 0, n_changes = 0, n_marked = 0, n_repeats = 0, n_nofit = 0;
 double last_change_flip_s = -1.0;
 long long last_change_flip_wall_us = -1;
 bool warned_nofit = false;
@@ -157,19 +159,6 @@ void draw(const stim_postpass_frame_t *f, int lvl)
   glReadBuffer(f->drawnbuf);
 }
 
-/* the swap tags this frame delivers that match a pattern */
-int matching_tags()
-{
-  int n = stimSwapTagCount(), hits = 0;
-  for (int i = 0; i < n; i++) {
-    const char *t = stimSwapTag(i);
-    if (!t) continue;
-    for (auto &p : cfg.match)
-      if (Tcl_StringMatch(t, p.c_str())) { hits++; break; }
-  }
-  return hits;
-}
-
 /* ---- the pass, as stim2 calls it (postpass.h) --------------------------- */
 
 int pass_wanted(void *) { return on; }
@@ -194,16 +183,18 @@ int pass_stage(void *, const stim_postpass_frame_t *f)
     return 1;
   }
 
-  int ntags = matching_tags();
+  /* marked: however many '!' replies and tags, one change per frame */
+  int ntags = stimSwapTagCount(), nacks = stimSwapAckCount();
+  bool marked = ntags > 0 || nacks > 0;
   int why = 0, next = level;
   if (armed != -2) { next = armed == -1 ? !level : armed; why = 4; armed = -2; }
   else if (cfg.mode == TOGGLE) { next = !level; why = 3; }
-  else if (cfg.mode == TAGS && ntags) { next = !level; why = 2; }
+  else if (cfg.mode == MARKED && marked) { next = !level; why = 2; }
   if (first) { why = 1; first = false; }   /* the patch appears: an edge too */
 
   draw(f, next);
   n_frames++;
-  if (ntags) n_tagged++;
+  if (marked) n_marked++;
   bool changed = next != level || why == 1;
   level = next;
   settings_dirty = false;
@@ -212,13 +203,16 @@ int pass_stage(void *, const stim_postpass_frame_t *f)
   drawn.record = changed;
   drawn.level = next;
   drawn.ntags = ntags;
+  drawn.nacks = nacks;
   drawn.why = why;
   drawn.serial = changed ? ++n_changes : n_changes;
   return 1;
 }
 
 /* A static display: toggle mode wants every refresh, an armed flip or a
-   changed setting the next one.  Tags come with frames of their own. */
+   changed setting the next one.  Marked frames come with frames of their
+   own: a '!' command that draws nothing is not given one, so its reply
+   keeps stim2's own "no intervening swap" behaviour and no edge claims it. */
 int pass_repaint_due(void *, double, double *wait_s)
 {
   *wait_s = -1.0;
@@ -229,8 +223,9 @@ int pass_repaint_due(void *, double, double *wait_s)
 /* the flip that showed a changed patch: the frame's record for the data
    file (stim/photopatch: after the swapcount stim2 puts first, the flip on
    the wall clock, the level now showing (0 dark, 1 light), which change
-   since `on` it is, the matching tags the frame delivered, and why it
-   changed: 1 the patch appeared, 2 a tag, 3 toggle mode, 4 `flip`) */
+   since `on` it is, the swap tags the frame delivered, why it changed (1
+   the patch appeared, 2 a marked frame, 3 toggle mode, 4 `flip`), and the
+   '!' replies the frame released) */
 void pass_flip(void *, double flip_s, long long flip_wall_us)
 {
   if (!drawn.pending) return;
@@ -239,8 +234,9 @@ void pass_flip(void *, double flip_s, long long flip_wall_us)
   long long wall = flip_wall_us > 0 ? flip_wall_us : -1;
   last_change_flip_s = flip_s;
   last_change_flip_wall_us = wall;
-  long long v[5] = { wall, drawn.level, drawn.serial, drawn.ntags, drawn.why };
-  stimFrameRecord("stim/photopatch", v, 5);
+  long long v[6] = { wall, drawn.level, drawn.serial, drawn.ntags, drawn.why,
+                     drawn.nacks };
+  stimFrameRecord("stim/photopatch", v, 6);
 }
 
 /* off: the next frame is drawn without it, so ask for one */
@@ -274,8 +270,8 @@ stim_postpass_t pass = {
 /* ---- the Tcl command ---------------------------------------------------- */
 
 const char *USAGE =
-  "photopatch on ?tags|toggle|manual? | off | "
-  "set ?-mode m? ?-corner tl|tr|bl|br? ?-size px? ?-inset px? ?-dark {r g b}? ?-light {r g b}? ?-match patterns? | "
+  "photopatch on ?marked|toggle|manual? | off | "
+  "set ?-mode m? ?-corner tl|tr|bl|br? ?-size px? ?-inset px? ?-dark {r g b}? ?-light {r g b}? | "
   "flip ?0|1? | status | reset";
 
 Tcl_Obj *rgb_obj(const float *c)
@@ -295,20 +291,17 @@ Tcl_Obj *settings_dict()
   put("-inset", Tcl_NewIntObj(cfg.inset));
   put("-dark", rgb_obj(cfg.dark));
   put("-light", rgb_obj(cfg.light));
-  Tcl_Obj *m = Tcl_NewListObj(0, nullptr);
-  for (auto &p : cfg.match) Tcl_ListObjAppendElement(nullptr, m, Tcl_NewStringObj(p.c_str(), -1));
-  put("-match", m);
   return d;
 }
 
 int get_mode(Tcl_Interp *interp, Tcl_Obj *o, int *out)
 {
   std::string s = Tcl_GetString(o);
-  if (s == "tags") *out = TAGS;
+  if (s == "marked") *out = MARKED;
   else if (s == "toggle") *out = TOGGLE;
   else if (s == "manual") *out = MANUAL;
   else {
-    Tcl_SetObjResult(interp, Tcl_ObjPrintf("photopatch: mode \"%s\" is tags, toggle or manual", s.c_str()));
+    Tcl_SetObjResult(interp, Tcl_ObjPrintf("photopatch: mode \"%s\" is marked, toggle or manual", s.c_str()));
     return TCL_ERROR;
   }
   return TCL_OK;
@@ -353,7 +346,7 @@ int set_cmd(Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
   if ((objc - 2) % 2) {
     Tcl_WrongNumArgs(interp, 2, objv,
-                     "?-mode m? ?-corner tl|tr|bl|br? ?-size px? ?-inset px? ?-dark {r g b}? ?-light {r g b}? ?-match patterns?");
+                     "?-mode m? ?-corner tl|tr|bl|br? ?-size px? ?-inset px? ?-dark {r g b}? ?-light {r g b}?");
     return TCL_ERROR;
   }
   Settings s = cfg;
@@ -378,17 +371,8 @@ int set_cmd(Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
     else if (opt == "-inset") rc = get_range(interp, val, "-inset", 0, 4096, &s.inset);
     else if (opt == "-dark") rc = get_rgb(interp, val, "-dark", s.dark);
     else if (opt == "-light") rc = get_rgb(interp, val, "-light", s.light);
-    else if (opt == "-match") {
-      Tcl_Size n;
-      Tcl_Obj **el;
-      rc = Tcl_ListObjGetElements(interp, val, &n, &el);
-      if (rc == TCL_OK) {
-        s.match.clear();
-        for (Tcl_Size k = 0; k < n; k++) s.match.push_back(Tcl_GetString(el[k]));
-      }
-    }
     else {
-      Tcl_SetObjResult(interp, Tcl_ObjPrintf("photopatch set: unknown option \"%s\" (-mode -corner -size -inset -dark -light -match)", opt.c_str()));
+      Tcl_SetObjResult(interp, Tcl_ObjPrintf("photopatch set: unknown option \"%s\" (-mode -corner -size -inset -dark -light)", opt.c_str()));
       rc = TCL_ERROR;
     }
     if (rc != TCL_OK) return TCL_ERROR;
@@ -419,7 +403,7 @@ Tcl_Obj *status_dict()
   put("settings", settings_dict());
   put("frames", Tcl_NewWideIntObj(n_frames));
   put("changes", Tcl_NewWideIntObj(n_changes));
-  put("tagged", Tcl_NewWideIntObj(n_tagged));
+  put("marked", Tcl_NewWideIntObj(n_marked));
   put("repeats", Tcl_NewWideIntObj(n_repeats));
   put("not_drawn", Tcl_NewWideIntObj(n_nofit));
   put("last_change_flip_s", Tcl_NewDoubleObj(last_change_flip_s));

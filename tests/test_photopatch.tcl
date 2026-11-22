@@ -5,8 +5,8 @@
 #
 # Checks the command's argument errors; that the patch is a square of the
 # dark or light colour in its corner and nothing else on the frame
-# changes; tags mode (a matching swap tag flips it, two tags on one frame
-# flip it once, an unmatched one does not); manual mode and `flip`;
+# changes; marked mode (a swap tag flips it, two tags on one frame flip it
+# once; '!' commands: tests/test_photopatch_acks.tcl); manual mode and `flip`;
 # toggle mode; the other corners, an inset, colours; a square too big for
 # the frame; frameRepaint under gazewin showing the last level again
 # without flipping; `off` leaving the scene untouched; `postpass reset`.
@@ -34,10 +34,12 @@ ck "off to start" [expr {[st on] == 0}]
 set pl [lsearch -inline -index 1 [postpass list] photopatch]
 ck "postpass list has it at priority 940, off" [expr {[llength $pl] && [dict get $pl priority] == 940.0 && [dict get $pl on] == 0}]
 set s [photopatch set]
-ck "defaults: tags, top right, 60 px, no inset, black/white, match *" [expr {
-    [dict get $s -mode] eq "tags" && [dict get $s -corner] eq "tr" && [dict get $s -size] == 60 &&
+ck "defaults: marked, top right, 60 px, no inset, black/white" [expr {
+    [dict get $s -mode] eq "marked" && [dict get $s -corner] eq "tr" && [dict get $s -size] == 60 &&
     [dict get $s -inset] == 0 && [dict get $s -dark] eq {0.0 0.0 0.0} &&
-    [dict get $s -light] eq {1.0 1.0 1.0} && [dict get $s -match] eq "*"}]
+    [dict get $s -light] eq {1.0 1.0 1.0} && ![dict exists $s -match]}]
+ck "-match is gone" [catch { photopatch set -match * }]
+ck "the old tags mode is refused" [catch { photopatch set -mode tags }]
 ck "unknown subcommand refused" [catch { photopatch bogus }]
 ck "unknown option refused" [catch { photopatch set -bogus 1 }]
 ck "a bad corner refused" [catch { photopatch set -corner mid }]
@@ -69,28 +71,22 @@ stepMode 1 5000
 set f_plain [step]
 
 photopatch on
-ck "on: tags mode, dark" [expr {[st on] == 1 && [st mode] eq "tags" && [st level] == 0}]
+ck "on: marked mode, dark" [expr {[st on] == 1 && [st mode] eq "marked" && [st level] == 0}]
 set f_on [step]
 ck "the first frame: drawn, a change (the patch appeared)" [expr {[st frames] == 1 && [st changes] == 1}]
 set f_untagged [step]
-ck "a frame with no tag: no change" [expr {[st level] == 0 && [st changes] == 1 && [st tagged] == 0}]
+ck "an unmarked frame: no change" [expr {[st level] == 0 && [st changes] == 1 && [st marked] == 0}]
 
 swapTag {SAMPLE ON}
 set f_tag [step]
-ck "a tagged frame: light, a change" [expr {[st level] == 1 && [st changes] == 2 && [st tagged] == 1}]
+ck "a tagged frame: light, a change" [expr {[st level] == 1 && [st changes] == 2 && [st marked] == 1}]
 ck "  the flip was seen" [expr {[st last_change_flip_s] > 0}]
 swapTag {SAMPLE OFF}; swapTag {CHOICES ON}
 set f_two [step]
 ck "two tags on one frame: one change" [expr {[st level] == 0 && [st changes] == 3}]
-
-ck "-match takes a list" [expr {[dict get [photopatch set -match {PATTERN* {TARGET SET*}}] -match] eq {PATTERN* {TARGET SET*}}}]
-swapTag {SAMPLE ON}
-set f_nomatch [step]
-ck "an unmatched tag: no change" [expr {[st level] == 0 && [st changes] == 3}]
 swapTag {TARGET SET 1 2}
-set f_match2 [step]
-ck "the second pattern matches" [expr {[st level] == 1 && [st changes] == 4}]
-photopatch set -match *
+set f_tag2 [step]
+ck "any tag marks a frame" [expr {[st level] == 1 && [st changes] == 4}]
 
 # manual: only flip
 photopatch set -mode manual
@@ -113,7 +109,7 @@ set f_t1 [step]; set l1 [st level]
 set f_t2 [step]; set l2 [st level]
 set f_t3 [step]
 ck "toggle: light, dark, light" [expr {$l1 == 1 && $l2 == 0 && [st level] == 1 && [st changes] == 8}]
-photopatch set -mode tags
+photopatch set -mode marked
 
 # another corner, an inset, colours
 photopatch set -corner bl -size 10 -inset 5 -light {0 1 0} -dark {0 0 1}
@@ -147,7 +143,7 @@ ck "frameRepaint: drawn again, not a new frame" [expr {[st repeats] == 2 && [st 
 set f_g2 [step]
 ck "  the next real frame toggles" [expr {[st level] == !$lg}]
 gazewin off
-photopatch set -mode tags
+photopatch set -mode marked
 
 # off: the scene as it was
 set f_preoff [step]
@@ -205,7 +201,7 @@ ck "untagged: still black" [square_is $f_untagged $X 0 60 {0 0 0}]
 ck "tagged: white" [square_is $f_tag $X 0 60 {255 255 255}]
 ck "  only there" [only_square $f_tag $f_plain $X 0 60]
 ck "two tags: black again" [square_is $f_two $X 0 60 {0 0 0}]
-ck "unmatched: black; the second pattern: white" [expr {[px $f_nomatch $X 0] eq {0 0 0} && [px $f_match2 $X 0] eq {255 255 255}}]
+ck "the next tag: white again" [expr {[px $f_tag2 $X 0] eq {255 255 255}}]
 ck "manual: white, then black after flip, and stays" [expr {[px $f_man0 $X 0] eq {255 255 255} &&
     [px $f_man1 $X 0] eq {0 0 0} && [px $f_man2 $X 0] eq {0 0 0}}]
 ck "toggle: white, black, white" [expr {[px $f_t1 $X 0] eq {255 255 255} &&

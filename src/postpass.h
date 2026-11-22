@@ -135,6 +135,14 @@ int stimFrameRecord(const char *name, const long long *vals, int n);
 int stimSwapTagCount(void);
 const char *stimSwapTag(int i);
 
+/* The swap-acked commands ('!' prefix) that have run since the last swap:
+   the frame being drawn is the first to show what they did, and its swap
+   is the one their replies report.  These are the frames a client (ESS)
+   changed the display with and is timing.  Read it in stage.  A '!' command that causes no frame has
+   its reply released with no swap (and a log warning), so it is never
+   counted here. */
+int stimSwapAckCount(void);
+
 /* 1 while frameRepaint runs the passes: the display shows the last frame
    again (a mirror's gaze between rig frames, the stepped imgui panel), not
    a new one -- no SwapCount, no swap tags, no flip callback.  A pass that

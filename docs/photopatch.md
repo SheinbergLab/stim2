@@ -9,6 +9,10 @@ per change of light. Each frame that changed the patch has a
 `stim/photopatch` record, so pairing an edge with its frame is an in-order
 match of the two streams.
 
+By default the patch changes on every frame a client changed the display
+with a swap-acked (`!`) command, the way ESS shows each stimulus. Every
+system then drives it with no change to the system.
+
 It is a loadable module on stim2's post-pass chain
 ([postpass.md](postpass.md)) at priority 940: after the scene and any pass
 that changes it (gazewin, shaderpass), before `tlock`'s row (950,
@@ -20,22 +24,21 @@ diode is over it. Off, it costs a flag test per frame.
 
 ## Commands
 
-    photopatch on ?tags|toggle|manual?
+    photopatch on ?marked|toggle|manual?
     photopatch off
     photopatch set ?-mode m? ?-corner tl|tr|bl|br? ?-size px? ?-inset px?
-                   ?-dark {r g b}? ?-light {r g b}? ?-match patterns?
+                   ?-dark {r g b}? ?-light {r g b}?
     photopatch flip ?0|1?
     photopatch status
     photopatch reset
 
 | option | default | |
 |---|---|---|
-| `-mode` | `tags` | which frames change it (below) |
+| `-mode` | `marked` | which frames change it (below) |
 | `-corner` | `tr` | top right: clear of `tlock`'s row (top left), and early in the scanout |
 | `-size` | 60 | the square's side, pixels |
 | `-inset` | 0 | pixels in from both edges of the corner |
 | `-dark`, `-light` | `0` / `1` | `{r g b}` from 0 to 1, or one grey |
-| `-match` | `*` | tags mode: a list of glob patterns; a tag matching any of them counts |
 
 `set` with no options returns the settings; with some, changes them
 (a refused value changes nothing) and returns the result. `on` starts
@@ -44,10 +47,18 @@ is an edge if the scene there was brighter.
 
 ## Which frames change it
 
-- **`tags`**: a frame that delivers a swap tag (`swapTag`) matching
-  `-match`. The stim's own frame markers, the frames ESS already times
-  (`SAMPLE ON`, `PATTERN SWAP`, ...), then flip the patch with no change
-  to a protocol. Two matching tags on one frame flip it once.
+- **`marked`**: a frame something is timing. That is a frame that
+  releases the reply of a swap-acked command (`!`, which ESS's
+  `rmtSend "!sample_on"` is), or delivers a swap tag (`swapTag`, a
+  change the stim makes by itself, like a saccade-contingent
+  displacement). However many replies and tags one frame carries, it
+  changes the patch once. The frame's `!` replies carry its swapcount
+  (with `@`, see [stimess.md](stimess.md)), as its `stim/photopatch`
+  record does, so a command pairs with its patch change exactly.
+  A `!` command that draws nothing has no frame: its reply comes back
+  with no new swap, as it always has, and the patch does not change.
+  Two marked frames in a row come faster than an LCD settles, so their
+  edges can merge into one.
 - **`toggle`**: every frame. Each new frame reaching the panel is an edge
   and a refresh stim2 missed is an edge that does not come: a check of the
   display pipeline, not of a stimulus. A static display is redrawn on
@@ -74,13 +85,14 @@ as int64s:
 | `flip_wall_us` | the flip on the wall clock (-1 unknown) |
 | `level` | now showing: 0 dark, 1 light |
 | `serial` | which change since `on` |
-| `ntags` | matching tags the frame delivered |
-| `why` | 1 the patch appeared, 2 a tag, 3 toggle mode, 4 `flip` |
+| `ntags` | swap tags the frame delivered |
+| `why` | 1 the patch appeared, 2 a marked frame, 3 toggle mode, 4 `flip` |
+| `nacks` | `!` replies the frame released |
 
 A light change (level 1) should come back as a rising edge, a dark one as
 a falling edge. Nothing is recorded while the frame log is off.
 
-`status` returns `on mode level armed settings frames changes tagged
+`status` returns `on mode level armed settings frames changes marked
 repeats not_drawn last_change_flip_s last_change_flip_wall_us`. A square
 that does not fit the frame is not drawn, counted in `not_drawn`, and
 logged once.
@@ -96,8 +108,8 @@ logged once.
    `patch_corner`, ... as needed). ESS sends `photopatch set ...;
    photopatch on` at each system load, right after the prelude's reset,
    and logs `stim/photopatch` beside `stim/frame`. By hand:
-   `rmtSend "photopatch on"`. Watch `proc/photo/edge` while
-   `photopatch flip` changes it: one edge per flip.
+   `rmtSend "photopatch on"`. Watch `proc/photo/edge` while the system
+   runs: one edge per `!` command that changed the display.
 4. For a continuous check of the pipeline, `photopatch on toggle`: an
    edge every refresh, alternating in direction.
 
@@ -117,3 +129,9 @@ calibrated LUT (or a Display++'s colour mode) sees exactly the values set.
 Mac):
 
     stim2 --headless -w 320 -h 180 --port-base 5610 -f /abs/path/tests/test_photopatch.tcl
+
+`tests/test_photopatch_acks.tcl`, a client against a running stim2, for
+`!` commands (they only come from the message port):
+
+    stim2 --headless -w 320 -h 180 --port-base 5610 &
+    tclsh tests/test_photopatch_acks.tcl localhost 5612

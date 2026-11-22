@@ -13,6 +13,9 @@
 #              followed by the usual result text (possibly empty or
 #              "!TCL_ERROR ...").  ticks are StimTicksF ms (%.3f); flipwall_us
 #              is CLOCK_REALTIME us of the flip for a swap-ack reply, else 0.
+#              A swap-ack reply's done/swapcount/flip are the FIRST swap
+#              after the command ran (test_photopatch_acks.tcl checks it
+#              when two '!' land in one pass).
 #   stimClock: "<ticks_ms> <wall_us> <span_us>" -- tick clock and
 #              CLOCK_REALTIME sampled together (see section (e) below).
 #

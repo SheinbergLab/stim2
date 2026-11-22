@@ -132,7 +132,8 @@ What stim2 exports to a module for this:
 | `stimRealSeconds` | the real clock (`glfwGetTime`), for latency records |
 | `stimLogMessage` | stim2's log |
 | `stimFrameRecord` | a record of the frame being shown, for the data file: called from `flip`, it sends one int64 datapoint (the swap's `swapcount`, then up to seven values of the pass's own) to dserv on the frame log's stream. Nothing is sent while `stimFrameLog` is off. `gazewin` uses it for `stim/gazewin` |
-| `stimSwapTagCount`, `stimSwapTag` | the swap tags (`swapTag`) the frame being drawn will deliver after its swap: read them in `stage`. `photopatch` flips on the matching ones |
+| `stimSwapTagCount`, `stimSwapTag` | the swap tags (`swapTag`) the frame being drawn will deliver after its swap: read them in `stage`. `photopatch` flips on them |
+| `stimSwapAckCount` | the swap-acked (`!`) commands run since the last swap: the frame being drawn is the first to show them, and its swap is the one their replies report. `photopatch` flips on them |
 | `stimPostpassRepeating` | 1 while `frameRepaint` runs the passes: the last frame shown again, not a new one (no swapcount, no swap tags, no `flip`). A pass that changes something per frame (`photopatch`, toggle modes) draws what it drew last |
 
 A module must not call GLFW itself: it would reach its own copy of the

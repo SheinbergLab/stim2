@@ -1154,6 +1154,14 @@ typedef struct client_request_s {
   int swap_at_queue;        // SwapCount when the reply was deferred
   double ticks_dequeue;     // glfwGetTime()*1000 when the render thread
                             // dequeued the request (header stamp)
+  /* '!' reply: the first swap after the command ran -- the frame that
+     showed what it did -- stamped at that swap (stampSwapAcks).  A pass
+     can draw more than one frame (one per queued redraw), and the reply
+     goes out only at the pass's end, so stamping then named the LAST of
+     them.  -1 until a swap. */
+  int swap_stamp = -1;
+  double ticks_swap = 0.0;  // stim clock ms right after that swap
+  long long flip_stamp = 0; // its flip, as swapsyncLastFlipWallUs() had it
   bool from_mirror = false; // queued by stimSend from --mirror's thread:
                             // what mirrorDrain answers when that thread stops
 } client_request_t;
@@ -1163,7 +1171,10 @@ typedef struct client_request_s {
        ACK1 <ticks_dequeue> <ticks_done> <swapcount> <flipwall_us>\n<result>
    ticks are StimTicksF-domain ms (%.3f), swapcount the unsigned SwapCount,
    flipwall_us the CLOCK_REALTIME flip time of a swap-ack reply, exactly as
-   swapsyncLastFlipWallUs() reports it (-1 when the strategy cannot time
+   swapsyncLastFlipWallUs() reports it.  A swap-ack reply's done stamp,
+   swapcount and flip are those of the FIRST swap after the command ran
+   (the frame that showed it), even when the pass drew more frames before
+   the reply went out (-1 when the strategy cannot time
    flips, e.g. glfinish), and 0 for an immediate (non-swap) reply.
    Longest line: 4+1+ 2x(20 digits + '.' + 3) + 1+10 + 1+20 + '\n' < 96.  */
 #define ACK_HEADER_MAX 96
@@ -1655,6 +1666,30 @@ public:
   // for client requests over tcp
   SharedQueue<client_request_t *> queue;
   SharedQueue<client_request_t *> reply_queue;
+  /* the '!' requests in reply_queue not yet past a swap: the next swap is
+     theirs (stampSwapAcks), and the frame being drawn shows what they did
+     (stimSwapAckCount).  Render thread only. */
+  std::vector<client_request_t *> acks_unswapped;
+  void queueSwapAck(client_request_t *req)
+  {
+    req->swap_at_queue = SwapCount;
+    req->swap_stamp = -1;
+    reply_queue.push_back(req);
+    acks_unswapped.push_back(req);
+  }
+  /* right after a swap (SwapCount advanced, waitForSwap returned) */
+  void stampSwapAcks(void)
+  {
+    if (acks_unswapped.empty()) return;
+    double t = 1000.0 * stimClockNow();
+    long long flip = swapsyncLastFlipWallUs();
+    for (client_request_t *r : acks_unswapped) {
+      r->swap_stamp = SwapCount;
+      r->ticks_swap = t;
+      r->flip_stamp = flip;
+    }
+    acks_unswapped.clear();
+  }
 
   // for dataserver notifications
   SharedQueue<ds_client_request_t *> ds_queue;
@@ -2652,8 +2687,7 @@ proc screen_config {} {
     else {
       // put result back into the request and queue for after swap
       req->script = std::string(rcstr);
-      req->swap_at_queue = SwapCount;
-      reply_queue.push_back(req);
+      queueSwapAck(req);
     }
       }
       else {
@@ -2679,8 +2713,7 @@ proc screen_config {} {
     else {
       // put result back into the request and queue for after swap
       req->script = std::string("!TCL_ERROR "+std::string(rcstr));
-      req->swap_at_queue = SwapCount;
-      reply_queue.push_back(req);
+      queueSwapAck(req);
     }
       }
     }
@@ -2758,16 +2791,21 @@ proc screen_config {} {
       /* A '!' request promises "ack after the swap this command caused".
          If no swap happened this pass, that promise is broken -- the ack
          means only "end of loop pass".  Surface it when logging is on. */
-      if (log_level && req->swap_at_queue == SwapCount)
+      if (log_level && req->swap_stamp < 0)
 	log.AddLog("[%.3f]: warning: swap-ack released with no intervening "
 		   "swap: %s\n", glfwGetTime(), req->script.c_str());
       if (req->ack_header) {
-	/* '@!' reply: done stamp, SwapCount and the hardware flip time are
-	   read here, after the swap this command caused. */
+	/* '@!' reply: the done stamp, SwapCount and the hardware flip time of
+	   the swap this command caused -- the first after it ran, stamped
+	   there (stampSwapAcks), not the last of the pass.  With no swap
+	   (a command that drew nothing) they are read now, as before. */
+	bool sw = req->swap_stamp >= 0;
 	req->rqueue->push_back(ack_header_reply(req->ticks_dequeue,
-						1000.0 * stimClockNow(),
-						SwapCount,
-						swapsyncLastFlipWallUs(),
+						sw ? req->ticks_swap
+						   : 1000.0 * stimClockNow(),
+						sw ? req->swap_stamp : SwapCount,
+						sw ? req->flip_stamp
+						   : swapsyncLastFlipWallUs(),
 						req->script.data(),
 						req->script.size()));
       }
@@ -2780,6 +2818,8 @@ proc screen_config {} {
 #endif
       
     }
+    /* every reply is out, swapped or not: none is waiting for a swap */
+    acks_unswapped.clear();
     return n;
   }
   
@@ -2880,6 +2920,10 @@ extern "C" const char *stimSwapTag(int i)
   return app.swap_tags[i].c_str();
 }
 extern "C" int stimPostpassRepeating(void) { return post_repeating ? 1 : 0; }
+/* the '!' requests not yet past a swap: the frame being drawn is the
+   first since they ran, so it shows what they did and its swap is the one
+   their replies report (a deferral pass draws nothing and keeps them) */
+extern "C" int stimSwapAckCount(void) { return (int) app.acks_unswapped.size(); }
 
 void swapTagCallbackSet(const char *proc)
 {
@@ -4165,6 +4209,7 @@ void Application::updateDisplay(bool log_events)
     frame_ticks_us = (long long) (1e6 * stimClockNow());
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PostSwap");
     SwapCount++;
+    stampSwapAcks();
     frameLogSwap(frame_ticks_us);
     deliverSwapTags();
     deliverFrameWork();
@@ -4206,6 +4251,7 @@ void Application::updateDisplay(bool log_events)
     if (log_level && log_events) log.AddLog("[%.3f]: %s\n", glfwGetTime(), "PostSwap");
 
     SwapCount++;
+    stampSwapAcks();
     frameLogSwap(frame_ticks_us);
 
     if (OGL_NEWLY_VISIBLE(GList)) {
@@ -4237,6 +4283,7 @@ void Application::updateDisplay(bool log_events)
     SwapCount++;
     waitForSwap();
     frame_ticks_us = (long long) (1e6 * stimClockNow());
+    stampSwapAcks();
     frameLogSwap(frame_ticks_us);
 
     /* Call any installed post frame command */
@@ -4308,6 +4355,7 @@ bool Application::postRepaint(void)
   waitForSwap();
   long long frame_ticks_us = (long long) (1e6 * stimClockNow());
   SwapCount++;
+  stampSwapAcks();
   frameLogSwap(frame_ticks_us);
   deliverSwapTags();
   deliverFrameWork();

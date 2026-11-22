@@ -49,4 +49,5 @@ EXPORTS
 	stimFrameRecord
 	stimSwapTagCount
 	stimSwapTag
+	stimSwapAckCount
 	stimPostpassRepeating

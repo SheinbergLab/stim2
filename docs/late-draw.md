@@ -194,7 +194,9 @@ lost it after the GPU was done, in the swap's path to the display.
 - The `@` reply header and `!` swap-ack semantics are unchanged. A `!`
   command dequeued during the deferral window is evaluated at once and
   acked after the deferred swap, with that swap's flip time, exactly the
-  "ack after the swap this command caused" promise.
+  "ack after the swap this command caused" promise. When one pass draws
+  more than one frame (a redraw queued twice), the reply reports the first
+  of them, the one that showed the command, not the last.
 - With late-draw off, the main loop is the same code path as before:
   `tests/test_ack_header.tcl` and `tests/test_frame_log.tcl` against a
   build with the feature present but disabled show no change.
