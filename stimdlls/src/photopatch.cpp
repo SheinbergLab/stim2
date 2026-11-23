@@ -84,7 +84,8 @@ struct Settings {
   int mode = MARKED;
   int corner = TR;
   int size = 60;                /* pixels, square */
-  int inset = 0;                /* pixels from both edges of the corner */
+  int inset_x = 0;              /* pixels in from the corner's side edge */
+  int inset_y = 0;              /* and from its top or bottom edge */
   float dark[3] = { 0.f, 0.f, 0.f };
   float light[3] = { 1.f, 1.f, 1.f };
 } cfg;
@@ -117,8 +118,8 @@ bool warned_nofit = false;
 
 bool fits(int w, int h)
 {
-  return cfg.size > 0 && cfg.inset >= 0 &&
-         cfg.inset + cfg.size <= w && cfg.inset + cfg.size <= h;
+  return cfg.size > 0 && cfg.inset_x >= 0 && cfg.inset_y >= 0 &&
+         cfg.inset_x + cfg.size <= w && cfg.inset_y + cfg.size <= h;
 }
 
 /* The square: a scissored clear, so the colour arrives as given (no
@@ -126,8 +127,8 @@ bool fits(int w, int h)
    it.  GL's rows count from the bottom. */
 void draw(const stim_postpass_frame_t *f, int lvl)
 {
-  int x = (cfg.corner == TL || cfg.corner == BL) ? cfg.inset : f->w - cfg.inset - cfg.size;
-  int y = (cfg.corner == BL || cfg.corner == BR) ? cfg.inset : f->h - cfg.inset - cfg.size;
+  int x = (cfg.corner == TL || cfg.corner == BL) ? cfg.inset_x : f->w - cfg.inset_x - cfg.size;
+  int y = (cfg.corner == BL || cfg.corner == BR) ? cfg.inset_y : f->h - cfg.inset_y - cfg.size;
   const float *c = lvl ? cfg.light : cfg.dark;
 
   GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
@@ -170,8 +171,8 @@ int pass_stage(void *, const stim_postpass_frame_t *f)
     n_nofit++;
     if (!warned_nofit) {
       warned_nofit = true;
-      log_message("error", "photopatch: a %d-pixel square %d in from the %s corner does not fit a %dx%d frame: not drawn",
-                  cfg.size, cfg.inset, corner_name(cfg.corner), f->w, f->h);
+      log_message("error", "photopatch: a %d-pixel square %d,%d in from the %s corner does not fit a %dx%d frame: not drawn",
+                  cfg.size, cfg.inset_x, cfg.inset_y, corner_name(cfg.corner), f->w, f->h);
     }
     return 0;
   }
@@ -271,13 +272,23 @@ stim_postpass_t pass = {
 
 const char *USAGE =
   "photopatch on ?marked|toggle|manual? | off | "
-  "set ?-mode m? ?-corner tl|tr|bl|br? ?-size px? ?-inset px? ?-dark {r g b}? ?-light {r g b}? | "
+  "set ?-mode m? ?-corner tl|tr|bl|br? ?-size px? ?-inset px|{x y}? ?-dark {r g b}? ?-light {r g b}? | "
   "flip ?0|1? | status | reset";
 
 Tcl_Obj *rgb_obj(const float *c)
 {
   Tcl_Obj *l = Tcl_NewListObj(0, nullptr);
   for (int i = 0; i < 3; i++) Tcl_ListObjAppendElement(nullptr, l, Tcl_NewDoubleObj(c[i]));
+  return l;
+}
+
+/* one number while both insets agree (what an older stim2 said), else {x y} */
+Tcl_Obj *inset_obj()
+{
+  if (cfg.inset_x == cfg.inset_y) return Tcl_NewIntObj(cfg.inset_x);
+  Tcl_Obj *l = Tcl_NewListObj(0, nullptr);
+  Tcl_ListObjAppendElement(nullptr, l, Tcl_NewIntObj(cfg.inset_x));
+  Tcl_ListObjAppendElement(nullptr, l, Tcl_NewIntObj(cfg.inset_y));
   return l;
 }
 
@@ -288,7 +299,7 @@ Tcl_Obj *settings_dict()
   put("-mode", Tcl_NewStringObj(mode_name(cfg.mode), -1));
   put("-corner", Tcl_NewStringObj(corner_name(cfg.corner), -1));
   put("-size", Tcl_NewIntObj(cfg.size));
-  put("-inset", Tcl_NewIntObj(cfg.inset));
+  put("-inset", inset_obj());
   put("-dark", rgb_obj(cfg.dark));
   put("-light", rgb_obj(cfg.light));
   return d;
@@ -319,6 +330,25 @@ int get_range(Tcl_Interp *interp, Tcl_Obj *o, const char *what, int lo, int hi, 
   return TCL_OK;
 }
 
+/* -inset: px from both edges, or {x y}: x from the corner's side edge, y
+   from its top or bottom edge */
+int get_inset(Tcl_Interp *interp, Tcl_Obj *o, int *x, int *y)
+{
+  Tcl_Size n;
+  Tcl_Obj **el;
+  if (Tcl_ListObjGetElements(interp, o, &n, &el) != TCL_OK) return TCL_ERROR;
+  if (n != 1 && n != 2) {
+    Tcl_SetObjResult(interp, Tcl_NewStringObj("photopatch: -inset is px, or {x y}, 0 to 4096", -1));
+    return TCL_ERROR;
+  }
+  int vx, vy;
+  if (get_range(interp, el[0], "-inset", 0, 4096, &vx) != TCL_OK) return TCL_ERROR;
+  if (get_range(interp, el[n - 1], "-inset", 0, 4096, &vy) != TCL_OK) return TCL_ERROR;
+  *x = vx;
+  *y = vy;
+  return TCL_OK;
+}
+
 int get_rgb(Tcl_Interp *interp, Tcl_Obj *o, const char *what, float *out)
 {
   Tcl_Size n;
@@ -346,7 +376,7 @@ int set_cmd(Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
   if ((objc - 2) % 2) {
     Tcl_WrongNumArgs(interp, 2, objv,
-                     "?-mode m? ?-corner tl|tr|bl|br? ?-size px? ?-inset px? ?-dark {r g b}? ?-light {r g b}?");
+                     "?-mode m? ?-corner tl|tr|bl|br? ?-size px? ?-inset px|{x y}? ?-dark {r g b}? ?-light {r g b}?");
     return TCL_ERROR;
   }
   Settings s = cfg;
@@ -368,7 +398,7 @@ int set_cmd(Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
       }
     }
     else if (opt == "-size") rc = get_range(interp, val, "-size", 1, 4096, &s.size);
-    else if (opt == "-inset") rc = get_range(interp, val, "-inset", 0, 4096, &s.inset);
+    else if (opt == "-inset") rc = get_inset(interp, val, &s.inset_x, &s.inset_y);
     else if (opt == "-dark") rc = get_rgb(interp, val, "-dark", s.dark);
     else if (opt == "-light") rc = get_rgb(interp, val, "-light", s.light);
     else {
@@ -380,7 +410,8 @@ int set_cmd(Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
   if (objc > 2) {
     /* a moved or resized square leaves the old one behind until the scene
        is drawn again: draw it again now */
-    bool moved = s.corner != cfg.corner || s.size != cfg.size || s.inset != cfg.inset;
+    bool moved = s.corner != cfg.corner || s.size != cfg.size ||
+                 s.inset_x != cfg.inset_x || s.inset_y != cfg.inset_y;
     cfg = s;
     warned_nofit = false;
     if (on) {

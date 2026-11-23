@@ -121,6 +121,13 @@ photopatch set -corner br -size 20 -inset 0
 set f_br [step]                       ;# level 1
 photopatch set -corner tl
 set f_tl [step]
+# x and y insets apart: 7 in from the right, 3 down from the top
+photopatch set -corner tr -inset {7 3}
+set f_xy [step]
+ck "-inset {x y} reads back as {x y}" [expr {[dict get [photopatch set] -inset] eq {7 3}}]
+ck "  one number again when they agree" [expr {[dict get [photopatch set -inset {4 4}] -inset] eq {4}}]
+ck "  three numbers refused" [catch { photopatch set -inset {1 2 3} }]
+photopatch set -inset 0
 photopatch set -corner tr -size 60 -light 1 -dark 0
 
 # too big
@@ -212,6 +219,8 @@ ck "bottom left, inset 5, 10 px: blue, then green" [expr {[square_is $f_bl 5 $by
 ck "  only there" [only_square $f_bl $f_plain 5 $by 10]
 ck "bottom right, 20 px" [expr {[square_is $f_br [expr {$W - 20}] [expr {$H - 20}] 20 {0 255 0}] &&
     [only_square $f_br $f_plain [expr {$W - 20}] [expr {$H - 20}] 20]}]
+ck "top right, inset {7 3}, 20 px" [expr {[square_is $f_xy [expr {$W - 27}] 3 20 {0 255 0}] &&
+    [only_square $f_xy $f_plain [expr {$W - 27}] 3 20]}]
 ck "top left, 20 px" [expr {[square_is $f_tl 0 0 20 {0 255 0}] && [only_square $f_tl $f_plain 0 0 20]}]
 ck "too big: the frame is the scene" [expr {[frame $f_big] eq [frame $f_plain]}]
 set gl [expr {$lg ? {255 255 255} : {0 0 0}}]

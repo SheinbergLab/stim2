@@ -26,7 +26,7 @@ diode is over it. Off, it costs a flag test per frame.
 
     photopatch on ?marked|toggle|manual?
     photopatch off
-    photopatch set ?-mode m? ?-corner tl|tr|bl|br? ?-size px? ?-inset px?
+    photopatch set ?-mode m? ?-corner tl|tr|bl|br? ?-size px? ?-inset px|{x y}?
                    ?-dark {r g b}? ?-light {r g b}?
     photopatch flip ?0|1?
     photopatch status
@@ -37,7 +37,7 @@ diode is over it. Off, it costs a flag test per frame.
 | `-mode` | `marked` | which frames change it (below) |
 | `-corner` | `tr` | top right: clear of `tlock`'s row (top left), and early in the scanout |
 | `-size` | 60 | the square's side, pixels |
-| `-inset` | 0 | pixels in from both edges of the corner |
+| `-inset` | 0 | pixels in from both edges of the corner; or `{x y}`: x from the corner's side edge, y from its top or bottom (`{20 60}` at `tr`: 20 in from the right, 60 down). Reads back as one number while the two agree |
 | `-dark`, `-light` | `0` / `1` | `{r g b}` from 0 to 1, or one grey |
 
 `set` with no options returns the settings; with some, changes them
