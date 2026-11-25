@@ -1,0 +1,11 @@
+# /etc/default/stim2 -- read by /usr/local/stim2/start-stim2.sh (the X11
+# stim2.service). Seeded on first install and left alone by upgrades, so
+# per-rig display settings belong here, not in start-stim2.sh.
+# After editing: sudo systemctl restart stim2
+
+# refresh rate in Hz, set with xrandr and passed to stim2 as -r
+STIM2_REFRESH=120
+
+# xrandr output to set the rate on (e.g. DisplayPort-0; list them with
+# `DISPLAY=:0 xrandr`); empty uses xrandr's default output
+STIM2_OUTPUT=

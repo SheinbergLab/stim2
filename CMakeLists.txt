@@ -796,6 +796,14 @@ else()
         COMPONENT stim2
     )
 
+    # /etc/default/stim2 template (refresh rate etc. for start-stim2.sh);
+    # postinst seeds it on the X11 flavor and never overwrites it
+    install(
+        FILES config/stim2.default
+        DESTINATION "/usr/local/stim2/config"
+        COMPONENT stim2
+    )
+
     install(
         FILES ${SYSTEMD_SCRIPT} ${SYSTEMD_SCRIPT_X11} ${SYSTEMD_SCRIPT_WESTON}
         DESTINATION /usr/local/stim2/systemd
