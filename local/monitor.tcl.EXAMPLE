@@ -1,3 +1,12 @@
+# Copy to /usr/local/stim2/local/monitor.tcl (or ~/.config/stim2/monitor.tcl)
+# and edit: this machine's screen size and viewing distance, which
+# screen_config turns into degrees. Not touched by package upgrades.
+#
+# The refresh rate is NOT set here (stim2 has opened its window by the time
+# this runs): on X11 rigs it is STIM2_REFRESH in /etc/default/stim2, on
+# Weston kiosk boards the [output] mode= line in
+# /etc/xdg/weston/stim2-kiosk.ini.
+
 # For SunFounder 7"
 #screen_set ScreenWidthCm 15.4
 #screen_set ScreenHeightCm 8.6
@@ -13,4 +22,3 @@ screen_set DistanceToMonitor 40.0
 #screen_set ScreenWidthCm 68.0
 #screen_set ScreenHeightCm 38.0
 #screen_set DistanceToMonitor 120.0
-

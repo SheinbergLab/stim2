@@ -4,8 +4,13 @@ Any *.tcl files here will be sourced at startup before the
 standard configuration calculations, allowing you to override
 defaults like:
 
-    set distance_to_monitor 55.0
+    screen_set DistanceToMonitor 55.0
 
-Files are sourced in alphabetical order.
+Files are sourced in alphabetical order. Start from
+monitor.tcl.EXAMPLE (copy it to monitor.tcl) for the screen size
+and viewing distance.
+
+The refresh rate is set outside stim2: STIM2_REFRESH in
+/etc/default/stim2 on X11 rigs.
 
 This directory is preserved across package updates.

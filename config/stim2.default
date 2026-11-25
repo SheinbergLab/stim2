@@ -2,6 +2,12 @@
 # stim2.service). Seeded on first install and left alone by upgrades, so
 # per-rig display settings belong here, not in start-stim2.sh.
 # After editing: sudo systemctl restart stim2
+#
+# Only the display MODE lives here, since it must be set before stim2
+# opens its window. The screen's physical size and viewing distance
+# (screen_set ScreenWidthCm / ScreenHeightCm / DistanceToMonitor) go in
+# /usr/local/stim2/local/monitor.tcl, which stim2 itself reads at
+# startup; see /usr/local/stim2/local/monitor.tcl.EXAMPLE.
 
 # refresh rate in Hz, set with xrandr and passed to stim2 as -r
 STIM2_REFRESH=120

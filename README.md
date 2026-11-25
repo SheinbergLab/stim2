@@ -103,9 +103,21 @@ stim2 -v -F
 stim2 --port-base 5610 -w 400 -h 300
 ```
 
-## Example: Monitor Configuration
+## Per-machine settings
 
-Create `~/.config/stim2/monitor.tcl` to set screen parameters:
+A rig's own settings live in files the package never overwrites:
+
+| What | Where | Read by |
+|------|-------|---------|
+| Screen size (cm), viewing distance | `/usr/local/stim2/local/monitor.tcl` (or `~/.config/stim2/monitor.tcl`) | stim2 itself, via `linux.cfg`/`stim2.cfg` (`local/` on Linux only; `~/.config/stim2/` everywhere) |
+| Refresh rate, X11 rigs (amd64) | `/etc/default/stim2`: `STIM2_REFRESH`, optional `STIM2_OUTPUT` | `start-stim2.sh` (xrandr, `-r`) |
+| Refresh rate, Weston kiosk boards (i.MX95) | `/etc/xdg/weston/stim2-kiosk.ini`: `[output]` `mode=` | Weston |
+
+The refresh rate is kept out of `monitor.tcl` because it has to be set
+before stim2 opens its window. Cage-based arm64 boards have no rate
+setting and use the monitor's preferred mode. The postinst creates
+`/etc/default/stim2` and `stim2-kiosk.ini` on first install;
+`monitor.tcl` you copy from `local/monitor.tcl.EXAMPLE`:
 
 ```tcl
 # Monitor-specific settings
@@ -113,6 +125,8 @@ screen_set ScreenWidthCm       52.0
 screen_set ScreenHeightCm      32.5
 screen_set DistanceToMonitor   57.0
 ```
+
+Restart the service after editing any of them (`sudo systemctl restart stim2`).
 
 ## Startup configuration files
 
